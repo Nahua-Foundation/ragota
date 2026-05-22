@@ -62,18 +62,15 @@ jobs:
           fi
           
           ASSET_NAME="ai-tools-${{ matrix.goos }}-${{ matrix.goarch }}"
-          
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip "${ASSET_NAME}.zip" "$BINARY_NAME" docs/AGENTS.md
-            echo "ASSET_PATH=${ASSET_NAME}.zip" >> $GITHUB_ENV
-            shasum -a 256 "${ASSET_NAME}.zip" > "${ASSET_NAME}.zip.sha256"
-            echo "CHECKSUM_PATH=${ASSET_NAME}.zip.sha256" >> $GITHUB_ENV
-          else
-            tar -czf "${ASSET_NAME}.tar.gz" "$BINARY_NAME" docs/AGENTS.md
-            echo "ASSET_PATH=${ASSET_NAME}.tar.gz" >> $GITHUB_ENV
-            shasum -a 256 "${ASSET_NAME}.tar.gz" > "${ASSET_NAME}.tar.gz.sha256"
-            echo "CHECKSUM_PATH=${ASSET_NAME}.tar.gz.sha256" >> $GITHUB_ENV
+            ASSET_NAME="${ASSET_NAME}.exe"
           fi
+
+          mv "$BINARY_NAME" "$ASSET_NAME"
+          
+          echo "ASSET_PATH=${ASSET_NAME}" >> $GITHUB_ENV
+          shasum -a 256 "${ASSET_NAME}" > "${ASSET_NAME}.sha256"
+          echo "CHECKSUM_PATH=${ASSET_NAME}.sha256" >> $GITHUB_ENV
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
