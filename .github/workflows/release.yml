@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Build
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        run: |
+          BINARY_NAME=ai-tools
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME=ai-tools.exe
+          fi
+          # Используем -ldflags для уменьшения размера и передачи версии, если нужно
+          go build -v -o "$BINARY_NAME" .
+
+      - name: Package
+        shell: bash
+        run: |
+          BINARY_NAME=ai-tools
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME=ai-tools.exe
+          fi
+          
+          ASSET_NAME="ai-tools-${{ matrix.goos }}-${{ matrix.goarch }}"
+          
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip "${ASSET_NAME}.zip" "$BINARY_NAME" docs/AGENTS.md
+            echo "ASSET_PATH=${ASSET_NAME}.zip" >> $GITHUB_ENV
+            shasum -a 256 "${ASSET_NAME}.zip" > "${ASSET_NAME}.zip.sha256"
+            echo "CHECKSUM_PATH=${ASSET_NAME}.zip.sha256" >> $GITHUB_ENV
+          else
+            tar -czf "${ASSET_NAME}.tar.gz" "$BINARY_NAME" docs/AGENTS.md
+            echo "ASSET_PATH=${ASSET_NAME}.tar.gz" >> $GITHUB_ENV
+            shasum -a 256 "${ASSET_NAME}.tar.gz" > "${ASSET_NAME}.tar.gz.sha256"
+            echo "CHECKSUM_PATH=${ASSET_NAME}.tar.gz.sha256" >> $GITHUB_ENV
+          fi
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ASSET_PATH }}
+            ${{ env.CHECKSUM_PATH }}
+            docs/AGENTS.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
