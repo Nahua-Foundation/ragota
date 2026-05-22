@@ -25,9 +25,6 @@ jobs:
           - os: macos-latest
             goos: darwin
             goarch: arm64
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
 
     steps:
       - name: Checkout code
@@ -47,9 +44,6 @@ jobs:
           CGO_ENABLED: 1
         run: |
           BINARY_NAME=ai-tools
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME=ai-tools.exe
-          fi
           # Используем -ldflags для уменьшения размера и передачи версии, если нужно
           go build -v -o "$BINARY_NAME" .
 
@@ -57,15 +51,8 @@ jobs:
         shell: bash
         run: |
           BINARY_NAME=ai-tools
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME=ai-tools.exe
-          fi
-          
           ASSET_NAME="ai-tools-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            ASSET_NAME="${ASSET_NAME}.exe"
-          fi
-
+          
           mv "$BINARY_NAME" "$ASSET_NAME"
           
           echo "ASSET_PATH=${ASSET_NAME}" >> $GITHUB_ENV

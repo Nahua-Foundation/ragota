@@ -40,19 +40,44 @@ go build -o ai-tools .
 ```
 
 ### Запуск
-```
-./ai-tools watch .
-```
-- При первом запуске ищется `.ai-tools/config.yaml` в проекте или `~/.ai-tools/config.yaml`. Если их нет — используются дефолты.
+
+Основная команда для работы — `run`. Она позволяет запускать индексацию проекта и MCP-серверы в любых комбинациях. При первом запуске ищется `.ai-tools/config.yaml` в проекте или `~/.ai-tools/config.yaml`. Если их нет — используются дефолты.
+
+#### Примеры запуска
+
+1. **Запустить всё сразу** (MCP-серверы LSP, Tree-Sitter, Vector + индексация + TUI + запуск Docker):
+   ```bash
+   ./ai-tools run -ltvw --start-docker .
+   ```
+   *Здесь `-ltvw` это комбинация флагов: `-l` (LSP), `-t` (Tree-Sitter), `-v` (Vector), `-w` (Watch/Индексация).*
+
+2. **Только индексация и TUI** (без запуска MCP-серверов):
+   ```bash
+   ./ai-tools watch .
+   ```
+   *(Эквивалентно `./ai-tools run -w .`)*
+
+3. **Только MCP-серверы для Claude Desktop** (без TUI и наблюдения за файлами):
+   ```bash
+   ./ai-tools run -ltv --no-tui .
+   ```
+
+4. **Запуск конкретных серверов** (например, только LSP и Tree-Sitter):
+   ```bash
+   ./ai-tools run -lt .
+   ```
+
 - Сгенерировать конфиг: `./ai-tools gen-config` (по умолчанию в `~/.ai-tools/config.yaml`).
 - `ai-tools mcp-config` — сгенерировать JSON для вставки в конфиг Claude Desktop или других MCP-клиентов.
-- `q`/`Esc`/`Ctrl+C` — выход.
+- `q`/`Esc`/`Ctrl+C` — выход из TUI.
 
-#### Флаги `watch`
-- `--start-docker` — запустить контейнер qdrant из конфига
-- `--skip-vector` — отключить векторный индекс
-- `--skip-treesitter` — отключить tree-sitter индекс
-- `--no-tui` — не открывать TUI (только фоновый процесс)
+#### Доступные флаги `run`
+- `-l`, `--lsp` — запустить MCP-сервер LSP (прокси для gopls, pyright и т.д.)
+- `-t`, `--ts` — запустить MCP-сервер Tree-Sitter (структурный поиск символов)
+- `-v`, `--vec` — запустить MCP-сервер Vector (семантический поиск через Ollama+Qdrant)
+- `-w`, `--watch` — запустить индексацию файлов и TUI-дашборд
+- `--start-docker` — автоматически поднять контейнер Qdrant из секции `docker:` конфига
+- `--no-tui` — не открывать интерактивный дашборд (полезно для фоновой работы)
 
 ### MCP-серверы по отдельности (stdio)
 Для подключения из MCP-клиента (Claude Desktop, etc):
@@ -62,24 +87,24 @@ ai-tools serve-vector     --root /path/to/project
 ai-tools serve-lsp        --root /path/to/project
 ```
 
-#### Tools
+#### Описание методов MCP
 
-**ts.\***
-- `ts.search_symbols(query, kind?, language?, limit?)`
-- `ts.list_symbols(file)`
-- `ts.reindex(path?)` — переиндексация одного файла либо полный скан
-- `ts.stats()`
+**ts (Tree-Sitter)** — структурный поиск
+- `ts.search_symbols(query, kind?, language?, limit?)` — поиск функций, классов, методов и других символов по имени. Поддерживает фильтрацию по типу (kind) и языку.
+- `ts.list_symbols(file)` — возвращает древовидную структуру всех символов в указанном файле.
+- `ts.reindex(path?)` — принудительно переиндексирует конкретный файл или весь проект.
+- `ts.stats()` — статистика индекса: количество проиндексированных файлов и найденных символов.
 
-**vec.\***
-- `vec.search(query, limit?, language?)`
-- `vec.reindex(path?)`
-- `vec.count()`
+**vec (Vector)** — семантический поиск
+- `vec.search(query, limit?, language?)` — поиск по смыслу на естественном языке. Находит релевантные фрагменты кода, даже если нет точного текстового совпадения.
+- `vec.reindex(path?)` — обновление векторного индекса для файла или всего проекта.
+- `vec.count()` — количество проиндексированных фрагментов (чанков) в базе Qdrant.
 
-**lsp.\***
-- `lsp.definition(file, line, character)`
-- `lsp.references(file, line, character, include_declaration?)`
-- `lsp.hover(file, line, character)`
-- `lsp.languages()`
+**lsp (Language Server Protocol)** — навигация и интеллект
+- `lsp.definition(file, line, character)` — переход к определению символа (использует родные LSP сервера: gopls, pyright и т.д.).
+- `lsp.references(file, line, character, include_declaration?)` — поиск всех упоминаний символа в проекте.
+- `lsp.hover(file, line, character)` — получение информации о типе, сигнатуре и документации символа.
+- `lsp.languages()` — список активных языковых серверов, доступных в текущей среде.
 
 ### Настройка Ollama
 
