@@ -73,19 +73,12 @@ func (c *Chunker) Chunk(path, lang string, source []byte, symbols []parser.Symbo
 		}
 		text := strings.Join(lines[start:end], "\n")
 		if strings.TrimSpace(text) == "" {
-			if end >= len(lines) {
-				break
-			}
 			continue
 		}
 
 		// Разбиваем на под-чанки, если превышен лимит
 		sub := splitText(path, lang, text, start+1, "window", "", "", imports, "")
 		out = append(out, sub...)
-
-		if end >= len(lines) {
-			break
-		}
 	}
 
 	// Символьные чанки — добавляем только для function/method/class/interface
