@@ -59,9 +59,9 @@ func canonicalKind(nodeType string) string {
 		return "method"
 	case "type_declaration", "type_spec":
 		return "type"
-	case "const_declaration":
+	case "const_declaration", "const_spec":
 		return "const"
-	case "var_declaration":
+	case "var_declaration", "var_spec":
 		return "var"
 	// Python
 	case "function_definition":

@@ -48,7 +48,7 @@
 
 ### Сборка
 ```
-go build -o ai-tools .
+go build -o ai-tools ./cmd/ai-tools
 ```
 
 ### Запуск

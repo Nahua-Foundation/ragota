@@ -1,11 +1,5 @@
 package rerank
 
-// Файл содержит helpers для prompt-based реранкинга:
-//   - isEmbeddingReranker — эвристика выбора между /api/generate
-//     и embedding-fallback'ом по имени модели,
-//   - buildPrompt — формирование промпта с few-shot примерами,
-//   - parseScore — парсинг числа из ответа LLM с нормализацией в [0,1].
-
 import (
 	"regexp"
 	"strconv"
@@ -90,9 +84,13 @@ func parseScore(s string) float64 {
 	if err != nil {
 		return 0
 	}
-	// Некоторые модели возвращают score в [0,100] или logit'ы — клампим.
+	// КЛАМПИНГ: "1.5" -> 1.0, "42.5" -> 0.425
 	if v > 1 && v <= 100 {
-		v = v / 100.0
+		if strings.HasPrefix(m, "1.") {
+			v = 1.0
+		} else {
+			v = v / 100.0
+		}
 	}
 	if v < 0 {
 		v = 0
