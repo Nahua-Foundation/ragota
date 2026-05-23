@@ -6,6 +6,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,7 +20,7 @@ import (
 
 // Runner запускает контейнеры через docker CLI.
 type Runner struct {
-	WorkingDir string         // используется для разрешения относительных volume-путей
+	WorkingDir string // используется для разрешения относительных volume-путей
 	Cfg        config.DockerConfig
 }
 
@@ -41,14 +42,47 @@ func Available(ctx context.Context) error {
 // создаёт сеть.
 func (r *Runner) Up(ctx context.Context) error {
 	if r.Cfg.Network != "" {
+		fmt.Fprintf(os.Stderr, "docker: ensuring network %s\n", r.Cfg.Network)
 		if err := r.ensureNetwork(ctx, r.Cfg.Network); err != nil {
 			return err
 		}
 	}
 	if r.Cfg.Qdrant.Image != "" {
+		// Для сторонних образов типа qdrant просто надеемся на docker run (он сам спуллит).
+		fmt.Fprintf(os.Stderr, "docker: starting qdrant (%s)\n", r.Cfg.Qdrant.Image)
 		if err := r.runContainer(ctx, r.Cfg.Qdrant); err != nil {
 			return fmt.Errorf("qdrant: %w", err)
 		}
+	}
+	return nil
+}
+
+func (r *Runner) ensureImage(ctx context.Context, image string) error {
+	content, ok := embeddedDockerfiles[image]
+	if !ok {
+		// Образ не наш, docker run сам попробует его спуллить.
+		return nil
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256(content))
+
+	// Проверяем, есть ли локальный образ, собранный из той же версии embedded Dockerfile.
+	c := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{ index .Config.Labels \"ai-tools.dockerfile-sha256\" }}", image)
+	out, err := c.Output()
+	if err == nil && strings.TrimSpace(string(out)) == hash {
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "docker: building image %s from embedded Dockerfile...\n", image)
+
+	// Билдим из stdin
+	buildCmd := exec.CommandContext(ctx, "docker", "build", "--label", "ai-tools.dockerfile-sha256="+hash, "-t", image, "-")
+	buildCmd.Stdin = bytes.NewReader(content)
+	// Перенаправляем вывод в stderr, чтобы пользователь видел прогресс билда
+	buildCmd.Stdout = os.Stderr
+	buildCmd.Stderr = os.Stderr
+
+	if err := buildCmd.Run(); err != nil {
+		return fmt.Errorf("build failed: %w", err)
 	}
 	return nil
 }
@@ -72,23 +106,29 @@ type PsService struct {
 func (r *Runner) Ps(ctx context.Context) ([]PsService, error) {
 	var result []PsService
 	if r.Cfg.Qdrant.Name != "" {
-		st, err := r.inspectState(ctx, r.Cfg.Qdrant.Name)
-		if err != nil {
-			result = append(result, PsService{Name: r.Cfg.Qdrant.Name, State: "absent"})
-		} else {
-			result = append(result, PsService{Name: r.Cfg.Qdrant.Name, State: st.Status, Status: fmt.Sprintf("running=%v", st.Running)})
-		}
+		result = append(result, r.inspectPs(ctx, r.Cfg.Qdrant.Name))
 	}
 	return result, nil
 }
 
+func (r *Runner) inspectPs(ctx context.Context, name string) PsService {
+	st, err := r.inspectState(ctx, name)
+	if err != nil {
+		return PsService{Name: name, State: "absent"}
+	}
+	return PsService{Name: name, State: st.Status, Status: fmt.Sprintf("running=%v", st.Running)}
+}
+
 type containerState struct {
-	Status  string `json:"Status"`
-	Running bool   `json:"Running"`
+	Status    string `json:"Status"`
+	Running   bool   `json:"Running"`
+	OpenStdin bool   `json:"OpenStdin"`
+	Image     string `json:"Image"`
 }
 
 func (r *Runner) inspectState(ctx context.Context, name string) (*containerState, error) {
-	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{json .State}}", name).Output()
+	format := `{"Status":"{{.State.Status}}","Running":{{.State.Running}},"OpenStdin":{{.Config.OpenStdin}},"Image":"{{.Image}}"}`
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format", format, name).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -97,6 +137,14 @@ func (r *Runner) inspectState(ctx context.Context, name string) (*containerState
 		return nil, err
 	}
 	return &st, nil
+}
+
+func imageID(ctx context.Context, image string) (string, error) {
+	out, err := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", image).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (r *Runner) ensureNetwork(ctx context.Context, name string) error {
@@ -117,25 +165,40 @@ var proxyVars = []string{
 	"CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE",
 }
 
-// runContainer запускает контейнер: если уже существует — стартует, иначе docker run -d.
+// runContainer запускает контейнер: если уже существует — стартует, иначе docker run -di.
 func (r *Runner) runContainer(ctx context.Context, c config.DockerContainerCfg) error {
 	if c.Name == "" || c.Image == "" {
 		return nil
 	}
-	// Если уже есть — попробуем стартовать.
+	// Если уже есть — проверим состояние.
 	if st, err := r.inspectState(ctx, c.Name); err == nil {
-		if st.Running {
+		if id, err := imageID(ctx, c.Image); err == nil && st.Image != "" && st.Image != id {
+			fmt.Fprintf(os.Stderr, "docker: container %s uses outdated image, recreating...\n", c.Name)
+			_ = exec.CommandContext(ctx, "docker", "rm", "-f", c.Name).Run()
+		} else
+		// Если контейнер в статусе restarting или создан без -i (OpenStdin=false),
+		// значит он падает при старте из-за отсутствия stdin. Пересоздаём.
+		if st.Status == "restarting" || (!st.OpenStdin && st.Status != "running") {
+			fmt.Fprintf(os.Stderr, "docker: container %s is in bad state (%s, stdin=%v), recreating...\n", c.Name, st.Status, st.OpenStdin)
+			_ = exec.CommandContext(ctx, "docker", "rm", "-f", c.Name).Run()
+		} else {
+			if st.Running {
+				return nil
+			}
+			out, err := exec.CommandContext(ctx, "docker", "start", c.Name).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("docker start %s: %w: %s", c.Name, err, string(out))
+			}
 			return nil
 		}
-		out, err := exec.CommandContext(ctx, "docker", "start", c.Name).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("docker start %s: %w: %s", c.Name, err, string(out))
-		}
-		return nil
 	}
-	args := []string{"run", "-d", "--name", c.Name, "--restart", "unless-stopped"}
-	if r.Cfg.Network != "" {
-		args = append(args, "--network", r.Cfg.Network)
+	args := []string{"run", "-di", "--name", c.Name, "--restart", "unless-stopped"}
+	network := c.Network
+	if network == "" {
+		network = r.Cfg.Network
+	}
+	if network != "" {
+		args = append(args, "--network", network)
 	}
 	for _, p := range c.Ports {
 		args = append(args, "-p", p)
@@ -206,4 +269,3 @@ func (r *Runner) resolveVolume(v string) string {
 	}
 	return host + ":" + parts[1]
 }
-

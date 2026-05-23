@@ -21,6 +21,16 @@ type FileEntry struct {
 	Error      string    `json:"error,omitempty"`
 }
 
+// LSPError — ошибка LSP запроса.
+type LSPError struct {
+	Method    string    `json:"method"` // definition/hover/references
+	Path      string    `json:"path"`
+	Line      int       `json:"line"`
+	Char      int       `json:"char"`
+	Error     string    `json:"error"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // Indexer — статус индексации (общий для tree-sitter и vector).
 type Indexer struct {
 	Name         string    `json:"name"`
@@ -49,6 +59,7 @@ type Snapshot struct {
 	Recent    []FileEntry        `json:"recent"`
 	MCP       map[string]MCPStat `json:"mcp"`
 	Docker    DockerStatus       `json:"docker"`
+	LSP       []LSPError         `json:"lsp,omitempty"`
 }
 
 // DockerStatus — статус сервисов docker-compose.
@@ -68,6 +79,7 @@ type Bus struct {
 	recent   []FileEntry // ring buffer (newest first)
 	mcp      map[string]MCPStat
 	docker   DockerStatus
+	lsp      []LSPError // ring buffer (newest first)
 	maxItems int
 }
 
@@ -143,6 +155,24 @@ func (b *Bus) SetDocker(s DockerStatus) {
 	b.docker = s
 }
 
+// AddLSPError добавляет ошибку LSP запроса в ring buffer.
+func (b *Bus) AddLSPError(method, path string, line, char int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	e := LSPError{
+		Method:    method,
+		Path:      path,
+		Line:      line,
+		Char:      char,
+		Error:     err.Error(),
+		Timestamp: time.Now(),
+	}
+	b.lsp = append([]LSPError{e}, b.lsp...)
+	if len(b.lsp) > b.maxItems {
+		b.lsp = b.lsp[:b.maxItems]
+	}
+}
+
 // Snapshot возвращает копию текущего состояния.
 func (b *Bus) Snapshot() Snapshot {
 	b.mu.RLock()
@@ -154,6 +184,7 @@ func (b *Bus) Snapshot() Snapshot {
 		MCP:       make(map[string]MCPStat, len(b.mcp)),
 		Recent:    append([]FileEntry(nil), b.recent...),
 		Docker:    b.docker,
+		LSP:       append([]LSPError(nil), b.lsp...),
 	}
 	for k, v := range b.indexers {
 		snap.Indexers[k] = v

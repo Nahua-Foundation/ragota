@@ -15,7 +15,7 @@
   - **Go** — `go/parser` + `go/ast` (точно: functions, methods, types, imports, calls, embedded types).
   - **Java / TypeScript / JavaScript** — tree-sitter (classes, interfaces, methods, functions, calls, imports, `extends`, `implements`).
   - **Python** — AST units (без edges).
-- **LSP MCP (`lsp`)** — проксирует официальные LSP-сервера (`gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls`).
+- **LSP MCP (`lsp`)** — проксирует официальные LSP-сервера (`gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls`). Работает с локально установленными серверами.
 - **`ai-tools watch .`** — поднимает Qdrant в Docker (если указано `--start-docker`), использует Ollama на хосте, запускает индексаторы (vector + BM25 + AST/graph), открывает TUI-дашборд (bubbletea).
 
 ### Требования
@@ -27,7 +27,7 @@
   - `qwen3-embedding` — эмбеддинги кода (обязательно)
   - `nomic-embed-text` — эмбеддинги markdown/текста (обязательно)
   - `qllama/bge-reranker-v2-m3` — реранкер (опционально; при отсутствии — fallback)
-- В PATH для LSP MCP: `gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls` (опционально, любой набор).
+- В PATH для LSP MCP: `gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls` (опционально, любой набор). Либо настроенные Docker-контейнеры в конфиге.
 
 ### Установка зависимостей
 
@@ -42,9 +42,9 @@
 - **Ollama**: см. раздел [Настройка Ollama](#настройка-ollama).
 - **LSP-серверы**:
     - **Go**: `go install golang.org/x/tools/gopls@latest`
-    - **TypeScript**: `npm install -g typescript-language-server typescript`
+    - **TypeScript/JavaScript**: `npm install -g typescript-language-server typescript`
     - **Python**: `npm install -g pyright`
-    - **Java**: [jdtls](https://github.com/eclipse-jdtls/eclipse.jdt.ls)
+    - **Java**: установите [jdtls](https://github.com/eclipse-jdtls/eclipse.jdt.ls) и убедитесь, что бинарник `jdtls` доступен в PATH.
 
 ### Сборка
 ```
@@ -57,7 +57,7 @@ go build -o ai-tools .
 
 #### Примеры запуска
 
-1. **Запустить всё сразу** (LSP + Tree-Sitter + Vector + Symbol MCP + индексация + TUI + Docker):
+1. **Запустить всё сразу** (LSP + Tree-Sitter + Vector + Symbol MCP + индексация + TUI + Docker для Qdrant):
    ```bash
    ./ai-tools run -ltvsw --start-docker .
    ```
@@ -145,6 +145,72 @@ ai-tools serve-lsp        --root /path/to/project
 - `lsp.references(file, line, character, include_declaration?)`
 - `lsp.hover(file, line, character)`
 - `lsp.languages()`
+
+### Настройка LSP
+
+`ai-tools` запускает LSP-серверы **локально** (как дочерние процессы через stdio). Docker для LSP больше не используется — это упрощает маппинг путей и убирает оверхед на контейнер. Убедитесь, что нужные серверы установлены и доступны в `PATH`.
+
+#### Инструкции по установке:
+
+- **Go (gopls)**:
+  ```bash
+  go install golang.org/x/tools/gopls@latest
+  ```
+- **TypeScript/JavaScript (typescript-language-server)**:
+  ```bash
+  npm install -g typescript typescript-language-server
+  ```
+- **Python (pyright)**:
+  ```bash
+  npm install -g pyright
+  ```
+- **Java (jdtls)**:
+  - macOS: `brew install jdtls`
+  - Linux / вручную: скачайте [Eclipse JDT.LS](https://github.com/eclipse-jdtls/eclipse.jdt.ls) и положите `jdtls` в `PATH`.
+  - Требуется **JDK 21+** (`java -version`). На JDK <17 jdtls не стартует, на JDK 24+ возможны WARNING о deprecated reflection — они безопасны.
+
+Пример секции `lsp` в `config.yaml`:
+```yaml
+lsp:
+  - language: go
+    command: gopls
+  - language: java
+    command: jdtls
+    args: ["-data", ".ai-tools/jdtls-data"]
+  - language: typescript
+    command: typescript-language-server
+    args: ["--stdio"]
+  - language: python
+    command: pyright-langserver
+    args: ["--stdio"]
+```
+
+#### Возможные ошибки и их исправление
+
+- **`jdtls` запускается, но `lsp.definition/hover/references` возвращают `null` или пустой результат.**
+  - Причина: jdtls долго импортирует Maven/Gradle проект (30–120с на первый запуск) — клиент дожидается уведомления `language/status: ServiceReady`.
+  - Что делать: подождать; при больших проектах увеличить таймаут через env `JDTLS_READY_TIMEOUT=240` (секунды).
+  - Лог: `.ai-tools/logs/lsp-debug.log` (в корне проекта; путь можно переопределить env `AI_TOOLS_LSP_LOG`) — ищите `LSP java: ready signal received`. Если вместо него `ready timeout` — сервер не успел проиндексировать.
+
+- **`References RESULT: locations=0` (пусто), хотя символ заведомо используется.**
+  - Причина: файл лежит вне source roots Maven/Gradle (в корне проекта рядом с `pom.xml`, а не в `src/main/java/`). jdtls в режиме Maven индексирует только `src/main/java/**` и `src/test/java/**`.
+  - Что делать: переместить файл в `src/main/java/`, либо удалить `pom.xml`/`build.gradle` (jdtls перейдёт в invisible-project режим и проиндексирует всё).
+
+- **`process exited: signal: killed` сразу после успешного ответа.**
+  - Причина: была починена — ранее процесс получал SIGKILL по отмене RPC-контекста. Если симптом вернулся: проверьте, что JDK даёт jdtls достаточно памяти (по умолчанию `-Xmx4G`); на маленькой машине поднимите/опустите явно.
+
+- **`WARNING: sun.misc.Unsafe...`, `Using incubator modules`, `Final field mutation` в stderr.**
+  - Это шум JVM (JDK 24+) от внутренних библиотек jdtls (Guice/Plexus/Sisu). Не влияет на работу, отфильтровывается из логов.
+
+- **`jdtls --version` пишет `Could not load Gradle version information`.**
+  - Безвреден: значит Gradle wrapper отсутствует или не в PATH. Для Maven-проектов не нужен.
+
+- **`pyright` / `typescript-language-server` не находит определения.**
+  - Убедитесь, что в корне проекта есть `pyrightconfig.json`/`pyproject.toml` (для Python) или `tsconfig.json`/`package.json` (для TS). Без них серверы работают в режиме single-file.
+  - Установлены ли пакеты проекта (`npm install`, `pip install -e .`) — без них типы из зависимостей не разрешаются.
+
+- **`LSP <lang>: client dead, recreating` повторяется на каждом запросе.**
+  - Откройте `.ai-tools/logs/lsp-debug.log` и посмотрите строку `process exited: ...` — там будет `exit_code` и `signal`. `signal=killed` обычно означает OOM; увеличьте `-Xmx` (для Java) или память контейнера. Реальные Exception'ы jdtls видны в `stderr tail`.
 
 ### Настройка Ollama
 

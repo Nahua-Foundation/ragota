@@ -62,10 +62,25 @@ func newWatchCmd() *cobra.Command {
 			// 1. docker — только по флагу --start-docker (контейнеры из конфига).
 			if startDocker {
 				runner := docker.New(cfg.Root, cfg.Docker)
+				// Гарантируем остановку при выходе
+				defer func() {
+					fmt.Fprintf(os.Stderr, "docker: stopping containers...\n")
+					_ = runner.Down(context.Background())
+				}()
+
 				if err := docker.Available(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "docker: check failed: %v\n", err)
 					bus.SetDocker(state.DockerStatus{LastError: err.Error()})
 				} else {
-					go startDockerNative(ctx, runner, bus)
+					fmt.Fprintf(os.Stderr, "docker: starting containers...\n")
+					bus.SetDocker(state.DockerStatus{LastError: "starting..."})
+					if err := runner.Up(ctx); err != nil {
+						fmt.Fprintf(os.Stderr, "docker: error starting containers: %v\n", err)
+						bus.SetDocker(state.DockerStatus{LastError: err.Error()})
+					} else {
+						fmt.Fprintf(os.Stderr, "docker: all containers are up\n")
+						go startDockerMonitor(ctx, runner, bus)
+					}
 				}
 			}
 

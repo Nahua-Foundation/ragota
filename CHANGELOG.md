@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.0.5] - 2026-05-24
+
+### Changed
+- **LSP без Docker**: LSP-серверы (gopls, jdtls, pyright, typescript-language-server) теперь запускаются как локальные дочерние процессы через stdio. Поддержка запуска LSP в Docker удалена — это упрощает маппинг путей, ускоряет старт и убирает оверхед на контейнер. Docker по-прежнему используется для Qdrant.
+
+### Fixed
+- **jdtls: ожидание готовности**: Заменён фиксированный `time.Sleep(10s)` после `initialized` на ожидание уведомления `language/status: ServiceReady` (jdtls-специфичное расширение LSP). Таймаут — 120с по умолчанию, переопределяется env `JDTLS_READY_TIMEOUT`. Решает проблему пустых ответов `definition/hover/references` на первом запросе после старта.
+- **jdtls: SIGKILL после ответа**: Процесс LSP больше не привязан к контексту RPC-запроса (`exec.Command` вместо `exec.CommandContext`) — раньше Go убивал jdtls после каждого `Hover/Definition/References`, и следующий запрос пересоздавал сервер заново.
+- **Память для jdtls**: Поднят `-Xmx` c 2G до 4G — на средних Maven-проектах 2G приводило к SIGKILL от OOM-killer.
+- **Диагностика крашей LSP**: Debug-лог LSP теперь пишется в `.ai-tools/logs/lsp-debug.log` (в корне проекта) вместо `/tmp/ai-tools-lsp-debug.log`; путь переопределяется env `AI_TOOLS_LSP_LOG`. В лог добавлены `exit_code` и `signal` процесса, буфер stderr увеличен до 200 строк, фильтр шумных WARNING/INFO применяется до записи в буфер — реальные Exception'ы jdtls больше не вытесняются JVM-warning'ами.
+
+## [v0.0.4] - 2026-05-23
+
+### Added
+- **Фолбэк LSP на tree-sitter**: Если LSP-сервер недоступен или возвращает ошибку, `ai-tools` теперь автоматически пытается найти определение или информацию о символе через индекс tree-sitter. В ответе при этом выводится соответствующее предупреждение.
+- **Автоматическая остановка Docker (Qdrant)**: При завершении приложения (Ctrl+C) контейнер Qdrant, запущенный через `--start-docker`, автоматически останавливается.
+- **Расширенная конфигурация**: В `config.yaml` добавлена секция `lsp` для гибкой настройки серверов на каждый язык (команда, аргументы).
+- **Поддержка JS/TS**: Улучшена интеграция с `typescript-language-server`.
+
 ## [v0.0.3] - 2026-05-23
 
 ### Added

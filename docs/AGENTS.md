@@ -12,7 +12,7 @@ For optimal analytical performance, agents MUST prioritize the use of these tool
 3. **Symbol-aware navigation (`sym.*`)**: Definition / references / implementations / callers / callees + parent-child AST navigation.
 4. **Code-graph expansion (`sym.expand_neighbors`, `sym.get_call_graph`, `sym.get_dependency_graph`)**: Walks `calls / imports / implements / extends / references` edges around a hit to widen context cheaply.
 5. **Tree-sitter symbolic analysis (`ts.*`)**: Substring symbol search and file symbol listing.
-6. **LSP intelligence (`lsp.*`)**: Real-time, language-aware navigation when an LSP is available for the language.
+6. **LSP intelligence (`lsp.*`)** — real-time, language-aware navigation when an LSP is available for the language. Supports Java, TypeScript, JavaScript, Python, and Go.
 
 ---
 

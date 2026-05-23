@@ -144,17 +144,42 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 			if enableLSP {
-				lspMgr = lsp.NewManager(cfg.Root, nil)
-				defer lspMgr.Close()
+				var specs []lsp.ServerSpec
+				for _, s := range cfg.LSP {
+					specs = append(specs, lsp.ServerSpec{
+						Language:  s.Language,
+						Command:   s.Command,
+						Args:      s.Args,
+						LocalRoot: cfg.Root,
+					})
+				}
+				lspMgr = lsp.NewManager(cfg.Root, specs)
+				// Не закрываем менеджер здесь - он нужен для работы SSE серверов.
+				// Закроется после shutdown SSE серверов в конце функции.
 			}
 
 			// 1. Docker — ТОЛЬКО по явному флагу.
 			if startDocker {
 				runner := docker.New(cfg.Root, cfg.Docker)
+				// Гарантируем остановку при выходе
+				defer func() {
+					fmt.Fprintf(os.Stderr, "docker: stopping containers...\n")
+					_ = runner.Down(context.Background())
+				}()
+
 				if err := docker.Available(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "docker: check failed: %v\n", err)
 					bus.SetDocker(state.DockerStatus{LastError: err.Error()})
 				} else {
-					go startDockerNative(ctx, runner, bus)
+					fmt.Fprintf(os.Stderr, "docker: starting containers...\n")
+					bus.SetDocker(state.DockerStatus{LastError: "starting..."})
+					if err := runner.Up(ctx); err != nil {
+						fmt.Fprintf(os.Stderr, "docker: error starting containers: %v\n", err)
+						bus.SetDocker(state.DockerStatus{LastError: err.Error()})
+					} else {
+						fmt.Fprintf(os.Stderr, "docker: all containers are up\n")
+						go startDockerMonitor(ctx, runner, bus)
+					}
 				}
 			}
 
@@ -211,7 +236,7 @@ func newRunCmd() *cobra.Command {
 			}
 			if enableLSP {
 				port := cfg.MCP.LSP
-				mcpSrv := mcppkg.NewLSPServer(cfg, lspMgr, bus).Build()
+				mcpSrv := mcppkg.NewLSPServer(cfg, lspMgr, st, bus).Build()
 				sseServers = append(sseServers, startSSE(ctx, &wg, mcpSrv, "lsp", port))
 			}
 			if enableSymbol {
@@ -242,6 +267,10 @@ func newRunCmd() *cobra.Command {
 				_ = s.Shutdown(shutdownCtx)
 			}
 			wg.Wait()
+			// Закрываем LSP менеджер после остановки SSE серверов
+			if lspMgr != nil {
+				lspMgr.Close()
+			}
 			return runErr
 		},
 	}
@@ -261,10 +290,10 @@ func startSSE(_ context.Context, wg *sync.WaitGroup, mcp *server.MCPServer, name
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	sse := server.NewSSEServer(mcp, server.WithBaseURL(baseURL))
+	fmt.Fprintf(os.Stderr, "mcp[%s]: serving SSE on %s\n", name, baseURL)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		fmt.Fprintf(os.Stderr, "mcp[%s]: serving SSE on %s\n", name, baseURL)
 		if err := sse.Start(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(os.Stderr, "mcp[%s]: SSE server error: %v\n", name, err)
 		}
@@ -342,14 +371,8 @@ func fanoutWatchEvents(ctx context.Context, w *watcher.Watcher, tsIdx *index.Tre
 	}
 }
 
-// startDockerNative поднимает контейнеры через нативный runner и периодически
-// обновляет статус в bus для TUI.
-func startDockerNative(ctx context.Context, r *docker.Runner, bus *state.Bus) {
-	bus.SetDocker(state.DockerStatus{LastError: "starting..."})
-	if err := r.Up(ctx); err != nil {
-		bus.SetDocker(state.DockerStatus{LastError: err.Error()})
-		return
-	}
+// startDockerMonitor периодически обновляет статус контейнеров в bus для TUI.
+func startDockerMonitor(ctx context.Context, r *docker.Runner, bus *state.Bus) {
 	t := time.NewTicker(3 * time.Second)
 	defer t.Stop()
 	for {

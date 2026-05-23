@@ -54,6 +54,9 @@ type Config struct {
 	BM25   BM25Config   `yaml:"bm25"`
 	Rerank RerankConfig `yaml:"rerank"`
 	Hybrid HybridConfig `yaml:"hybrid"`
+
+	// Настройки LSP-серверов.
+	LSP []LSPServerConfig `yaml:"lsp"`
 }
 
 // CollectionsConfig — отдельные коллекции в Qdrant для кода и текста.
@@ -127,6 +130,12 @@ type DockerConfig struct {
 	Qdrant  DockerContainerCfg `yaml:"qdrant"`
 }
 
+type LSPServerConfig struct {
+	Language string   `yaml:"language"`
+	Command  string   `yaml:"command"`
+	Args     []string `yaml:"args"`
+}
+
 // DockerContainerCfg — параметры одного контейнера.
 type DockerContainerCfg struct {
 	Name  string `yaml:"name"`
@@ -138,6 +147,8 @@ type DockerContainerCfg struct {
 	Volumes []string `yaml:"volumes"`
 	// Доп. переменные окружения "KEY=VALUE".
 	Env []string `yaml:"env"`
+	// Переопределение сети (например, "none" для изоляции).
+	Network string `yaml:"network"`
 }
 
 // DefaultIgnore — папки, которые по умолчанию исключаются.
@@ -227,6 +238,32 @@ func Default() *Config {
 				Image:   "qdrant/qdrant:latest",
 				Ports:   []string{"127.0.0.1:6333:6333", "127.0.0.1:6334:6334"},
 				Volumes: []string{".ai-tools/qdrant_storage:/qdrant/storage"},
+			},
+		},
+		LSP: []LSPServerConfig{
+			{
+				Language: "go",
+				Command:  "gopls",
+			},
+			{
+				Language: "typescript",
+				Command:  "typescript-language-server",
+				Args:     []string{"--stdio"},
+			},
+			{
+				Language: "javascript",
+				Command:  "typescript-language-server",
+				Args:     []string{"--stdio"},
+			},
+			{
+				Language: "python",
+				Command:  "pyright-langserver",
+				Args:     []string{"--stdio"},
+			},
+			{
+				Language: "java",
+				Command:  "jdtls",
+				Args:     []string{"-data", ".ai-tools/jdtls-data"},
 			},
 		},
 	}

@@ -120,9 +120,23 @@ func newServeLSPCmd() *cobra.Command {
 				return err
 			}
 			bus := state.NewBus(cfg.Root)
-			mgr := lsp.NewManager(cfg.Root, nil)
+			st, _ := store.Open(cfg.SQLitePath())
+			if st != nil {
+				defer st.Close()
+			}
+
+			var specs []lsp.ServerSpec
+			for _, s := range cfg.LSP {
+				specs = append(specs, lsp.ServerSpec{
+					Language:  s.Language,
+					Command:   s.Command,
+					Args:      s.Args,
+					LocalRoot: cfg.Root,
+				})
+			}
+			mgr := lsp.NewManager(cfg.Root, specs)
 			defer mgr.Close()
-			srv := mcppkg.NewLSPServer(cfg, mgr, bus).Build()
+			srv := mcppkg.NewLSPServer(cfg, mgr, st, bus).Build()
 			return server.ServeStdio(srv)
 		},
 	}
@@ -146,7 +160,20 @@ func newServeSymbolCmd() *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			gr := graph.New(st)
+			// LSP-manager для ленивого обогащения графа (calls/implements).
+			// При недоступности LSP graph.Service всегда падает обратно на tree-sitter.
+			var specs []lsp.ServerSpec
+			for _, s := range cfg.LSP {
+				specs = append(specs, lsp.ServerSpec{
+					Language:  s.Language,
+					Command:   s.Command,
+					Args:      s.Args,
+					LocalRoot: cfg.Root,
+				})
+			}
+			lspMgr := lsp.NewManager(cfg.Root, specs)
+			defer lspMgr.Close()
+			gr := graph.NewWithLSP(st, lspMgr)
 			syms := symbols.New(st, gr, nil)
 			// Опционально подключаем similar-search через Vector, если qdrant доступен.
 			qd := qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))
