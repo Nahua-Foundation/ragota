@@ -79,10 +79,13 @@ func (s *LSPServer) Build() *server.MCPServer {
 func (s *LSPServer) wrap(name string, fn func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		res, err := fn(ctx, req)
-		if s.bus != nil {
-			s.bus.IncMCPCall("lsp", name, err != nil)
+		if err != nil {
+			return errorToResult(name, err)
 		}
-		return res, err
+		if s.bus != nil {
+			s.bus.IncMCPCall("lsp", name, false)
+		}
+		return res, nil
 	}
 }
 

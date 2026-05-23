@@ -98,7 +98,7 @@ func (m model) View() string {
 	// Indexers
 	var idxRows []string
 	idxRows = append(idxRows, headerStyle.Render("Indexers"))
-	for _, name := range []string{"treesitter", "vector"} {
+	for _, name := range []string{"treesitter", "graph", "vector"} {
 		if i, ok := s.Indexers[name]; ok {
 			idxRows = append(idxRows, renderIndexer(i, contentWidth))
 		} else {
@@ -206,10 +206,16 @@ func renderIndexer(i state.Indexer, width int) string {
 	case "error":
 		statusStyle = errStyle
 	}
-	line := fmt.Sprintf("  %-11s %s  files=%d/%d chunks=%d symbols=%d",
+
+	stats := fmt.Sprintf("files=%d/%d chunks=%d symbols=%d", i.FilesIndexed, i.FilesTotal, i.Chunks, i.Symbols)
+	if i.Name == "graph" {
+		stats = fmt.Sprintf("files=%d/%d edges=%d units=%d", i.FilesIndexed, i.FilesTotal, i.Chunks, i.Symbols)
+	}
+
+	line := fmt.Sprintf("  %-11s %s  %s",
 		i.Name,
 		statusStyle.Render(fmt.Sprintf("%-9s", i.Status)),
-		i.FilesIndexed, i.FilesTotal, i.Chunks, i.Symbols)
+		stats)
 	if i.LastError != "" {
 		line += renderError(i.LastError, width-4)
 	}

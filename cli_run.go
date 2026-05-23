@@ -11,16 +11,21 @@ import (
 	"syscall"
 	"time"
 
+	"aitools/internal/astindex"
+	"aitools/internal/bm25"
 	"aitools/internal/config"
 	"aitools/internal/docker"
 	"aitools/internal/embedder"
 	"aitools/internal/fileutil"
+	"aitools/internal/graph"
 	"aitools/internal/index"
 	"aitools/internal/lsp"
 	mcppkg "aitools/internal/mcp"
 	"aitools/internal/qdrant"
+	"aitools/internal/rerank"
 	"aitools/internal/state"
 	"aitools/internal/store"
+	"aitools/internal/symbols"
 	"aitools/internal/tui"
 	"aitools/internal/watcher"
 
@@ -40,6 +45,7 @@ func newRunCmd() *cobra.Command {
 		enableTS     bool
 		enableVector bool
 		enableLSP    bool
+		enableSymbol bool
 		doWatch      bool
 		startDocker  bool
 		noTUI        bool
@@ -55,8 +61,8 @@ func newRunCmd() *cobra.Command {
 			"--start-docker to spin them up using the `docker:` section of the config.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !enableTS && !enableVector && !enableLSP && !doWatch {
-				return errors.New("nothing to run: pass at least one of -t, -v, -l, -w")
+			if !enableTS && !enableVector && !enableLSP && !enableSymbol && !doWatch {
+				return errors.New("nothing to run: pass at least one of -t, -v, -l, -s, -w")
 			}
 			dir := "."
 			if len(args) == 1 {
@@ -77,14 +83,19 @@ func newRunCmd() *cobra.Command {
 
 			// Общие ресурсы.
 			var (
-				st     *store.SQLite
-				tsIdx  *index.TreeSitter
-				vIdx   *index.Vector
-				qd     *qdrant.Client
-				emb    *embedder.Ollama
-				lspMgr *lsp.Manager
+				st      *store.SQLite
+				tsIdx   *index.TreeSitter
+				vIdx    *index.Vector
+				astIdx  *astindex.Indexer
+				qd      *qdrant.Client
+				emb     *embedder.Ollama
+				lspMgr  *lsp.Manager
+				bleveIx bm25.Index
+				rer     rerank.Reranker
+				grSvc   *graph.Service
+				symSvc  *symbols.Service
 			)
-			if enableTS || enableVector || doWatch {
+			if enableTS || enableVector || enableSymbol || doWatch {
 				st, err = store.Open(cfg.SQLitePath())
 				if err != nil {
 					return fmt.Errorf("sqlite open: %w", err)
@@ -94,10 +105,43 @@ func newRunCmd() *cobra.Command {
 			if enableTS || doWatch {
 				tsIdx = index.NewTreeSitter(cfg, st, bus)
 			}
+			// AST units / edges — нужны для symbol-aware MCP и graph expansion.
+			if enableSymbol || enableTS || doWatch {
+				astIdx = astindex.New(cfg, st)
+				astIdx.SetBus(bus)
+			}
+			// BM25 (Bleve) — лексический индекс для hybrid retrieval.
+			if (enableVector || doWatch) && cfg.BM25.Enabled {
+				b, berr := bm25.Open(cfg.BM25Path(), cfg.BM25.K1, cfg.BM25.B)
+				if berr != nil {
+					fmt.Fprintf(os.Stderr, "bm25: open %s failed: %v (continuing without BM25)\n", cfg.BM25Path(), berr)
+				} else {
+					bleveIx = b
+					defer bleveIx.Close()
+				}
+			}
 			if enableVector || doWatch {
 				qd = qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))
 				emb = embedder.New(cfg.Ollama.URL, cfg.Ollama.EmbedModel)
 				vIdx = index.NewVector(cfg, qd, emb, st, bus)
+				if bleveIx != nil {
+					vIdx.SetBM25(bleveIx)
+				}
+			}
+			if cfg.Rerank.Enabled {
+				rer = rerank.New(rerank.Options{
+					URL:      cfg.RerankURL(),
+					Model:    cfg.Rerank.Model,
+					Required: cfg.Rerank.Required,
+					TopN:     cfg.Rerank.TopN,
+				})
+			}
+			if enableSymbol || doWatch {
+				grSvc = graph.New(st)
+				symSvc = symbols.New(st, grSvc, nil)
+				if vIdx != nil {
+					symSvc.SetSimilarSearcher(vIdx)
+				}
 			}
 			if enableLSP {
 				lspMgr = lsp.NewManager(cfg.Root, nil)
@@ -119,7 +163,7 @@ func newRunCmd() *cobra.Command {
 				go waitAndScanVector(ctx, qd, emb, vIdx, bus)
 			}
 
-			// 3. Watcher + полное сканирование tree-sitter.
+			// 3. Watcher + полное сканирование tree-sitter и AST units.
 			var w *watcher.Watcher
 			if doWatch {
 				matcher := fileutil.NewMatcher(cfg.Ignore)
@@ -134,7 +178,10 @@ func newRunCmd() *cobra.Command {
 				if tsIdx != nil {
 					go func() { _ = tsIdx.FullScan(ctx) }()
 				}
-				go fanoutWatchEvents(ctx, w, tsIdx, vIdx)
+				if astIdx != nil {
+					go func() { _ = astIdx.FullScan(ctx) }()
+				}
+				go fanoutWatchEvents(ctx, w, tsIdx, vIdx, astIdx)
 			}
 
 			// 4. MCP-серверы.
@@ -153,13 +200,24 @@ func newRunCmd() *cobra.Command {
 						return fmt.Errorf("vector init: %w", err)
 					}
 				}
-				mcpSrv := mcppkg.NewVectorServer(cfg, vIdx, qd, bus).Build()
-				sseServers = append(sseServers, startSSE(ctx, &wg, mcpSrv, "vector", port))
+				vs := mcppkg.NewVectorServer(cfg, vIdx, qd, bus)
+				if bleveIx != nil {
+					vs.SetBM25(bleveIx)
+				}
+				if rer != nil {
+					vs.SetReranker(rer)
+				}
+				sseServers = append(sseServers, startSSE(ctx, &wg, vs.Build(), "vector", port))
 			}
 			if enableLSP {
 				port := cfg.MCP.LSP
 				mcpSrv := mcppkg.NewLSPServer(cfg, lspMgr, bus).Build()
 				sseServers = append(sseServers, startSSE(ctx, &wg, mcpSrv, "lsp", port))
+			}
+			if enableSymbol {
+				port := cfg.MCP.Symbol
+				mcpSrv := mcppkg.NewSymbolServer(cfg, st, symSvc, grSvc, bus).Build()
+				sseServers = append(sseServers, startSSE(ctx, &wg, mcpSrv, "symbol", port))
 			}
 
 			// 5. UI / блокировка.
@@ -190,6 +248,7 @@ func newRunCmd() *cobra.Command {
 	c.Flags().BoolVarP(&enableTS, "ts", "t", false, "run tree-sitter MCP server")
 	c.Flags().BoolVarP(&enableVector, "vec", "v", false, "run vector (qdrant+ollama) MCP server")
 	c.Flags().BoolVarP(&enableLSP, "lsp", "l", false, "run LSP-multiplexer MCP server")
+	c.Flags().BoolVarP(&enableSymbol, "sym", "s", false, "run symbol-aware MCP server (AST units + code graph)")
 	c.Flags().BoolVarP(&doWatch, "watch", "w", false, "start indexers and TUI dashboard for the directory")
 	c.Flags().BoolVar(&startDocker, "start-docker", false,
 		"start qdrant+ollama containers using the docker: section of the config")
@@ -247,8 +306,8 @@ func waitAndScanVector(ctx context.Context, qd *qdrant.Client, emb *embedder.Oll
 	}
 }
 
-// fanoutWatchEvents транслирует события watcher'а в оба индексатора.
-func fanoutWatchEvents(ctx context.Context, w *watcher.Watcher, tsIdx *index.TreeSitter, vIdx *index.Vector) {
+// fanoutWatchEvents транслирует события watcher'а во все индексаторы.
+func fanoutWatchEvents(ctx context.Context, w *watcher.Watcher, tsIdx *index.TreeSitter, vIdx *index.Vector, astIdx *astindex.Indexer) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -265,12 +324,18 @@ func fanoutWatchEvents(ctx context.Context, w *watcher.Watcher, tsIdx *index.Tre
 				if vIdx != nil {
 					_ = vIdx.RemoveFile(ctx, ev.AbsPath)
 				}
+				if astIdx != nil {
+					_ = astIdx.RemoveFile(ctx, ev.AbsPath)
+				}
 			default:
 				if tsIdx != nil {
 					_ = tsIdx.IndexFile(ctx, ev.AbsPath)
 				}
 				if vIdx != nil {
 					_ = vIdx.IndexFile(ctx, ev.AbsPath)
+				}
+				if astIdx != nil {
+					_ = astIdx.IndexFile(ctx, ev.AbsPath)
 				}
 			}
 		}

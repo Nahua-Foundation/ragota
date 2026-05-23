@@ -41,6 +41,7 @@ func main() {
 	rootCmd.AddCommand(newServeTreesitterCmd())
 	rootCmd.AddCommand(newServeVectorCmd())
 	rootCmd.AddCommand(newServeLSPCmd())
+	rootCmd.AddCommand(newServeSymbolCmd())
 
 	// Поддержка слитной записи коротких флагов для run: `-tvlw`, `-tw`, `-lvt` и т.п.
 	// Разворачиваем такие токены в набор индивидуальных `-x` ДО передачи cobra.
@@ -84,7 +85,7 @@ func expandRunShortFlags(args []string) []string {
 	if runIdx < 0 {
 		return args
 	}
-	const known = "tvlw"
+	const known = "tvlws"
 	out := make([]string, 0, len(args)+4)
 	out = append(out, args[:runIdx+1]...)
 	for _, tok := range args[runIdx+1:] {

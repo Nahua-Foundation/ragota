@@ -60,6 +60,10 @@ func newMcpConfigCmd() *cobra.Command {
 						URL:   fmt.Sprintf("http://127.0.0.1:%d/sse", cfg.MCP.LSP),
 						Trust: false,
 					},
+					"ai-tools-symbol": {
+						URL:   fmt.Sprintf("http://127.0.0.1:%d/sse", cfg.MCP.Symbol),
+						Trust: false,
+					},
 				}
 				for k, v := range mcpConfigs {
 					resp.MCPServers[k] = v
@@ -87,6 +91,7 @@ func newMcpConfigCmd() *cobra.Command {
 					{"ai-tools-treesitter", "serve-treesitter"},
 					{"ai-tools-vector", "serve-vector"},
 					{"ai-tools-lsp", "serve-lsp"},
+					{"ai-tools-symbol", "serve-symbol"},
 				}
 
 				for _, s := range servers {

@@ -1,33 +1,45 @@
 # ai-tools
 
-Единый бинарь, объединяющий три MCP-сервера, докер-инфраструктуру и live-дашборд для индексации проектов.
+Единый бинарь, объединяющий **четыре MCP-сервера**, гибридный (vector + BM25) поиск с реранкером, AST/graph-индекс для symbol-aware навигации, докер-инфраструктуру и live-дашборд для индексации проектов.
 
 ### Возможности
-- **tree-sitter MCP** — разбирает код на символы (function/method/class/interface/type/enum/var/const) для Go, TypeScript/TSX, JavaScript/JSX, Python, Java; хранит их в SQLite; следит за изменениями в директории.
-- **vector MCP** — ререзать файлы на чанки (использует **tree-sitter чанкинг** для Go/TS/Python/Java, либо построчное окно для остальных), эмбеддит через Ollama (`nomic-embed-text` по умолчанию), кладёт в Qdrant; перестраивает индекс при изменении файлов; поддерживает `ignore`-папки (vendor, node_modules, __pycache__, target и т. п.).
-- **LSP MCP** — проксирует официальные LSP-сервера (`gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls`) через MCP-tools `lsp.definition`, `lsp.references`, `lsp.hover`, `lsp.languages`.
-- **`ai-tools watch .`** — поднимает qdrant в докере (если указано `--start-docker`), использует Ollama на хосте, запускает оба индексатора, открывает TUI-дашборд (bubbletea) со статусом индексации, последними изменёнными/индексированными файлами, числом чанков/символов, статистикой вызовов MCP-серверов текущей сессии.
+
+- **tree-sitter MCP (`ts`)** — разбирает код на символы (function/method/class/interface/type/enum/var/const) для Go, TypeScript/TSX, JavaScript/JSX, Python, Java; хранит их в SQLite; следит за изменениями в директории.
+- **vector MCP (`vec`)** — гибридный (vector + BM25) поиск с опциональным реранкингом:
+  - Чанкинг через tree-sitter (Go/TS/JS/Python/Java) либо построчное окно для остальных.
+  - **Две раздельные коллекции в Qdrant**: код (`qwen3-embedding`, 1024-dim) и текст/markdown (`nomic-embed-text`, 768-dim).
+  - **BM25** — локальный лексический индекс на [Bleve](https://github.com/blevesearch/bleve), pure-Go.
+  - **Reranker** — Ollama `qllama/bge-reranker-v2-m3` с graceful fallback (если модель не подгружена — реранкинг пропускается, в логе warning).
+  - **Авто-reindex** при смене embed-модели: метаданные хранятся в SQLite (`embed_meta`), коллекция кода автоматически пересоздаётся, markdown-индекс не трогается.
+- **symbol MCP (`sym`)** — symbol-aware навигация поверх AST units + code graph (`ast_units`, `edges` в SQLite). Извлечение:
+  - **Go** — `go/parser` + `go/ast` (точно: functions, methods, types, imports, calls, embedded types).
+  - **Java / TypeScript / JavaScript** — tree-sitter (classes, interfaces, methods, functions, calls, imports, `extends`, `implements`).
+  - **Python** — AST units (без edges).
+- **LSP MCP (`lsp`)** — проксирует официальные LSP-сервера (`gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls`).
+- **`ai-tools watch .`** — поднимает Qdrant в Docker (если указано `--start-docker`), использует Ollama на хосте, запускает индексаторы (vector + BM25 + AST/graph), открывает TUI-дашборд (bubbletea).
 
 ### Требования
+
 - Go 1.26+
 - macOS/Linux с Xcode CLI tools (CGO для tree-sitter)
 - Docker (для Qdrant)
-- Ollama на хосте (см. раздел [Настройка Ollama](#настройка-ollama))
-- В PATH для LSP MCP: `gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls` (любой набор — если бинаря нет, соответствующий язык просто не запустится)
+- Ollama на хосте с моделями:
+  - `qwen3-embedding` — эмбеддинги кода (обязательно)
+  - `nomic-embed-text` — эмбеддинги markdown/текста (обязательно)
+  - `qllama/bge-reranker-v2-m3` — реранкер (опционально; при отсутствии — fallback)
+- В PATH для LSP MCP: `gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls` (опционально, любой набор).
 
 ### Установка зависимостей
-
-Для работы всех функций требуются внешние инструменты. Вы можете установить их автоматически или вручную.
 
 #### Автоматическая установка
 ```bash
 ./ai-tools install
 ```
-Команда проверит наличие Docker, Ollama, нужных моделей и LSP-серверов, и предложит установить недостающие (с подтверждением для каждого).
+Команда проверит наличие Docker, Ollama, всех нужных моделей (`qwen3-embedding`, `nomic-embed-text`, реранкер) и LSP-серверов и предложит установить недостающие. Обязательные модели помечены как required, реранкер — optional.
 
 #### Ручная установка
-- **Docker**: необходим для Qdrant. [Инструкция](https://docs.docker.com/get-docker/).
-- **Ollama**: необходима для векторного поиска. См. раздел [Настройка Ollama](#настройка-ollama).
+- **Docker**: [инструкция](https://docs.docker.com/get-docker/).
+- **Ollama**: см. раздел [Настройка Ollama](#настройка-ollama).
 - **LSP-серверы**:
     - **Go**: `go install golang.org/x/tools/gopls@latest`
     - **TypeScript**: `npm install -g typescript-language-server typescript`
@@ -41,120 +53,168 @@ go build -o ai-tools .
 
 ### Запуск
 
-Основная команда для работы — `run`. Она позволяет запускать индексацию проекта и MCP-серверы в любых комбинациях. При первом запуске ищется `.ai-tools/config.yaml` в проекте или `~/.ai-tools/config.yaml`. Если их нет — используются дефолты.
+Основная команда — `run`. При первом запуске ищется `.ai-tools/config.yaml` в проекте или `~/.ai-tools/config.yaml`. Если их нет — используются дефолты.
 
 #### Примеры запуска
 
-1. **Запустить всё сразу** (MCP-серверы LSP, Tree-Sitter, Vector + индексация + TUI + запуск Docker):
+1. **Запустить всё сразу** (LSP + Tree-Sitter + Vector + Symbol MCP + индексация + TUI + Docker):
    ```bash
-   ./ai-tools run -ltvw --start-docker .
+   ./ai-tools run -ltvsw --start-docker .
    ```
-   *Здесь `-ltvw` это комбинация флагов: `-l` (LSP), `-t` (Tree-Sitter), `-v` (Vector), `-w` (Watch/Индексация).*
+   *Флаги: `-l` (LSP), `-t` (Tree-Sitter), `-v` (Vector), `-s` (Symbol), `-w` (Watch/Индексация).*
 
-2. **Только индексация и TUI** (без запуска MCP-серверов):
+2. **Только индексация и TUI**:
    ```bash
    ./ai-tools watch .
    ```
    *(Эквивалентно `./ai-tools run -w .`)*
 
-3. **Только MCP-серверы для Claude Desktop** (без TUI и наблюдения за файлами):
+3. **Все MCP-серверы для Claude Desktop** (без TUI):
    ```bash
-   ./ai-tools run -ltv --no-tui .
+   ./ai-tools run -ltvs --no-tui .
    ```
 
-4. **Запуск конкретных серверов** (например, только LSP и Tree-Sitter):
+4. **Только symbol-aware навигация**:
    ```bash
-   ./ai-tools run -lt .
+   ./ai-tools run -s .
    ```
 
-- Сгенерировать конфиг: `./ai-tools gen-config` (по умолчанию в `~/.ai-tools/config.yaml`).
-- `ai-tools mcp-config` — сгенерировать JSON для вставки в конфиг Claude Desktop или других MCP-клиентов.
+- `./ai-tools gen-config` — сгенерировать конфиг (по умолчанию `~/.ai-tools/config.yaml`).
+- `./ai-tools mcp-config` — сгенерировать JSON для Claude Desktop / других MCP-клиентов (включает все 4 сервера).
+- `./ai-tools clean` — очистить локальный индекс (SQLite, Qdrant-коллекции, Bleve).
 - `q`/`Esc`/`Ctrl+C` — выход из TUI.
 
-#### Доступные флаги `run`
-- `-l`, `--lsp` — запустить MCP-сервер LSP (прокси для gopls, pyright и т.д.)
-- `-t`, `--ts` — запустить MCP-сервер Tree-Sitter (структурный поиск символов)
-- `-v`, `--vec` — запустить MCP-сервер Vector (семантический поиск через Ollama+Qdrant)
-- `-w`, `--watch` — запустить индексацию файлов и TUI-дашборд
-- `--start-docker` — автоматически поднять контейнер Qdrant из секции `docker:` конфига
-- `--no-tui` — не открывать интерактивный дашборд (полезно для фоновой работы)
+#### Флаги `run`
+- `-l`, `--lsp` — MCP-сервер LSP
+- `-t`, `--ts`  — MCP-сервер Tree-Sitter
+- `-v`, `--vec` — MCP-сервер Vector (hybrid + rerank)
+- `-s`, `--sym` — MCP-сервер Symbol (AST/graph)
+- `-w`, `--watch` — индексация + TUI
+- `--start-docker` — поднять Qdrant из секции `docker:` конфига
+- `--no-tui` — не открывать дашборд
 
 ### MCP-серверы по отдельности (stdio)
-Для подключения из MCP-клиента (Claude Desktop, etc):
+
 ```
 ai-tools serve-treesitter --root /path/to/project
 ai-tools serve-vector     --root /path/to/project
+ai-tools serve-symbol     --root /path/to/project
 ai-tools serve-lsp        --root /path/to/project
 ```
 
-#### Описание методов MCP
+#### Методы MCP
 
-**ts (Tree-Sitter)** — структурный поиск
-- `ts.search_symbols(query, kind?, language?, limit?)` — поиск функций, классов, методов и других символов по имени. Поддерживает фильтрацию по типу (kind) и языку.
-- `ts.list_symbols(file)` — возвращает древовидную структуру всех символов в указанном файле.
-- `ts.reindex(path?)` — принудительно переиндексирует конкретный файл или весь проект.
-- `ts.stats()` — статистика индекса: количество проиндексированных файлов и найденных символов.
+**ts (Tree-Sitter)** — структурный поиск символов
+- `ts.search_symbols(query, kind?, language?, limit?)` — поиск по имени. **Go-specific**: `kind="function"` finds only functions (e.g., `func foo()`), `kind="method"` finds only methods (e.g., `func (r Receiver) foo()`). Use the correct kind for your search target.
+- `ts.list_symbols(file)` — дерево символов файла.
+- `ts.reindex(path?)` — переиндексация.
+- `ts.stats()` — статистика индекса.
 
-**vec (Vector)** — семантический поиск
-- `vec.search(query, limit?, language?)` — поиск по смыслу на естественном языке. Находит релевантные фрагменты кода, даже если нет точного текстового совпадения.
-- `vec.reindex(path?)` — обновление векторного индекса для файла или всего проекта.
-- `vec.count()` — количество проиндексированных фрагментов (чанков) в базе Qdrant.
+**vec (Vector)** — гибридный семантический + лексический поиск
+- `vec.search_semantic(query, top_k?, language?)` — только vector (Qdrant).
+- `vec.search_keyword(query, top_k?, language?)` — только BM25 (Bleve).
+- `vec.search_hybrid(query, top_k?, language?)` — слияние vector + BM25 (RRF или weighted-sum, см. `hybrid.*` в конфиге).
+- `vec.rerank(query, candidates, top_n?)` — реранк списка кандидатов через BGE-Reranker.
+- `vec.search(query, limit?, language?)` — alias к `search_hybrid` (backward-compatible).
+- `vec.reindex(path?)` — обновление vector + BM25 индексов.
+- `vec.count()` — число чанков.
 
-**lsp (Language Server Protocol)** — навигация и интеллект
-- `lsp.definition(file, line, character)` — переход к определению символа (использует родные LSP сервера: gopls, pyright и т.д.).
-- `lsp.references(file, line, character, include_declaration?)` — поиск всех упоминаний символа в проекте.
-- `lsp.hover(file, line, character)` — получение информации о типе, сигнатуре и документации символа.
-- `lsp.languages()` — список активных языковых серверов, доступных в текущей среде.
+**sym (Symbol)** — symbol-aware навигация (AST units + code graph)
+- Symbol lookup:
+  - `sym.find_definition(symbol)`
+  - `sym.find_references(symbol)`
+  - `sym.find_implementations(interface)`
+  - `sym.find_callers(function)`
+  - `sym.find_callees(function)`
+- AST / structure:
+  - `sym.get_file_symbols(path)`
+  - `sym.get_symbol(symbol_id)`
+  - `sym.get_parent(symbol_id)`
+  - `sym.get_children(symbol_id)`
+- Graph:
+  - `sym.expand_neighbors(node_id, depth)` — BFS по edges.
+  - `sym.get_dependency_graph(module)` — граф import-связей.
+  - `sym.get_call_graph(function)` — граф вызовов.
+- Context:
+  - `sym.get_surrounding_context(symbol_id)`
+  - `sym.get_related_files(symbol_id)`
+  - `sym.get_similar_code(symbol_id)` — семантически близкие фрагменты через vector.
+
+**lsp (Language Server Protocol)** — навигация через родные LSP
+- `lsp.definition(file, line, character)`
+- `lsp.references(file, line, character, include_declaration?)`
+- `lsp.hover(file, line, character)`
+- `lsp.languages()`
 
 ### Настройка Ollama
 
-Для работы векторного поиска необходимо установить Ollama на хост-систему:
-
-1.  **Установите Ollama**:
-    - macOS/Windows: Скачайте с [ollama.com](https://ollama.com).
+1.  **Установка**:
+    - macOS/Windows: [ollama.com](https://ollama.com).
     - Linux: `curl -fsSL https://ollama.com/install.sh | sh`
-2.  **Скачайте модель эмбеддингов**:
+2.  **Модели**:
     ```bash
-    ollama pull nomic-embed-text
+    ollama pull qwen3-embedding:0.6b              # эмбеддинги кода (1024-dim)
+    ollama pull nomic-embed-text             # эмбеддинги markdown/текста (768-dim)
+    ollama pull qllama/bge-reranker-v2-m3   # опционально — реранкер
     ```
-3.  **Убедитесь, что Ollama запущена**:
-    По умолчанию она слушает `http://localhost:11434`. Если вы используете другой адрес, поправьте его в `.ai-tools/config.yaml`.
+3.  **Запуск**: по умолчанию `http://localhost:11434`. Адрес можно поменять в `.ai-tools/config.yaml` (`ollama.url`).
 
-### Безопасность и Приватность
+### Безопасность и приватность
 
-- **Все данные локальны**: Индексированный код, символы и векторы хранятся исключительно на вашем устройстве (SQLite в `.ai-tools/treesitter.db` и Qdrant в Docker).
-- **Локальный LLM**: Эмбеддинги генерируются через Ollama на вашем хосте. Код не отправляется в облачные API (OpenAI, Anthropic и др.).
-- **Безопасные порты**: MCP-серверы при запуске через `run` по умолчанию биндятся на `127.0.0.1`, что предотвращает доступ к ним из внешней сети.
-- **Никакой телеметрии**: Приложение не собирает и не отправляет аналитику или отчеты об ошибках на внешние серверы.
+- **Все данные локальны**: SQLite (`.ai-tools/treesitter.db`), Bleve (`.ai-tools/bm25/`), Qdrant (Docker-volume).
+- **Локальный LLM**: эмбеддинги и реранкер — Ollama на вашем хосте. Код не отправляется в облачные API.
+- **Безопасные порты**: MCP-серверы при `run` биндятся на `127.0.0.1`.
+- **Никакой телеметрии**.
 
 ### Структура проекта
 ```
 main.go, cli_*.go          — cobra CLI
 internal/
-  config/   — конфиг и дефолтные ignore-листы (vendor, node_modules, …)
-  fileutil/ — обход + ignore-фильтр
-  watcher/  — рекурсивный fsnotify + debounce
-  state/    — потокобезопасный bus статистики
-  embedder/ — клиент Ollama /api/embeddings
-  qdrant/   — REST-клиент Qdrant (collections / upsert / search / delete)
-  store/    — SQLite (modernc.org/sqlite, pure-Go) для tree-sitter
-  parser/   — tree-sitter биндинги и рекурсивный AST-чанкинг
-  chunker/  — окно + AST-чанки (tree-sitter chunking)
-  index/    — TreeSitter + Vector индексаторы (full scan + watch)
-  lsp/      — JSON-RPC LSP-клиент и менеджер серверов на язык
-  docker/   — нативный запуск Qdrant
-  mcp/      — 3 MCP-сервера на github.com/mark3labs/mcp-go
-  tui/      — дашборд на bubbletea + lipgloss
-.ai-tools/  — служебные данные: config.yaml, treesitter.db, logs/, qdrant_storage
+  config/    — конфиг (collections, bm25, rerank, hybrid)
+  fileutil/  — обход + ignore-фильтр
+  watcher/   — рекурсивный fsnotify + debounce
+  state/     — потокобезопасный bus статистики
+  embedder/  — клиент Ollama /api/embeddings
+  qdrant/    — REST-клиент Qdrant
+  store/     — SQLite (modernc.org/sqlite, pure-Go): symbols, ast_units, edges, embed_meta
+  parser/    — tree-sitter биндинги и AST-чанкинг
+  chunker/   — окно + AST-чанки
+  astindex/  — извлечение AST units + edges (Go: go/ast; Java/TS/JS: tree-sitter)
+  bm25/      — Bleve-индекс (pure-Go BM25)
+  rerank/    — HTTP-клиент к Ollama-реранкеру (BGE) + graceful fallback
+  hybrid/    — RRF / weighted-sum слияние vector + BM25
+  graph/     — сервис над edges: callers/callees/imports/implementations + BFS
+  symbols/   — symbol-aware retrieval (find_*, get_*, context, similar)
+  index/     — TreeSitter + Vector индексаторы (full scan + watch, auto-reindex)
+  lsp/       — JSON-RPC LSP-клиент и менеджер серверов
+  docker/    — нативный запуск Qdrant
+  mcp/       — 4 MCP-сервера (ts/vec/sym/lsp) на github.com/mark3labs/mcp-go
+  tui/       — дашборд на bubbletea + lipgloss
+.ai-tools/   — служебные данные: config.yaml, treesitter.db, bm25/, logs/, qdrant_storage
 ```
 
 ### Кастомизация
+
 Правьте `.ai-tools/config.yaml`:
-- `ignore` — список паттернов
-- `extensions` — расширения для индексации
-- `chunk_lines`, `chunk_overlap`
-- `ollama.embed_model` и `ollama.embed_dim` (должны совпадать!)
-- `qdrant.host`, `qdrant.port` (REST порт по умолчанию 6333)
+
+- `ignore`, `extensions` — фильтры обхода.
+- `chunk_lines`, `chunk_overlap` — параметры чанкинга.
+- `collections.code` / `collections.text` — имя коллекции, embed-модель и размерность для кода и текста раздельно. **При смене модели индекс кода будет автоматически пересоздан** (через `embed_meta`).
+- `ollama.url` — адрес Ollama (legacy `ollama.embed_model` / `ollama.embed_dim` используются для текста, если `collections` не задан).
+- `qdrant.host`, `qdrant.port` (REST по умолчанию 6333).
+- `bm25.enabled`, `bm25.path`, `bm25.k1`, `bm25.b` — лексический индекс.
+- `rerank.enabled`, `rerank.model`, `rerank.url`, `rerank.required`, `rerank.top_n` — реранкер. `required: false` → graceful fallback при недоступности модели.
+- `hybrid.vector_weight`, `hybrid.bm25_weight`, `hybrid.rrf_k`, `hybrid.candidates_per_source` — параметры слияния. Если оба веса = 0 → используется RRF.
+- `mcp.tree_sitter` (7771), `mcp.vector` (7772), `mcp.lsp` (7773), `mcp.symbol` (7774) — порты MCP-серверов.
+
+### Миграция со старого индекса
+
+Если вы обновляетесь с версии без `qwen3-embedding`:
+
+1. `./ai-tools install` — подтянет новые модели.
+2. При первом запуске `./ai-tools run -vw .` старый индекс кода будет автоматически удалён и пересоздан с новой моделью (markdown-индекс при этом сохраняется).
+3. Если хочется начисто — `./ai-tools clean`.
 
 ### Работа с AI-агентами
-Для AI-агентов (Claude, Junie и др.) подготовлен технический гайд на английском языке: [AGENTS.md](docs/AGENTS.md). Он помогает им эффективнее использовать предоставляемые MCP-серверы и "встраивать" их в свой процесс рассуждения.
+
+Для AI-агентов (Claude, Junie и др.) подготовлен технический гайд на английском: [AGENTS.md](docs/AGENTS.md). Он описывает hybrid-first policy, reranker fallback, symbol/graph сценарии и семантику авто-reindex при смене embed-модели.

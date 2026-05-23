@@ -89,6 +89,62 @@ func (s *SQLite) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path)`,
 		`CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name)`,
 		`CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind)`,
+
+		// AST units — самостоятельные единицы кода: function, method, class,
+		// interface, module/file, struct, enum и т.п. Используются для
+		// hybrid retrieval (vector + BM25) и parent-child навигации.
+		`CREATE TABLE IF NOT EXISTS ast_units (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			file_path   TEXT NOT NULL,
+			language    TEXT NOT NULL,
+			kind        TEXT NOT NULL,           -- function|method|class|interface|module|struct|enum|...
+			name        TEXT NOT NULL,
+			qualified   TEXT NOT NULL DEFAULT '', -- pkg.Class.method или эквивалент
+			parent_id   INTEGER,                  -- родительская AST-единица (для parent-child)
+			start_line  INTEGER NOT NULL,
+			end_line    INTEGER NOT NULL,
+			start_byte  INTEGER NOT NULL,
+			end_byte    INTEGER NOT NULL,
+			signature   TEXT NOT NULL DEFAULT '',
+			doc         TEXT NOT NULL DEFAULT '',
+			hash        TEXT NOT NULL DEFAULT '', -- хэш содержимого юнита для инкрементальной индексации
+			FOREIGN KEY (file_path) REFERENCES files(path) ON DELETE CASCADE,
+			FOREIGN KEY (parent_id) REFERENCES ast_units(id) ON DELETE SET NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_file ON ast_units(file_path)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_name ON ast_units(name)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_kind ON ast_units(kind)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_qualified ON ast_units(qualified)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_parent ON ast_units(parent_id)`,
+
+		// Edges — направленные связи между AST-единицами для graph expansion.
+		// kind: call | import | implements | reference | extends | contains
+		`CREATE TABLE IF NOT EXISTS edges (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			src_id    INTEGER NOT NULL,
+			dst_id    INTEGER NOT NULL,
+			kind      TEXT NOT NULL,
+			-- Если dst пока неразрешён (forward-reference / внешний символ),
+			-- то dst_id = 0 и используется dst_name для отложенного резолва.
+			dst_name  TEXT NOT NULL DEFAULT '',
+			file_path TEXT NOT NULL DEFAULT '',
+			line      INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY (src_id) REFERENCES ast_units(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_src  ON edges(src_id, kind)`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_dst  ON edges(dst_id, kind)`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind)`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name ON edges(dst_name) WHERE dst_id = 0`,
+
+		// embed_meta — метаданные эмбеддингов по коллекциям. Используется,
+		// чтобы при смене модели/размерности эмбеддингов автоматически
+		// триггерить full reindex соответствующей коллекции.
+		`CREATE TABLE IF NOT EXISTS embed_meta (
+			collection TEXT PRIMARY KEY,
+			model      TEXT NOT NULL,
+			dim        INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
 	}
 	// ALTER для существующих баз
 	_, _ = s.db.Exec(`ALTER TABLE files ADD COLUMN vec_hash TEXT NOT NULL DEFAULT ''`)
@@ -163,6 +219,17 @@ func (s *SQLite) UpsertFile(ctx context.Context, f FileRow, symbols []SymbolRow)
 	return tx.Commit()
 }
 
+// EnsureFile гарантирует наличие записи файла в таблице files.
+// Если файла нет, создает минимальную запись.
+func (s *SQLite) EnsureFile(ctx context.Context, path, lang string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO files(path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash)
+		 VALUES(?,?,?,?,?,?,?,?)
+		 ON CONFLICT(path) DO NOTHING`,
+		path, lang, "", 0, 0, time.Now().Unix(), 0, "")
+	return err
+}
+
 // UpdateVectorHash обновляет только хэш векторного индекса.
 func (s *SQLite) UpdateVectorHash(ctx context.Context, path, hash string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE files SET vec_hash = ? WHERE path = ?`, hash, path)
@@ -223,7 +290,7 @@ func (s *SQLite) SearchSymbols(ctx context.Context, query, kind, language string
 		return nil, err
 	}
 	defer rows.Close()
-	var out []SymbolRow
+	out := []SymbolRow{}
 	for rows.Next() {
 		var r SymbolRow
 		if err := rows.Scan(&r.ID, &r.FilePath, &r.Name, &r.Kind, &r.StartLine, &r.EndLine, &r.StartByte, &r.EndByte, &r.ParentName, &r.Signature); err != nil {
@@ -243,7 +310,7 @@ func (s *SQLite) SymbolsByFile(ctx context.Context, path string) ([]SymbolRow, e
 		return nil, err
 	}
 	defer rows.Close()
-	var out []SymbolRow
+	out := []SymbolRow{}
 	for rows.Next() {
 		var r SymbolRow
 		if err := rows.Scan(&r.ID, &r.FilePath, &r.Name, &r.Kind, &r.StartLine, &r.EndLine, &r.StartByte, &r.EndByte, &r.ParentName, &r.Signature); err != nil {
@@ -260,6 +327,12 @@ type Stats struct {
 	Symbols int
 }
 
+// GraphStats — статистика графового индекса.
+type GraphStats struct {
+	Units int
+	Edges int
+}
+
 // Stats возвращает количество файлов и символов.
 func (s *SQLite) Stats(ctx context.Context) (Stats, error) {
 	var st Stats
@@ -267,6 +340,18 @@ func (s *SQLite) Stats(ctx context.Context) (Stats, error) {
 		return st, err
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM symbols`).Scan(&st.Symbols); err != nil {
+		return st, err
+	}
+	return st, nil
+}
+
+// GraphStats возвращает количество AST юнитов и ребер.
+func (s *SQLite) GraphStats(ctx context.Context) (GraphStats, error) {
+	var st GraphStats
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ast_units`).Scan(&st.Units); err != nil {
+		return st, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM edges`).Scan(&st.Edges); err != nil {
 		return st, err
 	}
 	return st, nil

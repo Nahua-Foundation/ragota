@@ -1,0 +1,348 @@
+package mcp
+
+import (
+	"context"
+	"strings"
+
+	"aitools/internal/config"
+	"aitools/internal/fileutil"
+	"aitools/internal/graph"
+	"aitools/internal/state"
+	"aitools/internal/store"
+	"aitools/internal/symbols"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+)
+
+// SymbolServer — symbol-aware MCP-сервер.
+//
+// Tools полностью реализованы поверх symbols.Service + graph.Service.
+type SymbolServer struct {
+	cfg  *config.Config
+	st   *store.SQLite
+	bus  *state.Bus
+	syms *symbols.Service
+	gr   *graph.Service
+}
+
+// NewSymbolServer создаёт сервер.
+func NewSymbolServer(cfg *config.Config, st *store.SQLite, syms *symbols.Service, gr *graph.Service, bus *state.Bus) *SymbolServer {
+	return &SymbolServer{cfg: cfg, st: st, syms: syms, gr: gr, bus: bus}
+}
+
+// Build регистрирует все symbol-aware tools.
+func (s *SymbolServer) Build() *server.MCPServer {
+	srv := server.NewMCPServer("ai-tools-symbol", "0.1.0",
+		server.WithToolCapabilities(false),
+	)
+
+	// --- Symbol-aware ---
+	srv.AddTool(mcp.NewTool("sym.find_definition",
+		mcp.WithDescription("Find AST units that define the given symbol (by name or qualified name)."),
+		mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name, e.g. 'Foo.bar' or 'bar'.")),
+	), s.wrap("sym.find_definition", s.handleFindDefinition))
+
+	srv.AddTool(mcp.NewTool("sym.find_references",
+		mcp.WithDescription("Find all references (edges) to the given symbol across the project."),
+		mcp.WithString("symbol", mcp.Required()),
+	), s.wrap("sym.find_references", s.handleFindReferences))
+
+	srv.AddTool(mcp.NewTool("sym.find_implementations",
+		mcp.WithDescription("Find concrete implementations of the given interface."),
+		mcp.WithString("interface", mcp.Required(), mcp.Description("Interface name or qualified name.")),
+	), s.wrap("sym.find_implementations", s.handleFindImplementations))
+
+	srv.AddTool(mcp.NewTool("sym.find_callers",
+		mcp.WithDescription("Find functions/methods that call the given function."),
+		mcp.WithString("function", mcp.Required()),
+	), s.wrap("sym.find_callers", s.handleFindCallers))
+
+	srv.AddTool(mcp.NewTool("sym.find_callees",
+		mcp.WithDescription("Find functions/methods called by the given function."),
+		mcp.WithString("function", mcp.Required()),
+	), s.wrap("sym.find_callees", s.handleFindCallees))
+
+	// --- AST / structure retrieval ---
+	srv.AddTool(mcp.NewTool("sym.get_file_symbols",
+		mcp.WithDescription("List all AST units in a file, with parent_id for parent-child navigation."),
+		mcp.WithString("path", mcp.Required()),
+	), s.wrap("sym.get_file_symbols", s.handleGetFileSymbols))
+
+	srv.AddTool(mcp.NewTool("sym.get_symbol",
+		mcp.WithDescription("Get a single AST unit by its id."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+	), s.wrap("sym.get_symbol", s.handleGetSymbol))
+
+	srv.AddTool(mcp.NewTool("sym.get_parent",
+		mcp.WithDescription("Get the parent AST unit of the given symbol id."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+	), s.wrap("sym.get_parent", s.handleGetParent))
+
+	srv.AddTool(mcp.NewTool("sym.get_children",
+		mcp.WithDescription("Get direct children AST units of the given symbol id."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+	), s.wrap("sym.get_children", s.handleGetChildren))
+
+	// --- Graph retrieval ---
+	srv.AddTool(mcp.NewTool("sym.expand_neighbors",
+		mcp.WithDescription("Expand the code graph around node_id up to the given depth."),
+		mcp.WithNumber("node_id", mcp.Required()),
+		mcp.WithNumber("depth", mcp.DefaultNumber(1)),
+		mcp.WithString("kinds", mcp.Description("Comma-separated edge kinds: call,import,implements,extends,reference. Empty = all.")),
+	), s.wrap("sym.expand_neighbors", s.handleExpandNeighbors))
+
+	srv.AddTool(mcp.NewTool("sym.get_dependency_graph",
+		mcp.WithDescription("Get the import-dependency graph around a module/file."),
+		mcp.WithString("module", mcp.Required()),
+		mcp.WithNumber("depth", mcp.DefaultNumber(2)),
+	), s.wrap("sym.get_dependency_graph", s.handleDependencyGraph))
+
+	srv.AddTool(mcp.NewTool("sym.get_call_graph",
+		mcp.WithDescription("Get the call graph around a function/method (by symbol_id)."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+		mcp.WithNumber("depth", mcp.DefaultNumber(2)),
+	), s.wrap("sym.get_call_graph", s.handleCallGraph))
+
+	// --- Context retrieval ---
+	srv.AddTool(mcp.NewTool("sym.get_surrounding_context",
+		mcp.WithDescription("Return source-code context around a symbol (its parent body + adjacent units)."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+		mcp.WithNumber("before_lines", mcp.DefaultNumber(0)),
+		mcp.WithNumber("after_lines", mcp.DefaultNumber(0)),
+	), s.wrap("sym.get_surrounding_context", s.handleSurroundingContext))
+
+	srv.AddTool(mcp.NewTool("sym.get_related_files",
+		mcp.WithDescription("Return files related to the symbol via import/call/reference edges."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+	), s.wrap("sym.get_related_files", s.handleRelatedFiles))
+
+	srv.AddTool(mcp.NewTool("sym.get_similar_code",
+		mcp.WithDescription("Return AST units with embeddings similar to the given symbol."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+		mcp.WithNumber("limit", mcp.DefaultNumber(10)),
+	), s.wrap("sym.get_similar_code", s.handleSimilarCode))
+
+	return srv
+}
+
+func (s *SymbolServer) wrap(name string, fn func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		res, err := fn(ctx, req)
+		if err != nil {
+			return errorToResult(name, err)
+		}
+		if s.bus != nil {
+			s.bus.IncMCPCall("symbol", name, false)
+		}
+		return res, nil
+	}
+}
+
+// notImpl — единая точка для скелетных хендлеров (оставлена для legacy
+// совместимости, не используется в текущей сборке).
+func notImpl(tool string) (*mcp.CallToolResult, error) {
+	return mcp.NewToolResultError(tool + ": not implemented yet"), nil
+}
+
+// --- handlers ---
+
+func (s *SymbolServer) handleFindDefinition(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sym := req.GetString("symbol", "")
+	if sym == "" {
+		return mcp.NewToolResultError("symbol is required"), nil
+	}
+	units, err := s.syms.FindDefinition(ctx, sym)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(units)
+}
+
+func (s *SymbolServer) handleFindReferences(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sym := req.GetString("symbol", "")
+	if sym == "" {
+		return mcp.NewToolResultError("symbol is required"), nil
+	}
+	edges, err := s.syms.FindReferences(ctx, sym)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(edges)
+}
+
+func (s *SymbolServer) handleFindImplementations(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	iface := req.GetString("interface", "")
+	if iface == "" {
+		return mcp.NewToolResultError("interface is required"), nil
+	}
+	units, err := s.syms.FindImplementations(ctx, iface)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(units)
+}
+
+func (s *SymbolServer) handleFindCallers(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	fn := req.GetString("function", "")
+	if fn == "" {
+		return mcp.NewToolResultError("function is required"), nil
+	}
+	units, err := s.syms.FindCallers(ctx, fn)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(units)
+}
+
+func (s *SymbolServer) handleFindCallees(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	fn := req.GetString("function", "")
+	if fn == "" {
+		return mcp.NewToolResultError("function is required"), nil
+	}
+	units, err := s.syms.FindCallees(ctx, fn)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(units)
+}
+
+func (s *SymbolServer) handleGetFileSymbols(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path := req.GetString("path", "")
+	if path == "" {
+		return mcp.NewToolResultError("path is required"), nil
+	}
+	abs, err := fileutil.SecureJoin(s.cfg.Root, path)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	units, err := s.syms.FileSymbols(ctx, abs)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(units)
+}
+
+func (s *SymbolServer) handleGetSymbol(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("symbol_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("symbol_id is required"), nil
+	}
+	u, err := s.syms.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(u)
+}
+
+func (s *SymbolServer) handleGetParent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("symbol_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("symbol_id is required"), nil
+	}
+	u, err := s.syms.Parent(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(u)
+}
+
+func (s *SymbolServer) handleGetChildren(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("symbol_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("symbol_id is required"), nil
+	}
+	us, err := s.syms.Children(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(us)
+}
+
+func (s *SymbolServer) handleExpandNeighbors(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("node_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("node_id is required"), nil
+	}
+	depth := int(req.GetFloat("depth", 1))
+	kindsStr := req.GetString("kinds", "")
+	var kinds []string
+	if kindsStr != "" {
+		for _, k := range strings.Split(kindsStr, ",") {
+			k = strings.TrimSpace(k)
+			if k != "" {
+				kinds = append(kinds, k)
+			}
+		}
+	}
+	n, err := s.gr.ExpandNeighbors(ctx, id, depth, kinds)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(n)
+}
+
+func (s *SymbolServer) handleDependencyGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	module := req.GetString("module", "")
+	if module == "" {
+		return mcp.NewToolResultError("module is required"), nil
+	}
+	depth := int(req.GetFloat("depth", 2))
+	n, err := s.gr.DependencyGraph(ctx, module, depth)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(n)
+}
+
+func (s *SymbolServer) handleCallGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("symbol_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("symbol_id is required"), nil
+	}
+	depth := int(req.GetFloat("depth", 2))
+	n, err := s.gr.CallGraph(ctx, id, depth)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(n)
+}
+
+func (s *SymbolServer) handleSurroundingContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("symbol_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("symbol_id is required"), nil
+	}
+	before := int(req.GetFloat("before_lines", 0))
+	after := int(req.GetFloat("after_lines", 0))
+	txt, err := s.syms.SurroundingContext(ctx, id, before, after)
+	if err != nil {
+		return nil, err
+	}
+	return mcp.NewToolResultText(txt), nil
+}
+
+func (s *SymbolServer) handleRelatedFiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("symbol_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("symbol_id is required"), nil
+	}
+	files, err := s.syms.RelatedFiles(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(files)
+}
+
+func (s *SymbolServer) handleSimilarCode(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("symbol_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("symbol_id is required"), nil
+	}
+	limit := int(req.GetFloat("limit", 10))
+	us, err := s.syms.SimilarCode(ctx, id, limit)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(us)
+}

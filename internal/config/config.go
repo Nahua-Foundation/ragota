@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"gopkg.in/yaml.v3"
+	yaml "gopkg.in/yaml.v3"
 )
 
 // Config — главная конфигурация ai-tools.
@@ -30,8 +30,10 @@ type Config struct {
 	Qdrant QdrantConfig `yaml:"qdrant"`
 	Ollama OllamaConfig `yaml:"ollama"`
 
-	// Имя коллекции в Qdrant для векторного индекса.
-	Collection string `yaml:"collection"`
+	// Имя коллекции в Qdrant для векторного индекса (legacy, единая коллекция).
+	// При включённом раздельном индексе кода/текста используются Collections.* .
+	Collection  string            `yaml:"collection"`
+	Collections CollectionsConfig `yaml:"collections"`
 
 	// Размер чанка в строках при индексации.
 	ChunkLines int `yaml:"chunk_lines"`
@@ -43,6 +45,61 @@ type Config struct {
 
 	// Параметры контейнеров, которые ai-tools поднимает сам при --start-docker.
 	Docker DockerConfig `yaml:"docker"`
+
+	// Настройки производительности индексации.
+	VectorWorkers    int `yaml:"vector_workers"`
+	EmbedParallelism int `yaml:"embed_parallelism"`
+
+	// Гибридный поиск (vector + BM25) и реранкинг.
+	BM25   BM25Config   `yaml:"bm25"`
+	Rerank RerankConfig `yaml:"rerank"`
+	Hybrid HybridConfig `yaml:"hybrid"`
+}
+
+// CollectionsConfig — отдельные коллекции в Qdrant для кода и текста.
+// Это позволяет использовать разные модели эмбеддингов (qwen3-embedding для
+// кода, nomic-embed-text для markdown) с разными размерностями.
+type CollectionsConfig struct {
+	Code CollectionSpec `yaml:"code"`
+	Text CollectionSpec `yaml:"text"`
+}
+
+// CollectionSpec — спецификация одной коллекции и используемой ею модели.
+type CollectionSpec struct {
+	Name       string `yaml:"name"`
+	EmbedModel string `yaml:"embed_model"`
+	EmbedDim   uint64 `yaml:"embed_dim"`
+}
+
+// BM25Config — параметры лексического индекса (Bleve, BM25).
+type BM25Config struct {
+	Enabled bool `yaml:"enabled"`
+	// Путь к каталогу Bleve-индекса (по умолчанию .ai-tools/bm25/).
+	Path string `yaml:"path"`
+	// Параметры BM25 (если 0 — берутся значения по умолчанию Bleve).
+	K1 float64 `yaml:"k1"`
+	B  float64 `yaml:"b"`
+}
+
+// RerankConfig — реранкер на базе Ollama (BGE Reranker).
+// Если модель недоступна — реранкинг пропускается с warning'ом (graceful fallback).
+type RerankConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Model    string `yaml:"model"`
+	URL      string `yaml:"url"`
+	Required bool   `yaml:"required"`
+	TopN     int    `yaml:"top_n"`
+}
+
+// HybridConfig — настройки слияния результатов vector + BM25.
+type HybridConfig struct {
+	// Веса при weighted sum нормализованных скор; если оба = 0 — используется RRF.
+	VectorWeight float64 `yaml:"vector_weight"`
+	BM25Weight   float64 `yaml:"bm25_weight"`
+	// RRF k-параметр (Reciprocal Rank Fusion).
+	RRFK int `yaml:"rrf_k"`
+	// Сколько кандидатов брать из каждого источника до слияния.
+	CandidatesPerSource int `yaml:"candidates_per_source"`
 }
 
 type QdrantConfig struct {
@@ -60,6 +117,7 @@ type MCPPorts struct {
 	TreeSitter int `yaml:"tree_sitter"`
 	Vector     int `yaml:"vector"`
 	LSP        int `yaml:"lsp"`
+	Symbol     int `yaml:"symbol"`
 }
 
 // DockerConfig описывает контейнеры, поднимаемые встроенным docker-runner'ом
@@ -90,6 +148,7 @@ var DefaultIgnore = []string{
 	"__pycache__", ".venv", "venv", "env", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "site-packages", "*.egg-info",
 	"target", ".gradle", "out",
 	".cache", "coverage", "tmp",
+	"*.pb.go", "*_grpc.pb.go", "*.gen.go", "*.pb.js", "*.pb.ts", "*_pb2.py", "*_pb2_grpc.py",
 	"ai-tools",
 	".ai-tools",
 }
@@ -100,6 +159,7 @@ var DefaultExtensions = []string{
 	".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
 	".py",
 	".java",
+	".proto",
 	".md", ".rst", ".txt",
 	".json", ".yaml", ".yml", ".toml",
 }
@@ -118,13 +178,47 @@ func Default() *Config {
 			EmbedModel: "nomic-embed-text",
 			EmbedDim:   768,
 		},
-		Collection:   "ai_tools_code",
-		ChunkLines:   60,
-		ChunkOverlap: 10,
+		Collection: "ai_tools_code",
+		Collections: CollectionsConfig{
+			Code: CollectionSpec{
+				Name:       "ai_tools_code",
+				EmbedModel: "qwen3-embedding:0.6b",
+				EmbedDim:   1024,
+			},
+			Text: CollectionSpec{
+				Name:       "ai_tools_text",
+				EmbedModel: "nomic-embed-text",
+				EmbedDim:   768,
+			},
+		},
+		BM25: BM25Config{
+			Enabled: true,
+			Path:    "", // вычисляется через BM25Path() при пустом значении
+			K1:      1.2,
+			B:       0.75,
+		},
+		Rerank: RerankConfig{
+			Enabled:  true,
+			Model:    "qllama/bge-reranker-v2-m3",
+			URL:      "", // если пусто — используется Ollama.URL
+			Required: false,
+			TopN:     20,
+		},
+		Hybrid: HybridConfig{
+			VectorWeight:        0,
+			BM25Weight:          0,
+			RRFK:                60,
+			CandidatesPerSource: 50,
+		},
+		ChunkLines:       60,
+		ChunkOverlap:     10,
+		VectorWorkers:    8,
+		EmbedParallelism: 16,
 		MCP: MCPPorts{
 			TreeSitter: 7771,
 			Vector:     7772,
 			LSP:        7773,
+			Symbol:     7774,
 		},
 		Docker: DockerConfig{
 			Network: "ai-tools-net",
@@ -146,6 +240,67 @@ func (c *Config) DataDir() string {
 // SQLitePath — путь к SQLite-базе tree-sitter индекса.
 func (c *Config) SQLitePath() string {
 	return filepath.Join(c.DataDir(), "treesitter.db")
+}
+
+// BM25Path — путь к каталогу Bleve-индекса. Если в конфиге задан явный
+// BM25.Path — используется он, иначе .ai-tools/bm25/.
+func (c *Config) BM25Path() string {
+	if c.BM25.Path != "" {
+		if filepath.IsAbs(c.BM25.Path) {
+			return c.BM25.Path
+		}
+		return filepath.Join(c.Root, c.BM25.Path)
+	}
+	return filepath.Join(c.DataDir(), "bm25")
+}
+
+// CodeCollection возвращает спецификацию коллекции кода с подставленными
+// дефолтами (qwen3-embedding:0.6b, dim=1024) если поля пустые.
+func (c *Config) CodeCollection() CollectionSpec {
+	sp := c.Collections.Code
+	if sp.Name == "" {
+		sp.Name = c.Collection
+		if sp.Name == "" {
+			sp.Name = "ai_tools_code"
+		}
+	}
+	if sp.EmbedModel == "" {
+		sp.EmbedModel = "qwen3-embedding:0.6b"
+	}
+	if sp.EmbedDim == 0 {
+		sp.EmbedDim = 1024
+	}
+	return sp
+}
+
+// TextCollection — аналогично для текста/markdown.
+func (c *Config) TextCollection() CollectionSpec {
+	sp := c.Collections.Text
+	if sp.Name == "" {
+		sp.Name = "ai_tools_text"
+	}
+	if sp.EmbedModel == "" {
+		sp.EmbedModel = c.Ollama.EmbedModel
+		if sp.EmbedModel == "" {
+			sp.EmbedModel = "nomic-embed-text"
+		}
+	}
+	if sp.EmbedDim == 0 {
+		sp.EmbedDim = c.Ollama.EmbedDim
+		if sp.EmbedDim == 0 {
+			sp.EmbedDim = 768
+		}
+	}
+	return sp
+}
+
+// RerankURL возвращает URL Ollama-инстанса реранкера; если поле пустое —
+// используется общий Ollama.URL.
+func (c *Config) RerankURL() string {
+	if c.Rerank.URL != "" {
+		return c.Rerank.URL
+	}
+	return c.Ollama.URL
 }
 
 // StatsPath — путь к файлу со статистикой MCP вызовов сессии.

@@ -4,7 +4,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"aitools/internal/config"
@@ -45,7 +44,7 @@ func (s *TreeSitterServer) Build() *server.MCPServer {
 		mcp.NewTool("ts.search_symbols",
 			mcp.WithDescription("Search code symbols (functions/methods/classes) by substring of their name."),
 			mcp.WithString("query", mcp.Required(), mcp.Description("Substring to search in symbol name.")),
-			mcp.WithString("kind", mcp.Description("Filter by kind: function, method, class, interface, type, enum, var, const.")),
+			mcp.WithString("kind", mcp.Description("Filter by kind: function, method, class, interface, type, enum, var, const. Go-specific: 'function' finds only functions, 'method' finds only methods.")),
 			mcp.WithString("language", mcp.Description("Filter by language: go, typescript, javascript, python, java.")),
 			mcp.WithNumber("limit", mcp.Description("Max results (default 50)."), mcp.DefaultNumber(50)),
 		),
@@ -82,10 +81,13 @@ func (s *TreeSitterServer) Build() *server.MCPServer {
 func (s *TreeSitterServer) toolWrap(name string, fn func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		res, err := fn(ctx, req)
-		if s.bus != nil {
-			s.bus.IncMCPCall("treesitter", name, err != nil)
+		if err != nil {
+			return errorToResult(name, err)
 		}
-		return res, err
+		if s.bus != nil {
+			s.bus.IncMCPCall("treesitter", name, false)
+		}
+		return res, nil
 	}
 }
 
@@ -98,7 +100,7 @@ func (s *TreeSitterServer) handleSearch(ctx context.Context, req mcp.CallToolReq
 	language := req.GetString("language", "")
 	limit := int(req.GetFloat("limit", 50))
 
-	syms, err := s.st.SearchSymbols(ctx, query, kind, language, limit)
+	syms, err := s.st.FindASTUnits(ctx, query, kind, language, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +116,7 @@ func (s *TreeSitterServer) handleListSymbols(ctx context.Context, req mcp.CallTo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	syms, err := s.st.SymbolsByFile(ctx, abs)
+	syms, err := s.st.ListASTUnitsByFile(ctx, abs)
 	if err != nil {
 		return nil, err
 	}
@@ -147,11 +149,3 @@ func (s *TreeSitterServer) handleStats(ctx context.Context, _ mcp.CallToolReques
 	return jsonResult(map[string]any{"files": st.Files, "symbols": st.Symbols})
 }
 
-// jsonResult — упаковывает payload в текстовый MCP-ответ (JSON).
-func jsonResult(v any) (*mcp.CallToolResult, error) {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return mcp.NewToolResultText(string(data)), nil
-}

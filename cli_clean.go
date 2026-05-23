@@ -48,14 +48,21 @@ func newCleanCmd() *cobra.Command {
 
 			var errs []error
 
-			// 1. Qdrant collection.
+			// 1. Qdrant collections (code + text + legacy).
 			if !skipQdrant {
 				qd := qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))
-				if err := qd.DeleteCollection(ctx, cfg.Collection); err != nil {
-					// Не считаем ошибкой недоступность qdrant — просто сообщаем.
-					fmt.Fprintf(os.Stderr, "qdrant: %v (skipped)\n", err)
-				} else {
-					fmt.Fprintf(os.Stderr, "qdrant: collection %q deleted\n", cfg.Collection)
+				names := map[string]bool{
+					cfg.Collection:              true,
+					cfg.CodeCollection().Name:   true,
+					cfg.TextCollection().Name:   true,
+				}
+				delete(names, "")
+				for name := range names {
+					if err := qd.DeleteCollection(ctx, name); err != nil {
+						fmt.Fprintf(os.Stderr, "qdrant: %v (skipped %s)\n", err, name)
+					} else {
+						fmt.Fprintf(os.Stderr, "qdrant: collection %q deleted\n", name)
+					}
 				}
 			}
 
@@ -66,9 +73,18 @@ func newCleanCmd() *cobra.Command {
 				} else {
 					fmt.Fprintf(os.Stderr, "sqlite: %s removed\n", cfg.SQLitePath())
 				}
-				// WAL/SHM могут лежать рядом.
 				_ = removeIfExists(cfg.SQLitePath() + "-wal")
 				_ = removeIfExists(cfg.SQLitePath() + "-shm")
+			}
+
+			// 2b. BM25 (Bleve) index.
+			if !skipSQLite {
+				bm25Path := cfg.BM25Path()
+				if err := os.RemoveAll(bm25Path); err != nil && !os.IsNotExist(err) {
+					errs = append(errs, fmt.Errorf("remove bm25: %w", err))
+				} else {
+					fmt.Fprintf(os.Stderr, "bm25: %s removed\n", bm25Path)
+				}
 			}
 
 			// 3. Локальные docker-storage (qdrant/ollama bind-mounts).

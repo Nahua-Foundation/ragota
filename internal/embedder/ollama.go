@@ -17,6 +17,7 @@ import (
 type Ollama struct {
 	baseURL string
 	model   string
+	dim     int // желаемая размерность (0 - дефолт модели)
 	http    *http.Client
 }
 
@@ -29,6 +30,11 @@ func New(baseURL, model string) *Ollama {
 			Timeout: 120 * time.Second,
 		},
 	}
+}
+
+// SetDim устанавливает желаемую размерность эмбеддингов.
+func (o *Ollama) SetDim(dim int) {
+	o.dim = dim
 }
 
 type embedRequest struct {
@@ -73,12 +79,16 @@ func (o *Ollama) Embed(ctx context.Context, prompt string) ([]float32, error) {
 }
 
 func (o *Ollama) embedModern(ctx context.Context, prompt string) ([]float32, error) {
+	opts := map[string]interface{}{
+		"num_ctx": 8192,
+	}
+	if o.dim > 0 {
+		opts["dimensions"] = o.dim
+	}
 	body, err := json.Marshal(embedRequest{
-		Model: o.model,
-		Input: prompt,
-		Options: map[string]interface{}{
-			"num_ctx": 8192,
-		},
+		Model:   o.model,
+		Input:   prompt,
+		Options: opts,
 	})
 	if err != nil {
 		return nil, err
@@ -115,16 +125,31 @@ func (o *Ollama) embedModern(ctx context.Context, prompt string) ([]float32, err
 	if len(er.Embeddings) == 0 {
 		return nil, fmt.Errorf("ollama embed: empty embeddings")
 	}
-	return er.Embeddings[0], nil
+	vec := er.Embeddings[0]
+	if o.dim > 0 {
+		if len(vec) > o.dim {
+			vec = vec[:o.dim]
+		} else if len(vec) < o.dim {
+			// Если вектор короче, дополняем нулями (хотя это редкий кейс для Ollama)
+			newVec := make([]float32, o.dim)
+			copy(newVec, vec)
+			vec = newVec
+		}
+	}
+	return vec, nil
 }
 
 func (o *Ollama) embedLegacy(ctx context.Context, prompt string) ([]float32, error) {
+	opts := map[string]interface{}{
+		"num_ctx": 8192,
+	}
+	if o.dim > 0 {
+		opts["dimensions"] = o.dim
+	}
 	body, err := json.Marshal(legacyEmbedRequest{
-		Model:  o.model,
-		Prompt: prompt,
-		Options: map[string]interface{}{
-			"num_ctx": 8192,
-		},
+		Model:   o.model,
+		Prompt:  prompt,
+		Options: opts,
 	})
 	if err != nil {
 		return nil, err
@@ -157,51 +182,112 @@ func (o *Ollama) embedLegacy(ctx context.Context, prompt string) ([]float32, err
 	if len(er.Embedding) == 0 {
 		return nil, fmt.Errorf("ollama legacy embed: empty embedding")
 	}
-	return er.Embedding, nil
+	vec := er.Embedding
+	if o.dim > 0 {
+		if len(vec) > o.dim {
+			vec = vec[:o.dim]
+		} else if len(vec) < o.dim {
+			newVec := make([]float32, o.dim)
+			copy(newVec, vec)
+			vec = newVec
+		}
+	}
+	return vec, nil
 }
 
 // EmbedBatch генерирует эмбеддинги для нескольких текстов.
-// Пробует отправить батч через /api/embed, если не выходит — по одному через Embed.
+// Автоматически разбивает большой список на под-батчи для стабильности
+// и использует fallback на последовательные вызовы при ошибках.
 func (o *Ollama) EmbedBatch(ctx context.Context, prompts []string) ([][]float32, error) {
 	if len(prompts) == 0 {
 		return nil, nil
 	}
 
-	// Пробуем батчевый запрос через /api/embed
-	body, err := json.Marshal(embedRequest{
-		Model: o.model,
-		Input: prompts,
-		Options: map[string]interface{}{
-			"num_ctx": 8192,
-		},
-	})
-	if err == nil {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.baseURL+"/api/embed", bytes.NewReader(body))
-		if err == nil {
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := o.http.Do(req)
-			if err == nil {
-				defer resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					var er embedResponse
-					if err := json.NewDecoder(resp.Body).Decode(&er); err == nil && len(er.Embeddings) == len(prompts) {
-						return er.Embeddings, nil
-					}
+	// Оптимальный размер батча для Ollama (обычно 32-64).
+	// Мы используем 32 для большей надежности.
+	const subBatchSize = 32
+	out := make([][]float32, 0, len(prompts))
+
+	for i := 0; i < len(prompts); i += subBatchSize {
+		end := i + subBatchSize
+		if end > len(prompts) {
+			end = len(prompts)
+		}
+		sub := prompts[i:end]
+
+		vecs, err := o.tryEmbedBatch(ctx, sub)
+		if err != nil {
+			// Если батч целиком не прошел (например, один из текстов слишком длинный),
+			// обрабатываем этот кусок по одному.
+			for _, p := range sub {
+				v, err := o.Embed(ctx, p)
+				if err != nil {
+					return nil, fmt.Errorf("embed fallback failed: %w", err)
 				}
+				out = append(out, v)
 			}
+		} else {
+			out = append(out, vecs...)
 		}
 	}
 
-	// Fallback на последовательные вызовы, если батч не удался
-	out := make([][]float32, len(prompts))
-	for i, p := range prompts {
-		v, err := o.Embed(ctx, p)
-		if err != nil {
-			return nil, fmt.Errorf("embed[%d]: %w", i, err)
-		}
-		out[i] = v
-	}
 	return out, nil
+}
+
+func (o *Ollama) tryEmbedBatch(ctx context.Context, prompts []string) ([][]float32, error) {
+	opts := map[string]interface{}{
+		"num_ctx": 8192,
+	}
+	if o.dim > 0 {
+		opts["dimensions"] = o.dim
+	}
+	body, err := json.Marshal(embedRequest{
+		Model:   o.model,
+		Input:   prompts,
+		Options: opts,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.baseURL+"/api/embed", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		buf, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ollama batch status %d: %s", resp.StatusCode, string(buf))
+	}
+
+	var er embedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
+		return nil, err
+	}
+	if len(er.Embeddings) != len(prompts) {
+		return nil, fmt.Errorf("ollama batch size mismatch: got %d, want %d", len(er.Embeddings), len(prompts))
+	}
+
+	res := er.Embeddings
+	if o.dim > 0 {
+		for i, v := range res {
+			if len(v) > o.dim {
+				res[i] = v[:o.dim]
+			} else if len(v) < o.dim {
+				newVec := make([]float32, o.dim)
+				copy(newVec, v)
+				res[i] = newVec
+			}
+		}
+	}
+	return res, nil
 }
 
 // Ping проверяет доступность ollama.

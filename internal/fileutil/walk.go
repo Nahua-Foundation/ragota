@@ -103,6 +103,13 @@ func HashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// HashBytes возвращает sha1 от слайса байт (hex).
+func HashBytes(data []byte) string {
+	h := sha1.New()
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // LanguageByExt возвращает каноническое имя языка по расширению, либо "".
 func LanguageByExt(ext string) string {
 	switch strings.ToLower(ext) {
@@ -116,6 +123,8 @@ func LanguageByExt(ext string) string {
 		return "python"
 	case ".java":
 		return "java"
+	case ".proto":
+		return "proto"
 	case ".md", ".rst", ".txt":
 		return "text"
 	case ".json":
@@ -129,17 +138,19 @@ func LanguageByExt(ext string) string {
 }
 
 // SecureJoin безопасно соединяет root и rel, проверяя, что результат
-// находится внутри root. Возвращает абсолютный путь или ошибку.
+// находится внутри root. Если rel абсолютный — проверяет его нахождение в root.
 func SecureJoin(root, rel string) (string, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
 	}
-	res := filepath.Join(absRoot, rel)
-	absRes, err := filepath.Abs(res)
-	if err != nil {
-		return "", err
+	var absRes string
+	if filepath.IsAbs(rel) {
+		absRes = filepath.Clean(rel)
+	} else {
+		absRes = filepath.Join(absRoot, rel)
 	}
+
 	// Проверяем, что absRes начинается с absRoot + разделитель,
 	// либо равен absRoot.
 	rel2, err := filepath.Rel(absRoot, absRes)

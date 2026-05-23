@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"aitools/internal/astindex"
 	"aitools/internal/config"
 	"aitools/internal/docker"
 	"aitools/internal/embedder"
@@ -68,8 +69,9 @@ func newWatchCmd() *cobra.Command {
 				}
 			}
 
-			// 2. tree-sitter
+			// 2. tree-sitter + ast graph
 			var tsIdx *index.TreeSitter
+			var astIdx *astindex.Indexer
 			var st *store.SQLite
 			if !skipTS {
 				st, err = store.Open(cfg.SQLitePath())
@@ -78,6 +80,8 @@ func newWatchCmd() *cobra.Command {
 				}
 				defer st.Close()
 				tsIdx = index.NewTreeSitter(cfg, st, bus)
+				astIdx = astindex.New(cfg, st)
+				astIdx.SetBus(bus)
 			}
 
 			// 3. vector
@@ -133,6 +137,9 @@ func newWatchCmd() *cobra.Command {
 			if tsIdx != nil {
 				go func() { _ = tsIdx.FullScan(ctx) }()
 			}
+			if astIdx != nil {
+				go func() { _ = astIdx.FullScan(ctx) }()
+			}
 			// Реакция на события: один watcher → оба индексатора.
 			go func() {
 				for {
@@ -151,12 +158,18 @@ func newWatchCmd() *cobra.Command {
 							if vIdx != nil {
 								_ = vIdx.RemoveFile(ctx, ev.AbsPath)
 							}
+							if astIdx != nil {
+								_ = astIdx.RemoveFile(ctx, ev.AbsPath)
+							}
 						default:
 							if tsIdx != nil {
 								_ = tsIdx.IndexFile(ctx, ev.AbsPath)
 							}
 							if vIdx != nil {
 								_ = vIdx.IndexFile(ctx, ev.AbsPath)
+							}
+							if astIdx != nil {
+								_ = astIdx.IndexFile(ctx, ev.AbsPath)
 							}
 						}
 					}

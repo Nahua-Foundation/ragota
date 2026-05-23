@@ -29,6 +29,9 @@ type Chunk struct {
 	Language  string   // язык файла
 	Parent    string   // родительский класс/модуль
 	Imports   []string // список импортов в файле
+	// Comments — лидирующие doc-комментарии символа (если есть). Включаются
+	// в combined text для embedding и попадают в payload как отдельное поле.
+	Comments string
 }
 
 // Chunker конфигурирует параметры разбиения.
@@ -77,7 +80,7 @@ func (c *Chunker) Chunk(path, lang string, source []byte, symbols []parser.Symbo
 		}
 
 		// Разбиваем на под-чанки, если превышен лимит
-		sub := splitText(path, lang, text, start+1, "window", "", "", imports)
+		sub := splitText(path, lang, text, start+1, "window", "", "", imports, "")
 		out = append(out, sub...)
 
 		if end >= len(lines) {
@@ -105,7 +108,7 @@ func (c *Chunker) Chunk(path, lang string, source []byte, symbols []parser.Symbo
 		}
 
 		// Разбиваем на под-чанки, если превышен лимит
-		sub := splitText(path, lang, text, s.StartLine, "symbol", s.Name, s.Parent, s.Imports)
+		sub := splitText(path, lang, text, s.StartLine, "symbol", s.Name, s.Parent, s.Imports, s.Doc)
 		out = append(out, sub...)
 	}
 	return out
@@ -124,7 +127,7 @@ func (c *Chunker) ChunkByTree(path, lang string, source []byte, treeChunks []par
 			continue
 		}
 		// Даже AST-чанки прогоняем через splitText на случай гигантских листьев
-		sub := splitText(path, lang, text, tc.StartLine, "tree", "", tc.Parent, tc.Imports)
+		sub := splitText(path, lang, text, tc.StartLine, "tree", "", tc.Parent, tc.Imports, tc.Doc)
 		out = append(out, sub...)
 	}
 	return out
@@ -132,7 +135,7 @@ func (c *Chunker) ChunkByTree(path, lang string, source []byte, treeChunks []par
 
 // splitText разбивает текст на куски не более MaxChunkBytes.
 // Старается не резать посередине строк, если это возможно.
-func splitText(path, lang, text string, startLine int, kind, symbol, parent string, imports []string) []Chunk {
+func splitText(path, lang, text string, startLine int, kind, symbol, parent string, imports []string, comments string) []Chunk {
 	if len(text) <= MaxChunkBytes {
 		return []Chunk{{
 			Path:      path,
@@ -144,6 +147,7 @@ func splitText(path, lang, text string, startLine int, kind, symbol, parent stri
 			Language:  lang,
 			Parent:    parent,
 			Imports:   imports,
+			Comments:  comments,
 		}}
 	}
 
@@ -172,6 +176,7 @@ func splitText(path, lang, text string, startLine int, kind, symbol, parent stri
 					Language:  lang,
 					Parent:    parent,
 					Imports:   imports,
+					Comments:  comments,
 				})
 				currentText = ""
 			}
@@ -194,6 +199,7 @@ func splitText(path, lang, text string, startLine int, kind, symbol, parent stri
 							Language:  lang,
 							Parent:    parent,
 							Imports:   imports,
+							Comments:  comments,
 						})
 						tmp = ""
 					}
@@ -221,6 +227,7 @@ func splitText(path, lang, text string, startLine int, kind, symbol, parent stri
 			Language:  lang,
 			Parent:    parent,
 			Imports:   imports,
+			Comments:  comments,
 		})
 	}
 

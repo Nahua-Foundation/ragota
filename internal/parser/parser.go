@@ -8,7 +8,6 @@ package parser
 import (
 	"context"
 	"strings"
-	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
@@ -33,12 +32,14 @@ type Symbol struct {
 	Parent    string
 	Signature string
 	Imports   []string
+	// Doc — лидирующий комментарий перед объявлением (если есть).
+	// Для tree-sitter языков собирается из соседних `comment`-узлов,
+	// расположенных непосредственно над декларацией.
+	Doc string
 }
 
 // Parser извлекает символы из исходников.
-type Parser struct {
-	mu sync.Mutex
-}
+type Parser struct{}
 
 // New создаёт парсер.
 func New() *Parser { return &Parser{} }
@@ -73,38 +74,24 @@ func SupportedLanguages() []string {
 
 // Parse извлекает символы из source с учётом языка lang и пути path (нужно для .tsx vs .ts).
 func (p *Parser) Parse(ctx context.Context, lang, path string, source []byte) ([]Symbol, error) {
-	ts := languageFor(lang, path)
-	if ts == nil {
-		return nil, nil // язык не поддерживается tree-sitter'ом — это нормально
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	tsp := sitter.NewParser()
-	defer tsp.Close()
-	tsp.SetLanguage(ts)
-
-	tree, err := tsp.ParseCtx(ctx, nil, source)
-	if err != nil {
-		return nil, err
-	}
-	defer tree.Close()
-
-	root := tree.RootNode()
-	var symbols []Symbol
-	walk(root, source, lang, "", &symbols)
-	return symbols, nil
+	syms, _, err := p.ParseAll(ctx, lang, path, source, 1000000)
+	return syms, err
 }
 
 // ParseChunks разбивает файл на семантические куски с помощью дерева AST.
 // Гарантирует покрытие всего файла. maxBytes — желаемый (но не жесткий для AST) лимит.
 func (p *Parser) ParseChunks(ctx context.Context, lang, path string, source []byte, maxBytes int) []Symbol {
+	_, chunks, _ := p.ParseAll(ctx, lang, path, source, maxBytes)
+	return chunks
+}
+
+// ParseAll выполняет полный разбор файла за один проход AST.
+// Возвращает список символов и список семантических чанков.
+func (p *Parser) ParseAll(ctx context.Context, lang, path string, source []byte, maxBytes int) ([]Symbol, []Symbol, error) {
 	ts := languageFor(lang, path)
 	if ts == nil {
-		return nil
+		return nil, nil, nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	tsp := sitter.NewParser()
 	defer tsp.Close()
@@ -112,15 +99,24 @@ func (p *Parser) ParseChunks(ctx context.Context, lang, path string, source []by
 
 	tree, err := tsp.ParseCtx(ctx, nil, source)
 	if err != nil {
-		return nil
+		return nil, nil, err
 	}
 	defer tree.Close()
 
-	imports := p.extractImports(tree.RootNode(), source, lang)
+	root := tree.RootNode()
 
+	// 1. Извлекаем символы
+	var symbols []Symbol
+	walk(root, source, lang, "", &symbols)
+
+	// 2. Извлекаем импорты (нужны для чанков)
+	imports := p.extractImports(root, source, lang)
+
+	// 3. Собираем чанки
 	var chunks []Symbol
-	p.collectChunks(tree.RootNode(), source, maxBytes, "", imports, &chunks)
-	return chunks
+	p.collectChunks(root, source, maxBytes, "", imports, &chunks)
+
+	return symbols, chunks, nil
 }
 
 func (p *Parser) collectChunks(n *sitter.Node, source []byte, maxBytes int, parent string, imports []string, out *[]Symbol) {
@@ -314,36 +310,117 @@ func canonicalKind(nodeType string) string {
 
 // walk обходит AST и собирает символы верхнего и второго уровня
 // (методы внутри классов получают parent).
+//
+// Дополнительно собирает лидирующие комментарии (//, /* */, ///, """ … """):
+// перед каждой декларацией смотрим непосредственно предшествующие узлы
+// типа `comment` (или `block_comment` / `line_comment`). Это работает для
+// TS/JS/Java/Python (для Python docstring — отдельный node внутри тела,
+// обрабатывается ниже).
 func walk(node *sitter.Node, source []byte, lang, parent string, out *[]Symbol) {
 	count := int(node.NamedChildCount())
+	var pendingDoc string
+	var pendingDocStart = -1
 	for i := 0; i < count; i++ {
 		ch := node.NamedChild(i)
-		kind := canonicalKind(ch.Type())
+		t := ch.Type()
+		if isCommentNode(t) {
+			text := strings.TrimSpace(ch.Content(source))
+			if pendingDoc == "" {
+				pendingDoc = text
+				pendingDocStart = int(ch.StartByte())
+			} else {
+				pendingDoc += "\n" + text
+			}
+			continue
+		}
+		kind := canonicalKind(t)
 		if kind != "" {
 			name := extractName(ch, source)
 			if name != "" {
+				startByte := int(ch.StartByte())
+				startLine := int(ch.StartPoint().Row) + 1
+				doc := pendingDoc
+				if doc != "" && pendingDocStart >= 0 {
+					startByte = pendingDocStart
+					// номер строки пересчитаем по байту
+					startLine = lineForByte(source, startByte)
+				}
+				// Для Python: docstring — первый stmt в теле (string).
+				if doc == "" && lang == "python" {
+					doc = pythonDocstring(ch, source)
+				}
 				sym := Symbol{
 					Name:      name,
 					Kind:      kind,
-					StartLine: int(ch.StartPoint().Row) + 1,
+					StartLine: startLine,
 					EndLine:   int(ch.EndPoint().Row) + 1,
-					StartByte: int(ch.StartByte()),
+					StartByte: startByte,
 					EndByte:   int(ch.EndByte()),
 					Parent:    parent,
 					Signature: firstLine(source, ch),
+					Doc:       doc,
 				}
 				*out = append(*out, sym)
 				// для классов спускаемся внутрь, чтобы найти методы
 				if kind == "class" || kind == "interface" {
 					walk(ch, source, lang, name, out)
+					pendingDoc = ""
+					pendingDocStart = -1
 					continue
 				}
 			}
 		}
+		pendingDoc = ""
+		pendingDocStart = -1
 		// рекурсивно идём в дочерние узлы, чтобы не пропустить функции,
 		// объявленные внутри блоков (export, namespaces, и т.п.)
 		walk(ch, source, lang, parent, out)
 	}
+}
+
+// isCommentNode распознаёт comment-узлы tree-sitter в разных грамматиках.
+func isCommentNode(t string) bool {
+	switch t {
+	case "comment", "line_comment", "block_comment", "documentation_comment":
+		return true
+	}
+	return false
+}
+
+// pythonDocstring извлекает docstring (первый string-stmt в теле функции/класса).
+func pythonDocstring(n *sitter.Node, source []byte) string {
+	body := n.ChildByFieldName("body")
+	if body == nil {
+		return ""
+	}
+	for i := 0; i < int(body.NamedChildCount()); i++ {
+		ch := body.NamedChild(i)
+		if ch.Type() == "expression_statement" && ch.NamedChildCount() > 0 {
+			s := ch.NamedChild(0)
+			if s.Type() == "string" {
+				return strings.TrimSpace(s.Content(source))
+			}
+		}
+		break
+	}
+	return ""
+}
+
+// lineForByte возвращает 1-based номер строки для байтового смещения.
+func lineForByte(source []byte, off int) int {
+	if off < 0 {
+		off = 0
+	}
+	if off > len(source) {
+		off = len(source)
+	}
+	line := 1
+	for i := 0; i < off; i++ {
+		if source[i] == '\n' {
+			line++
+		}
+	}
+	return line
 }
 
 // extractName пытается получить имя символа из подходящего поля.

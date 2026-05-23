@@ -59,23 +59,49 @@ func newInstallCmd() *cobra.Command {
 				fmt.Println("[v] Ollama is installed")
 			}
 
-			// 3. nomic-embed-text (if ollama is available)
+			// 3. Ollama-модели: code-embedding (qwen3-embedding:0.6b), text-embedding
+			//    (nomic-embed-text для markdown) и reranker (BGE Reranker).
+			//    Все pull-инги опциональные; reranker используется с
+			//    graceful fallback, поэтому отказ ставить его — допустим.
 			if isCommandAvailable("ollama") {
-				modelName := cfg.Ollama.EmbedModel
-				if modelName == "" {
-					modelName = "nomic-embed-text"
+				type modelSpec struct {
+					name     string
+					purpose  string
+					required bool
 				}
-				if !isOllamaModelAvailable(ctx, modelName) {
-					fmt.Printf("[ ] %s model is not available\n", modelName)
-					if askConfirm(scanner, fmt.Sprintf("Pull %s model?", modelName)) {
-						if err := pullOllamaModel(ctx, modelName); err != nil {
-							fmt.Printf("Failed to pull model: %v\n", err)
+				models := []modelSpec{
+					{name: cfg.CodeCollection().EmbedModel, purpose: "code embeddings (hybrid search)", required: true},
+					{name: cfg.TextCollection().EmbedModel, purpose: "text/markdown embeddings", required: true},
+				}
+				if cfg.Rerank.Enabled && cfg.Rerank.Model != "" {
+					models = append(models, modelSpec{name: cfg.Rerank.Model, purpose: "reranker (BGE Reranker)", required: cfg.Rerank.Required})
+				}
+				// Legacy fallback на случай пустых Collections.* (не должно случаться после Default()).
+				if cfg.Ollama.EmbedModel != "" && cfg.Ollama.EmbedModel != cfg.TextCollection().EmbedModel && cfg.Ollama.EmbedModel != cfg.CodeCollection().EmbedModel {
+					models = append(models, modelSpec{name: cfg.Ollama.EmbedModel, purpose: "legacy embed model"})
+				}
+				seen := map[string]bool{}
+				for _, m := range models {
+					if m.name == "" || seen[m.name] {
+						continue
+					}
+					seen[m.name] = true
+					if isOllamaModelAvailable(ctx, m.name) {
+						fmt.Printf("[v] %s (%s) is available\n", m.name, m.purpose)
+						continue
+					}
+					req := "optional"
+					if m.required {
+						req = "required"
+					}
+					fmt.Printf("[ ] %s (%s, %s) is not available\n", m.name, m.purpose, req)
+					if askConfirm(scanner, fmt.Sprintf("Pull %s?", m.name)) {
+						if err := pullOllamaModel(ctx, m.name); err != nil {
+							fmt.Printf("Failed to pull %s: %v\n", m.name, err)
 						} else {
-							fmt.Printf("[+] %s model pulled successfully\n", modelName)
+							fmt.Printf("[+] %s pulled successfully\n", m.name)
 						}
 					}
-				} else {
-					fmt.Printf("[v] %s model is available\n", modelName)
 				}
 			}
 
