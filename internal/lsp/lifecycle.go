@@ -91,6 +91,7 @@ func Start(ctx context.Context, spec ServerSpec, root string) (*Client, error) {
 		diagnosticsReady: make(chan string, 16),
 		processDone:      make(chan struct{}),
 		javaReady:        make(chan struct{}),
+		goplsReady:       make(chan struct{}),
 	}
 	go func() {
 		err := cmd.Wait()
@@ -208,13 +209,14 @@ func (c *Client) initialize(ctx context.Context, root string) error {
 	// Отключаем мониторинг для всех LSP, чтобы они не закрывались при разрыве
 	// соединения с MCP клиентом (SSE/stdio).
 	var processID any = nil
+	// gopls/jdtls требуют корректного rootUri и workspaceFolders для индексации.
 	params := map[string]any{
 		"processId":    processID,
 		"rootPath":     pathFromFileURI(c.rootURI),
 		"rootUri":      c.rootURI,
 		"capabilities": c.capabilities(),
 		"workspaceFolders": []map[string]any{
-			{"uri": c.rootURI, "name": "root"},
+			{"uri": c.rootURI, "name": filepath.Base(pathFromFileURI(c.rootURI))},
 		},
 	}
 	// initializationOptions/settings — некоторые серверы (pyright) читают
@@ -237,16 +239,9 @@ func (c *Client) initialize(ctx context.Context, root string) error {
 			"settings": settings,
 		})
 	}
-	// gopls требует явного уведомления workspace/didChangeWorkspaceFolders
-	// после инициализации для корректной индексации файлов.
-	if c.Language == "go" {
-		_ = c.Notify("workspace/didChangeWorkspaceFolders", map[string]any{
-			"event": "created",
-			"workspaceFolders": []map[string]any{
-				{"uri": c.rootURI, "name": "workspace"},
-			},
-		})
-	}
+	// gopls после инициализации сразу готов к работе с основным воркспейсом.
+	// Ранее здесь отправлялся didChangeWorkspaceFolders, что приводило к дублированию
+	// view в gopls и ошибкам "no views".
 	if c.Language == "java" {
 		// jdtls часто требует уведомления о пустом classpath или аналогичном событии,
 		// но главное — убедиться, что он проиндексировал корень.
@@ -288,6 +283,21 @@ func (c *Client) initialize(ctx context.Context, root string) error {
 		}
 	}
 	c.initialized.Store(true)
+
+	if c.Language == "go" {
+		// gopls сигнализирует о завершении начальной индексации через $/progress.
+		// Ждем этого сигнала, чтобы первые запросы не возвращали пустые результаты.
+		// Таймаут 30с обычно достаточно даже для больших проектов.
+		select {
+		case <-c.goplsReady:
+			lspDebug("LSP go: initial indexing finished\n")
+		case <-time.After(30 * time.Second):
+			lspDebug("LSP go: indexing wait timeout, continuing\n")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
 	return nil
 }
 

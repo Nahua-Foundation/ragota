@@ -55,13 +55,14 @@ func (m *Manager) Get(ctx context.Context, language string) (*Client, error) {
 func (m *Manager) GetWithRoot(ctx context.Context, language, workspaceRoot string) (*Client, error) {
 	m.mu.Lock()
 	if c, ok := m.clients[language]; ok {
-		if c.IsAlive() {
-			lspDebug("LSP %s: reusing existing client (alive)\n", language)
+		if c.IsAlive() && (workspaceRoot == "" || samePath(c.localRoot, workspaceRoot)) {
+			lspDebug("LSP %s: reusing existing client (alive, same root %q)\n", language, c.localRoot)
 			m.mu.Unlock()
 			return c, nil
 		}
-		// Клиент умер, удаляем из мапы
-		lspDebug("LSP %s: client dead, recreating\n", language)
+		// Клиент умер или корень изменился, удаляем из мапы
+		lspDebug("LSP %s: client dead or root changed (%q -> %q), recreating\n", language, c.localRoot, workspaceRoot)
+		_ = c.Close()
 		delete(m.clients, language)
 	}
 	spec, ok := m.specs[language]
@@ -143,22 +144,13 @@ func (m *Manager) EnsureOpen(ctx context.Context, language, path string) (*Clien
 	abs, _ := filepath.Abs(path)
 
 	// Ищем workspace root для языка ДО создания клиента
-	workspaceRoot := m.roots[language]
+	workspaceRoot := findWorkspaceRoot(abs, language)
 	if workspaceRoot == "" {
-		workspaceRoot = findWorkspaceRoot(abs, language)
-		if workspaceRoot != "" {
-			m.roots[language] = workspaceRoot
-			lspDebug("LSP %s: EnsureOpen: caching workspace root %q\n", language, workspaceRoot)
-		}
+		workspaceRoot = m.root
 	}
 
 	// Создаём или получаем клиент с правильным root
-	var c *Client
-	if workspaceRoot != "" {
-		c, err = m.GetWithRoot(ctx, language, workspaceRoot)
-	} else {
-		c, err = m.Get(ctx, language)
-	}
+	c, err := m.GetWithRoot(ctx, language, workspaceRoot)
 	if err != nil {
 		return nil, err
 	}

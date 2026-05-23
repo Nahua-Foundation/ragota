@@ -257,6 +257,24 @@ func (c *Client) handleServerNotification(method string, params json.RawMessage)
 				close(c.javaReady)
 			}
 		}
+	case "$/progress":
+		// LSP прогресс. Для gopls ищем токен "gopls.indexing" с value.kind == "end".
+		var p struct {
+			Token string `json:"token"`
+			Value struct {
+				Kind string `json:"kind"`
+			} `json:"value"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return
+		}
+		lspDebug("LSP %s: $/progress: token=%q kind=%q\n",
+			c.Language, p.Token, p.Value.Kind)
+		if (p.Token == "gopls.indexing" || p.Token == "Initial workspace scan") && p.Value.Kind == "end" {
+			if c.goplsReadyClosed.CompareAndSwap(false, true) {
+				close(c.goplsReady)
+			}
+		}
 	}
 }
 

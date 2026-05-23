@@ -72,7 +72,7 @@ func (c *Client) DidOpen(path, languageID, text string) error {
 	// Это критично для работы definition/hover/references — без ожидания
 	// LSP сервер может вернуть null/пусто потому что ещё не проиндексировал файл.
 	if method == "textDocument/didOpen" {
-		// Небольшая задержка чтобы LSP сервер успел обработать didChangeWatchedFiles
+		// Небольшая задержка чтобы LSP сервер успел обработать didOpen
 		time.Sleep(100 * time.Millisecond)
 		// Разное время ожидания для разных языков:
 		// - Python (pyright): быстрый анализ, 2-3 сек

@@ -20,7 +20,7 @@ func goCapabilities() map[string]any {
 			},
 			"completion": map[string]any{
 				"completionItem": map[string]any{
-					"snippetSupport":        true,
+					"snippetSupport":          true,
 					"commitCharactersSupport": true,
 				},
 			},
@@ -31,6 +31,9 @@ func goCapabilities() map[string]any {
 			"workspaceEdit": map[string]any{
 				"documentChanges": true,
 			},
+		},
+		"window": map[string]any{
+			"workDoneProgress": true,
 		},
 	}
 }
@@ -44,8 +47,10 @@ func goInitializationOptions() map[string]any {
 			"unusedparams": true,
 			"shadow":       true,
 		},
-		"ui.diagnostic.staticcheck": true,
-		"build.allowImplicitNetworks": true,
+		"ui.diagnostic.staticcheck":    true,
+		"build.allowImplicitNetworks":  true,
+		"build.directoryFilters":       []string{"-vendor", "-node_modules", "-.git"},
+		"ui.navigation.importShortcut": "Both",
 	}
 }
 
@@ -59,9 +64,10 @@ func goConfigFor(section string) any {
 				"unusedparams": true,
 				"shadow":       true,
 			},
-			"ui.diagnostic.staticcheck": true,
-			"build.allowImplicitNetworks": true,
-			"formatting.gofumpt":          false,
+			"ui.diagnostic.staticcheck":    true,
+			"build.allowImplicitNetworks":  true,
+			"formatting.gofumpt":           false,
+			"ui.navigation.importShortcut": "Both",
 		},
 	}
 	switch section {

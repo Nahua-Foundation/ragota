@@ -8,11 +8,11 @@
 //   - server_spec.go  — описание запускаемых LSP-серверов (DefaultServers);
 //   - lifecycle.go    — Start/Close/initialize и сбор stderr/процессной диагностики;
 //   - jsonrpc.go      — транспорт JSON-RPC 2.0: типы, Call/Notify, readLoop,
-//                       обработка серверных request/notification;
+//     обработка серверных request/notification;
 //   - uri.go          — конвертация file:// URI ↔ путь, samePath, isAlphaNum;
 //   - types.go        — внутренние LSP-типы (Range/Position/Location/...) и
-//                       декодеры результатов textDocument/* + positionParams,
-//                       hoverString;
+//     декодеры результатов textDocument/* + positionParams,
+//     hoverString;
 //   - documents.go    — DidOpen/waitForDiagnostics и чтение строки файла;
 //   - navigation.go   — публичные операции Definition/References/Hover/Implementation;
 //   - client_*.go     — per-language капабилити/настройки (Go/Java/Python/TS).
@@ -70,6 +70,11 @@ type Client struct {
 	// initialize дожидается этого сигнала (см. initialize).
 	javaReady       chan struct{}
 	javaReadyClosed atomic.Bool
+
+	// goplsReady закрывается, когда gopls завершает начальную индексацию.
+	// Используется window/workDoneProgress с токеном "gopls.indexing".
+	goplsReady       chan struct{}
+	goplsReadyClosed atomic.Bool
 
 	// Флаги завершения.
 	closed atomic.Bool
