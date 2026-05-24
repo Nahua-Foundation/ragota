@@ -45,7 +45,7 @@ jobs:
         run: |
           BINARY_NAME=ai-tools
           # Используем -ldflags для уменьшения размера и передачи версии, если нужно
-          go build -v -o "$BINARY_NAME" .
+          go build -v -o "$BINARY_NAME" ./cmd/ai-tools
 
       - name: Package
         shell: bash
