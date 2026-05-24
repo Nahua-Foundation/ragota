@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-05-24
+## [v0.0.4] - 2026-05-24
 
 ### Added
 - **LSP per-repo (`internal/lsp/manager.go`)**: кэш клиентов перешёл на composite-ключ `(repo, language)` — в multi-repo workspace каждая репа поднимает собственный LSP-инстанс с `rootURI = repo.Path`. Новый `Manager.SetRepoResolver(*repos.Resolver)` и `GetForRepo(ctx, repo, lang, root)`; `EnsureOpen` резолвит репу по abs-пути файла и выбирает соответствующего клиента. Старые `Get`/`GetWithRoot` сохранены как обёртки (key с пустой репой) — обратная совместимость с single-workspace. Подключение в `cli_run.go` и `cli_serve.go` (serve-lsp/serve-symbol).
