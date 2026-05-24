@@ -46,21 +46,25 @@ func (s *SymbolServer) Build() *server.MCPServer {
 	srv.AddTool(mcp.NewTool("sym.find_references",
 		mcp.WithDescription("Find all references (edges) to the given symbol across the project."),
 		mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name.")),
+		mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
 	), s.wrap("sym.find_references", s.handleFindReferences))
 
 	srv.AddTool(mcp.NewTool("sym.find_implementations",
 		mcp.WithDescription("Find concrete implementations of the given interface."),
 		mcp.WithString("interface", mcp.Required(), mcp.Description("Interface name or qualified name.")),
+		mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
 	), s.wrap("sym.find_implementations", s.handleFindImplementations))
 
 	srv.AddTool(mcp.NewTool("sym.find_callers",
 		mcp.WithDescription("Find functions/methods that call the given function."),
 		mcp.WithString("function", mcp.Required(), mcp.Description("Function name.")),
+		mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
 	), s.wrap("sym.find_callers", s.handleFindCallers))
 
 	srv.AddTool(mcp.NewTool("sym.find_callees",
 		mcp.WithDescription("Find functions/methods called by the given function."),
 		mcp.WithString("function", mcp.Required(), mcp.Description("Function name.")),
+		mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
 	), s.wrap("sym.find_callees", s.handleFindCallees))
 
 	srv.AddTool(mcp.NewTool("sym.get_execution_context",
@@ -109,6 +113,7 @@ func (s *SymbolServer) Build() *server.MCPServer {
 		mcp.WithDescription("Expand the code graph around node_id up to the given depth."),
 		mcp.WithNumber("node_id", mcp.Required()),
 		mcp.WithNumber("depth", mcp.DefaultNumber(1)),
+		mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty. By default = repo of node_id.")),
 		mcp.WithString("kinds", mcp.Description("Comma-separated edge kinds: call,import,implements,extends,reference. Empty = all.")),
 	), s.wrap("sym.expand_neighbors", s.handleExpandNeighbors))
 
@@ -196,6 +201,7 @@ func (s *SymbolServer) handleFindReferences(ctx context.Context, req mcp.CallToo
 	if err != nil {
 		return nil, err
 	}
+	edges = filterEdgesByRepo(edges, parseRepoParam(req.GetString("repo", "")))
 	return jsonResult(edges)
 }
 
@@ -208,6 +214,7 @@ func (s *SymbolServer) handleFindImplementations(ctx context.Context, req mcp.Ca
 	if err != nil {
 		return nil, err
 	}
+	units = filterUnitsByRepo(units, parseRepoParam(req.GetString("repo", "")))
 	return jsonResult(units)
 }
 
@@ -220,6 +227,7 @@ func (s *SymbolServer) handleFindCallers(ctx context.Context, req mcp.CallToolRe
 	if err != nil {
 		return nil, err
 	}
+	units = filterUnitsByRepo(units, parseRepoParam(req.GetString("repo", "")))
 	return jsonResult(units)
 }
 
@@ -232,6 +240,7 @@ func (s *SymbolServer) handleFindCallees(ctx context.Context, req mcp.CallToolRe
 	if err != nil {
 		return nil, err
 	}
+	units = filterUnitsByRepo(units, parseRepoParam(req.GetString("repo", "")))
 	return jsonResult(units)
 }
 
@@ -307,6 +316,21 @@ func (s *SymbolServer) handleExpandNeighbors(ctx context.Context, req mcp.CallTo
 	if err != nil {
 		return nil, err
 	}
+	// Repo-фильтр: по умолчанию ограничиваем репой стартового узла.
+	// Явный repo (включая "*") перекрывает дефолт.
+	repoRaw := req.GetString("repo", "")
+	var repoFilter any
+	if strings.TrimSpace(repoRaw) == "" {
+		if u, err := s.syms.Get(ctx, id); err == nil && u != nil && u.Repo != "" {
+			repoFilter = u.Repo
+		}
+	} else {
+		repoFilter = parseRepoParam(repoRaw)
+	}
+	if n != nil {
+		n.Nodes = filterUnitsByRepo(n.Nodes, repoFilter)
+		n.Edges = filterEdgesByRepo(n.Edges, repoFilter)
+	}
 	return jsonResult(n)
 }
 
@@ -326,11 +350,25 @@ func (s *SymbolServer) handleDependencyGraph(ctx context.Context, req mcp.CallTo
 func (s *SymbolServer) handleCallGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	depth := int(req.GetFloat("depth", 2))
 
+	// Repo-фильтр: явный параметр в приоритете, иначе вычисляется из репы стартового узла.
+	repoRaw := req.GetString("repo", "")
+	explicitRepo := strings.TrimSpace(repoRaw) != ""
+	repoFilter := parseRepoParam(repoRaw)
+
 	// Вариант 1: явный symbol_id.
 	if id := int64(req.GetFloat("symbol_id", 0)); id > 0 {
 		n, err := s.gr.CallGraph(ctx, id, depth)
 		if err != nil {
 			return nil, err
+		}
+		if !explicitRepo {
+			if u, err := s.syms.Get(ctx, id); err == nil && u != nil && u.Repo != "" {
+				repoFilter = u.Repo
+			}
+		}
+		if n != nil {
+			n.Nodes = filterUnitsByRepo(n.Nodes, repoFilter)
+			n.Edges = filterEdgesByRepo(n.Edges, repoFilter)
 		}
 		return jsonResult(n)
 	}
@@ -343,6 +381,21 @@ func (s *SymbolServer) handleCallGraph(ctx context.Context, req mcp.CallToolRequ
 	defs, err := s.syms.FindDefinition(ctx, fn)
 	if err != nil {
 		return nil, err
+	}
+	// Если repo явно не задан — выводим из репы найденных определений
+	// (если все они в одной репе). Иначе — без фильтра.
+	if !explicitRepo {
+		reposSet := map[string]struct{}{}
+		for _, d := range defs {
+			if d.Repo != "" {
+				reposSet[d.Repo] = struct{}{}
+			}
+		}
+		if len(reposSet) == 1 {
+			for r := range reposSet {
+				repoFilter = r
+			}
+		}
 	}
 	// Отфильтруем callable (function/method) и объединим окрестности.
 	seenNodes := map[int64]bool{}
@@ -372,6 +425,8 @@ func (s *SymbolServer) handleCallGraph(ctx context.Context, req mcp.CallToolRequ
 			}
 		}
 	}
+	merged.Nodes = filterUnitsByRepo(merged.Nodes, repoFilter)
+	merged.Edges = filterEdgesByRepo(merged.Edges, repoFilter)
 	return jsonResult(merged)
 }
 

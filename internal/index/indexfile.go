@@ -62,6 +62,7 @@ func (v *Vector) IndexFile(ctx context.Context, abs string) error {
 			Payload: map[string]any{
 				"file":       pf.abs,
 				"rel":        pf.rel,
+				"repo":       pf.repo,
 				"language":   pf.lang,
 				"start_line": ch.StartLine,
 				"end_line":   ch.EndLine,
@@ -82,6 +83,7 @@ func (v *Vector) IndexFile(ctx context.Context, abs string) error {
 		for i, ch := range pf.chunks {
 			allDocs[i] = bm25.Doc{
 				ID:        fmt.Sprintf("%s#%d", pf.abs, i),
+				Repo:      pf.repo,
 				Path:      pf.abs,
 				Language:  pf.lang,
 				Kind:      ch.Kind,

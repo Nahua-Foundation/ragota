@@ -95,7 +95,7 @@ func TestFindASTUnits(t *testing.T) {
 	ctx := context.Background()
 	seedFile(t, st, "/tmp/a.go")
 
-	hits, err := st.FindASTUnits(ctx, "f", "", "", 10)
+	hits, err := st.FindASTUnits(ctx, "f", "", "", "", 10)
 	if err != nil {
 		t.Fatalf("Find: %v", err)
 	}
@@ -104,12 +104,12 @@ func TestFindASTUnits(t *testing.T) {
 		t.Errorf("Find(f): %+v", hits)
 	}
 
-	hits2, err := st.FindASTUnits(ctx, "f", "function", "go", 10)
+	hits2, err := st.FindASTUnits(ctx, "f", "function", "go", "", 10)
 	if err != nil || len(hits2) == 0 {
 		t.Errorf("Find(f, kind=function, lang=go): %+v %v", hits2, err)
 	}
 
-	hits3, _ := st.FindASTUnits(ctx, "no-such-symbol", "", "", 10)
+	hits3, _ := st.FindASTUnits(ctx, "no-such-symbol", "", "", "", 10)
 	if len(hits3) != 0 {
 		t.Errorf("Find(no-such): %+v", hits3)
 	}

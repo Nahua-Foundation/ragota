@@ -74,7 +74,7 @@ func (s *Service) Children(ctx context.Context, id int64) ([]store.ASTUnit, erro
 
 func (s *Service) FindDefinition(ctx context.Context, symbol string) ([]store.ASTUnit, error) {
 	// Ищем определения (любой kind, кроме module — модуль не «определение символа»).
-	units, err := s.st.FindASTUnits(ctx, symbol, "", "", 20)
+	units, err := s.st.FindASTUnits(ctx, symbol, "", "", "", 20)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func (s *Service) FindReferences(ctx context.Context, symbol string) ([]store.Ed
 }
 
 func (s *Service) FindImplementations(ctx context.Context, iface string) ([]store.ASTUnit, error) {
-	units, err := s.st.FindASTUnits(ctx, iface, "interface", "", 5)
+	units, err := s.st.FindASTUnits(ctx, iface, "interface", "", "", 5)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func (s *Service) FindImplementations(ctx context.Context, iface string) ([]stor
 					}
 
 					for i := 0; i < maxMethodsToCheck; i++ {
-						candidates, err := s.st.FindASTUnits(ctx, methodNames[i], "method", "go", 100)
+						candidates, err := s.st.FindASTUnits(ctx, methodNames[i], "method", "go", "", 100)
 						if err != nil {
 							continue
 						}
@@ -370,7 +370,7 @@ func (s *Service) FindCallees(ctx context.Context, function string) ([]store.AST
 func (s *Service) findCallable(ctx context.Context, name string) ([]store.ASTUnit, error) {
 	all := []store.ASTUnit{}
 	for _, k := range []string{"function", "method"} {
-		us, err := s.st.FindASTUnits(ctx, name, k, "", 20)
+		us, err := s.st.FindASTUnits(ctx, name, k, "", "", 20)
 		if err != nil {
 			return nil, err
 		}

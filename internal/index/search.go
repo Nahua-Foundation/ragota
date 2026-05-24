@@ -73,15 +73,77 @@ func (v *Vector) Search(ctx context.Context, query string, limit int, filter map
 	return all, nil
 }
 
+// buildFilter преобразует «плоский» map фильтров в Qdrant-формат.
+//
+// Поддерживается специальный ключ "repo" со значениями:
+//   - string ""  или "*"        — фильтр не применяется (все репо);
+//   - string "name"             — точное совпадение repo == name;
+//   - []string{...}             — OR по нескольким репам (Qdrant `should`);
+//   - []any{...}                — то же, что []string (после приведения).
+//
+// Остальные ключи трактуются как простые match-фильтры (AND через `must`).
 func buildFilter(filter map[string]any) map[string]any {
 	if len(filter) == 0 {
 		return nil
 	}
 	must := make([]map[string]any, 0, len(filter))
 	for k, val := range filter {
+		if k == "repo" {
+			if cond := repoMatchCondition(val); cond != nil {
+				must = append(must, cond)
+			}
+			continue
+		}
 		must = append(must, map[string]any{"key": k, "match": map[string]any{"value": val}})
 	}
+	if len(must) == 0 {
+		return nil
+	}
 	return map[string]any{"must": must}
+}
+
+// repoMatchCondition строит Qdrant-условие фильтрации по полю `repo`.
+// Возвращает nil, если фильтр не нужен ("*" или пустое значение).
+func repoMatchCondition(val any) map[string]any {
+	switch v := val.(type) {
+	case string:
+		if v == "" || v == "*" {
+			return nil
+		}
+		return map[string]any{"key": "repo", "match": map[string]any{"value": v}}
+	case []string:
+		names := make([]string, 0, len(v))
+		for _, s := range v {
+			if s == "" || s == "*" {
+				return nil
+			}
+			names = append(names, s)
+		}
+		if len(names) == 0 {
+			return nil
+		}
+		if len(names) == 1 {
+			return map[string]any{"key": "repo", "match": map[string]any{"value": names[0]}}
+		}
+		return map[string]any{"key": "repo", "match": map[string]any{"any": names}}
+	case []any:
+		names := make([]string, 0, len(v))
+		for _, x := range v {
+			s, _ := x.(string)
+			if s == "" || s == "*" {
+				return nil
+			}
+			names = append(names, s)
+		}
+		if len(names) == 0 {
+			return nil
+		}
+		if len(names) == 1 {
+			return map[string]any{"key": "repo", "match": map[string]any{"value": names[0]}}
+		}
+		return map[string]any{"key": "repo", "match": map[string]any{"any": names}}
+	}
+	return nil
 }
 
 // SimilarToUnit реализует symbols.SimilarSearcher: ищет AST units, чьи

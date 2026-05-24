@@ -22,6 +22,7 @@ import (
 	"aitools/internal/lsp"
 	mcppkg "aitools/internal/mcp"
 	"aitools/internal/qdrant"
+	"aitools/internal/repos"
 	"aitools/internal/rerank"
 	"aitools/internal/state"
 	"aitools/internal/store"
@@ -79,6 +80,25 @@ func newRunCmd() *cobra.Command {
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
+			// Multi-repo discovery: определяем, какие репозитории
+			// обслуживает workspace. См. internal/repos.Discover.
+			discovered, err := repos.Discover(cfg.Root)
+			if err != nil {
+				return fmt.Errorf("repos discover: %w", err)
+			}
+			if len(discovered) > 1 {
+				fmt.Fprintf(os.Stderr, "ai-tools: multi-repo workspace, найдено %d репо:\n", len(discovered))
+				for _, r := range discovered {
+					mark := ""
+					if !r.HasGit {
+						mark = " (без .git)"
+					}
+					fmt.Fprintf(os.Stderr, "  - %s -> %s%s\n", r.Name, r.Path, mark)
+				}
+			}
+			repoResolver := repos.NewResolver(discovered)
+			repoSig := repos.Signature(discovered)
+
 			bus := state.NewBus(cfg.Root)
 
 			// Общие ресурсы.
@@ -96,7 +116,8 @@ func newRunCmd() *cobra.Command {
 				symSvc  *symbols.Service
 			)
 			if enableTS || enableVector || enableSymbol || doWatch {
-				st, err = store.Open(cfg.SQLitePath())
+				// OpenFresh инвалидирует БД при смене состава репо/корня.
+				st, err = store.OpenFresh(cfg.SQLitePath(), repoSig)
 				if err != nil {
 					return fmt.Errorf("sqlite open: %w", err)
 				}
@@ -109,6 +130,7 @@ func newRunCmd() *cobra.Command {
 			if enableSymbol || enableTS || doWatch {
 				astIdx = astindex.New(cfg, st)
 				astIdx.SetBus(bus)
+				astIdx.SetRepoResolver(repoResolver)
 			}
 			// BM25 (Bleve) — лексический индекс для hybrid retrieval.
 			if (enableVector || doWatch) && cfg.BM25.Enabled {
@@ -124,6 +146,7 @@ func newRunCmd() *cobra.Command {
 				qd = qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))
 				emb = embedder.New(cfg.Ollama.URL, cfg.Ollama.EmbedModel)
 				vIdx = index.NewVector(cfg, qd, emb, st, bus)
+				vIdx.SetRepoResolver(repoResolver)
 				if bleveIx != nil {
 					vIdx.SetBM25(bleveIx)
 				}
@@ -160,6 +183,7 @@ func newRunCmd() *cobra.Command {
 					})
 				}
 				lspMgr = lsp.NewManager(cfg.Root, specs)
+				lspMgr.SetRepoResolver(repoResolver)
 				// Не закрываем менеджер здесь - он нужен для работы SSE серверов.
 				// Закроется после shutdown SSE серверов в конце функции.
 			}
@@ -202,6 +226,7 @@ func newRunCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				w.SetRepoResolver(repoResolver)
 				defer w.Close()
 				if err := w.Start(ctx); err != nil {
 					return err

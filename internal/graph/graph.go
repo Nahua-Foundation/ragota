@@ -347,7 +347,7 @@ func (s *Service) GetExecutionContext(ctx context.Context, symbolID int64) (*Exe
 
 func (s *Service) findModuleNode(ctx context.Context, name string) (*store.ASTUnit, error) {
 	// 1. Точное совпадение (по имени или qualified).
-	units, err := s.st.FindASTUnits(ctx, name, "module", "", 1)
+	units, err := s.st.FindASTUnits(ctx, name, "module", "", "", 1)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +360,7 @@ func (s *Service) findModuleNode(ctx context.Context, name string) (*store.ASTUn
 	if strings.Contains(name, "/") || strings.Contains(name, "\\") {
 		// Ищем юниты типа module, у которых file_path заканчивается на name или содержит его.
 		// В SQLite нет простого ENDS_WITH, используем LIKE.
-		q := `SELECT id, file_path, language, kind, name, qualified, parent_id, start_line, end_line, start_byte, end_byte, signature, doc, hash 
+		q := `SELECT id, repo, file_path, language, kind, name, qualified, parent_id, start_line, end_line, start_byte, end_byte, signature, doc, hash 
               FROM ast_units WHERE kind = 'module' AND (file_path LIKE ? OR file_path LIKE ?) LIMIT 1`
 		// Проверяем как точное окончание /path, так и просто наличие.
 		rows, err := s.st.GetDB().QueryContext(ctx, q, "%/"+name, "%"+name+"%")
@@ -369,7 +369,7 @@ func (s *Service) findModuleNode(ctx context.Context, name string) (*store.ASTUn
 			if rows.Next() {
 				var u store.ASTUnit
 				err := rows.Scan(
-					&u.ID, &u.FilePath, &u.Language, &u.Kind, &u.Name, &u.Qualified,
+					&u.ID, &u.Repo, &u.FilePath, &u.Language, &u.Kind, &u.Name, &u.Qualified,
 					&u.ParentID, &u.StartLine, &u.EndLine, &u.StartByte, &u.EndByte,
 					&u.Signature, &u.Doc, &u.Hash,
 				)
@@ -381,7 +381,7 @@ func (s *Service) findModuleNode(ctx context.Context, name string) (*store.ASTUn
 	}
 
 	// 3. Fallback на любой тип с таким именем.
-	any, err := s.st.FindASTUnits(ctx, name, "", "", 1)
+	any, err := s.st.FindASTUnits(ctx, name, "", "", "", 1)
 	if err != nil {
 		return nil, err
 	}

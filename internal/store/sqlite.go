@@ -58,6 +58,67 @@ func Open(path string) (*SQLite, error) {
 	return s, nil
 }
 
+// OpenFresh открывает БД, предварительно удаляя файлы, если текущий
+// workspace-signature не совпадает с сохранённым. Используется в CLI при
+// запуске индексации: смена состава репо/корня инвалидирует старый граф.
+//
+// path — путь к sqlite-файлу; signature — стабильный хеш текущего набора
+// репо (см. repos.Signature). При несовпадении удаляется path, path+"-wal"
+// и path+"-shm".
+func OpenFresh(path, signature string) (*SQLite, error) {
+	if signature != "" {
+		if prev, err := readSignature(path); err == nil && prev != "" && prev != signature {
+			// Workspace изменился — старый индекс несогласован, сносим.
+			removeDBFiles(path)
+		}
+	}
+	s, err := Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if signature != "" {
+		if err := s.setSignature(signature); err != nil {
+			_ = s.Close()
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+func removeDBFiles(path string) {
+	for _, suf := range []string{"", "-wal", "-shm", "-journal"} {
+		_ = os.Remove(path + suf)
+	}
+}
+
+// readSignature читает workspace-signature напрямую (через временное
+// открытие БД); это позволяет инвалидировать файлы _до_ init() и без
+// глобальных мутаций.
+func readSignature(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() == 0 {
+		return "", err
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	var sig string
+	err = db.QueryRow(`SELECT value FROM meta WHERE key = 'workspace_signature'`).Scan(&sig)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return sig, err
+}
+
+func (s *SQLite) setSignature(sig string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO meta(key, value) VALUES('workspace_signature', ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, sig)
+	return err
+}
+
 // Close закрывает БД.
 func (s *SQLite) Close() error { return s.db.Close() }
 
@@ -99,6 +160,7 @@ func (s *SQLite) init() error {
 		// hybrid retrieval (vector + BM25) и parent-child навигации.
 		`CREATE TABLE IF NOT EXISTS ast_units (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo        TEXT NOT NULL DEFAULT '', -- имя репозитория (multi-repo workspace)
 			file_path   TEXT NOT NULL,
 			language    TEXT NOT NULL,
 			kind        TEXT NOT NULL,           -- function|method|class|interface|module|struct|enum|...
@@ -120,11 +182,15 @@ func (s *SQLite) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_kind ON ast_units(kind)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_qualified ON ast_units(qualified)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_parent ON ast_units(parent_id)`,
+		// Repo-aware индексы (multi-repo).
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_qualified ON ast_units(repo, qualified)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_name ON ast_units(repo, name)`,
 
 		// Edges — направленные связи между AST-единицами для graph expansion.
 		// kind: call | import | implements | reference | extends | contains
 		`CREATE TABLE IF NOT EXISTS edges (
 			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo      TEXT NOT NULL DEFAULT '', -- имя репозитория источника ребра
 			src_id    INTEGER NOT NULL,
 			dst_id    INTEGER NOT NULL,
 			kind      TEXT NOT NULL,
@@ -139,6 +205,14 @@ func (s *SQLite) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_edges_dst  ON edges(dst_id, kind)`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind)`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name ON edges(dst_name) WHERE dst_id = 0`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_repo_dst_name_kind ON edges(repo, dst_name, kind)`,
+
+		// meta — служебная key/value таблица; используется для
+		// workspace_signature (см. OpenFresh) и подобных флагов.
+		`CREATE TABLE IF NOT EXISTS meta (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
 
 		// embed_meta — метаданные эмбеддингов по коллекциям. Используется,
 		// чтобы при смене модели/размерности эмбеддингов автоматически
@@ -150,10 +224,29 @@ func (s *SQLite) init() error {
 			updated_at INTEGER NOT NULL
 		)`,
 	}
-	// ALTER для существующих баз
-	_, _ = s.db.Exec(`ALTER TABLE files ADD COLUMN vec_hash TEXT NOT NULL DEFAULT ''`)
-
 	for _, q := range stmts {
+		if _, err := s.db.Exec(q); err != nil {
+			return fmt.Errorf("sqlite init: %w", err)
+		}
+	}
+
+	// ALTER для существующих баз — добавляем недостающие колонки.
+	// Ошибки "duplicate column" игнорируем (колонка уже есть).
+	alters := []string{
+		`ALTER TABLE files ADD COLUMN vec_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ast_units ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE edges ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, q := range alters {
+		_, _ = s.db.Exec(q)
+	}
+	// Repo-aware индексы могут отсутствовать в старых БД — создаём после ALTER.
+	postIdx := []string{
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_qualified ON ast_units(repo, qualified)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_name ON ast_units(repo, name)`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_repo_dst_name_kind ON edges(repo, dst_name, kind)`,
+	}
+	for _, q := range postIdx {
 		if _, err := s.db.Exec(q); err != nil {
 			return fmt.Errorf("sqlite init: %w", err)
 		}

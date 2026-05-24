@@ -7,17 +7,27 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"aitools/internal/repos"
 )
 
-// Manager управляет LSP-клиентами на язык. Ленивая инициализация:
-// процесс стартует при первом обращении к языку.
+// clientKey — составной ключ кэша LSP-клиентов. Позволяет держать
+// отдельный процесс LSP per (repo, language) — в multi-repo workspace
+// каждая репа получает свой сервер с rootURI = repo.Path.
+type clientKey struct {
+	repo string // имя репы (из repos.Resolver); пусто = legacy/single-repo
+	lang string
+}
+
+// Manager управляет LSP-клиентами per (repo, language). Ленивая
+// инициализация: процесс стартует при первом обращении.
 type Manager struct {
 	root  string
 	specs map[string]ServerSpec
 
-	mu      sync.Mutex
-	clients map[string]*Client
-	roots   map[string]string // language -> workspace root (кэшируем найденный root)
+	mu       sync.Mutex
+	clients  map[clientKey]*Client
+	resolver *repos.Resolver
 }
 
 // NewManager создаёт менеджер. Если specs == nil — берутся DefaultServers.
@@ -28,13 +38,20 @@ func NewManager(root string, specs []ServerSpec) *Manager {
 	m := &Manager{
 		root:    root,
 		specs:   make(map[string]ServerSpec, len(specs)),
-		clients: make(map[string]*Client),
-		roots:   make(map[string]string),
+		clients: make(map[clientKey]*Client),
 	}
 	for _, s := range specs {
 		m.specs[s.Language] = s
 	}
 	return m
+}
+
+// SetRepoResolver настраивает резолвер репо для multi-repo workspace.
+// Если задан — EnsureOpen поднимает отдельный LSP-инстанс на каждую репу.
+func (m *Manager) SetRepoResolver(r *repos.Resolver) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resolver = r
 }
 
 // Languages возвращает список настроенных языков.
@@ -46,24 +63,32 @@ func (m *Manager) Languages() []string {
 	return out
 }
 
-// Get возвращает или запускает клиент для языка.
+// Get возвращает или запускает клиент для языка без привязки к репе.
+// Сохранено для обратной совместимости. Эквивалентно GetForRepo(ctx, "", language, "").
 func (m *Manager) Get(ctx context.Context, language string) (*Client, error) {
-	return m.GetWithRoot(ctx, language, "")
+	return m.GetForRepo(ctx, "", language, "")
 }
 
-// GetWithRoot возвращает или запускает клиент с указанным workspace root.
+// GetWithRoot — старая сигнатура (без repo). Эквивалентно GetForRepo с repo="".
 func (m *Manager) GetWithRoot(ctx context.Context, language, workspaceRoot string) (*Client, error) {
+	return m.GetForRepo(ctx, "", language, workspaceRoot)
+}
+
+// GetForRepo возвращает или запускает клиента (repo, language) с указанным
+// workspace root. Ключ кэша — пара (repo, language); это позволяет держать
+// одновременно несколько LSP одного языка для разных репо.
+func (m *Manager) GetForRepo(ctx context.Context, repo, language, workspaceRoot string) (*Client, error) {
+	key := clientKey{repo: repo, lang: language}
 	m.mu.Lock()
-	if c, ok := m.clients[language]; ok {
+	if c, ok := m.clients[key]; ok {
 		if c.IsAlive() && (workspaceRoot == "" || samePath(c.localRoot, workspaceRoot)) {
-			lspDebug("LSP %s: reusing existing client (alive, same root %q)\n", language, c.localRoot)
+			lspDebug("LSP %s/%s: reusing existing client (alive, root %q)\n", repo, language, c.localRoot)
 			m.mu.Unlock()
 			return c, nil
 		}
-		// Клиент умер или корень изменился, удаляем из мапы
-		lspDebug("LSP %s: client dead or root changed (%q -> %q), recreating\n", language, c.localRoot, workspaceRoot)
+		lspDebug("LSP %s/%s: client dead or root changed (%q -> %q), recreating\n", repo, language, c.localRoot, workspaceRoot)
 		_ = c.Close()
-		delete(m.clients, language)
+		delete(m.clients, key)
 	}
 	spec, ok := m.specs[language]
 	if !ok {
@@ -72,20 +97,19 @@ func (m *Manager) GetWithRoot(ctx context.Context, language, workspaceRoot strin
 	}
 	m.mu.Unlock()
 
-	// Используем workspace root если указан, иначе общий root
 	root := m.root
 	if workspaceRoot != "" {
 		root = workspaceRoot
 	}
-	lspDebug("LSP %s: starting new client (root=%q)\n", language, root)
+	lspDebug("LSP %s/%s: starting new client (root=%q)\n", repo, language, root)
 	c, err := Start(ctx, spec, root)
 	if err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
-	m.clients[language] = c
+	m.clients[key] = c
 	m.mu.Unlock()
-	lspDebug("LSP %s: client started\n", language)
+	lspDebug("LSP %s/%s: client started\n", repo, language)
 	return c, nil
 }
 
@@ -96,7 +120,29 @@ func (m *Manager) Close() {
 	for _, c := range m.clients {
 		_ = c.Close()
 	}
-	m.clients = make(map[string]*Client)
+	m.clients = make(map[clientKey]*Client)
+}
+
+// resolveRepo возвращает (repoName, repoPath) для абсолютного пути файла.
+// Если резолвер не задан или путь не подпадает под известные репы —
+// возвращает пустые строки.
+func (m *Manager) resolveRepo(abs string) (string, string) {
+	m.mu.Lock()
+	r := m.resolver
+	m.mu.Unlock()
+	if r == nil {
+		return "", ""
+	}
+	name := r.For(abs)
+	if name == "" {
+		return "", ""
+	}
+	for _, rp := range r.All() {
+		if rp.Name == name {
+			return name, rp.Path
+		}
+	}
+	return name, ""
 }
 
 // findWorkspaceRoot ищет ближайший корень workspace вверх по дереву от файла.
@@ -135,7 +181,12 @@ func findWorkspaceRoot(startPath, language string) string {
 }
 
 // EnsureOpen открывает документ в LSP-клиенте, читая его с диска.
-// Путь нормализуется относительно workspace root (ищет go.mod/pom.xml и т.д.).
+//
+// Резолвинг клиента:
+//  1. Если задан repos.Resolver и файл попадает в известную репу — клиент
+//     ключуется по (repo, language), rootURI = repo.Path.
+//  2. Иначе fallback на findWorkspaceRoot (go.mod/pom.xml/...) и затем
+//     на общий m.root. Ключ репы при этом — пустая строка.
 func (m *Manager) EnsureOpen(ctx context.Context, language, path string) (*Client, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -143,32 +194,34 @@ func (m *Manager) EnsureOpen(ctx context.Context, language, path string) (*Clien
 	}
 	abs, _ := filepath.Abs(path)
 
-	// Ищем workspace root для языка ДО создания клиента
-	workspaceRoot := findWorkspaceRoot(abs, language)
+	repoName, repoPath := m.resolveRepo(abs)
+
+	// Выбираем workspaceRoot. Приоритет:
+	// 1) путь самой репы (multi-repo);
+	// 2) маркер языка (go.mod и т.п.) внутри этой репы или единственного workspace;
+	// 3) общий m.root.
+	workspaceRoot := repoPath
+	if workspaceRoot == "" {
+		workspaceRoot = findWorkspaceRoot(abs, language)
+	}
 	if workspaceRoot == "" {
 		workspaceRoot = m.root
 	}
 
-	// Создаём или получаем клиент с правильным root
-	c, err := m.GetWithRoot(ctx, language, workspaceRoot)
+	c, err := m.GetForRepo(ctx, repoName, language, workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
 
-	lspDebug("LSP %s: EnsureOpen: path=%q abs=%q workspaceRoot=%q client.rootURI=%q\n",
-		language, path, abs, workspaceRoot, c.rootURI)
+	lspDebug("LSP %s/%s: EnsureOpen: path=%q abs=%q workspaceRoot=%q client.rootURI=%q\n",
+		repoName, language, path, abs, workspaceRoot, c.rootURI)
 
-	// Нормализуем путь относительно workspace root или общего root
+	// Нормализуем путь относительно workspace root.
 	relPath := abs
 	if workspaceRoot != "" {
-		// Если нашли маркер (go.mod и т.д.), используем его как root
 		if rel, err := filepath.Rel(workspaceRoot, abs); err == nil && !strings.HasPrefix(rel, "..") {
 			relPath = filepath.Join(workspaceRoot, rel)
-			lspDebug("LSP %s: EnsureOpen: normalized to workspace: %q\n", language, relPath)
 		}
-	} else if rel, err := filepath.Rel(m.root, abs); err == nil && !strings.HasPrefix(rel, "..") {
-		relPath = filepath.Join(m.root, rel)
-		lspDebug("LSP %s: EnsureOpen: normalized to manager root: %q\n", language, relPath)
 	}
 
 	if err := c.DidOpen(relPath, language, string(data)); err != nil {

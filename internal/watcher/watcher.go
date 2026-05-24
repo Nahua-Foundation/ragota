@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"aitools/internal/fileutil"
+	"aitools/internal/repos"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -43,7 +44,11 @@ type Event struct {
 	Kind    EventKind
 	AbsPath string
 	RelPath string
-	Time    time.Time
+	// Repo — имя репы из repos.Resolver (если задан), к которой принадлежит
+	// файл. Заполняется через prefix-match по AbsPath. Пусто в single-repo
+	// сценарии или если резолвер не настроен.
+	Repo string
+	Time time.Time
 }
 
 // Watcher рекурсивно следит за директорией, фильтруя по matcher + extensions,
@@ -56,11 +61,20 @@ type Watcher struct {
 
 	fs *fsnotify.Watcher
 
-	mu      sync.Mutex
-	pending map[string]Event
-	timer   *time.Timer
+	mu       sync.Mutex
+	pending  map[string]Event
+	timer    *time.Timer
+	resolver *repos.Resolver
 
 	out chan Event
+}
+
+// SetRepoResolver настраивает резолвер репо для multi-repo workspace.
+// При задании каждое событие будет содержать имя репы в Event.Repo.
+func (w *Watcher) SetRepoResolver(r *repos.Resolver) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.resolver = r
 }
 
 // New создаёт вотчер. Не запускает обход — это делает Start.
@@ -176,6 +190,13 @@ func (w *Watcher) handle(ev fsnotify.Event) {
 		return
 	}
 	rel, _ := filepath.Rel(w.root, ev.Name)
+	w.mu.Lock()
+	r := w.resolver
+	w.mu.Unlock()
+	var repoName string
+	if r != nil {
+		repoName = r.For(ev.Name)
+	}
 	kind := EventWrite
 	switch {
 	case ev.Op&fsnotify.Create != 0:
@@ -189,7 +210,7 @@ func (w *Watcher) handle(ev fsnotify.Event) {
 	default:
 		return
 	}
-	w.enqueue(Event{Kind: kind, AbsPath: ev.Name, RelPath: rel, Time: time.Now()})
+	w.enqueue(Event{Kind: kind, AbsPath: ev.Name, RelPath: rel, Repo: repoName, Time: time.Now()})
 }
 
 func (w *Watcher) enqueue(e Event) {

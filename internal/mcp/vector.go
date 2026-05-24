@@ -47,32 +47,36 @@ func (s *VectorServer) Build() *server.MCPServer {
 	)
 
 	srv.AddTool(mcp.NewTool("vec.search",
-		mcp.WithDescription("Hybrid search over project code (alias for vec.search_hybrid)."),
+		mcp.WithDescription("Hybrid search over project code (alias for vec.search_hybrid). repo: '*' or omitted = all repos; pass a name or JSON array of names to scope."),
 		mcp.WithString("query", mcp.Required()),
 		mcp.WithNumber("limit", mcp.DefaultNumber(10)),
 		mcp.WithString("language"),
+		mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
 	), s.wrap("vec.search", s.handleSearchHybrid))
 
 	srv.AddTool(mcp.NewTool("vec.search_semantic",
-		mcp.WithDescription("Vector-only semantic search (qwen3-embedding for code, nomic-embed-text for markdown)."),
+		mcp.WithDescription("Vector-only semantic search (qwen3-embedding for code, nomic-embed-text for markdown). Multi-repo: default scope = all repos."),
 		mcp.WithString("query", mcp.Required()),
 		mcp.WithNumber("top_k", mcp.DefaultNumber(10)),
 		mcp.WithString("language"),
+		mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
 	), s.wrap("vec.search_semantic", s.handleSearch))
 
 	srv.AddTool(mcp.NewTool("vec.search_keyword",
-		mcp.WithDescription("BM25 lexical search (Bleve)."),
+		mcp.WithDescription("BM25 lexical search (Bleve). Multi-repo: default scope = all repos."),
 		mcp.WithString("query", mcp.Required()),
 		mcp.WithNumber("top_k", mcp.DefaultNumber(10)),
 		mcp.WithString("language"),
 		mcp.WithString("kind", mcp.Description("Optional AST kind filter: function/class/...")),
+		mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
 	), s.wrap("vec.search_keyword", s.handleSearchKeyword))
 
 	srv.AddTool(mcp.NewTool("vec.search_hybrid",
-		mcp.WithDescription("Hybrid retrieval: vector + BM25 merged via RRF (or weighted sum)."),
+		mcp.WithDescription("Hybrid retrieval: vector + BM25 merged via RRF (or weighted sum). Multi-repo: default scope = all repos."),
 		mcp.WithString("query", mcp.Required()),
 		mcp.WithNumber("top_k", mcp.DefaultNumber(10)),
 		mcp.WithString("language"),
+		mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
 	), s.wrap("vec.search_hybrid", s.handleSearchHybrid))
 
 	srv.AddTool(mcp.NewTool("vec.rerank",
@@ -123,6 +127,9 @@ func (s *VectorServer) handleSearch(ctx context.Context, req mcp.CallToolRequest
 	if lang := req.GetString("language", ""); lang != "" {
 		filter["language"] = lang
 	}
+	if rv := parseRepoParam(req.GetString("repo", "")); rv != nil {
+		filter["repo"] = rv
+	}
 	hits, err := s.idx.Search(ctx, query, limit, filter)
 	if err != nil {
 		return nil, err
@@ -143,6 +150,7 @@ func (s *VectorServer) handleSearchKeyword(ctx context.Context, req mcp.CallTool
 		Text:     query,
 		Language: req.GetString("language", ""),
 		Kind:     req.GetString("kind", ""),
+		Repos:    parseRepoListParam(req.GetString("repo", "")),
 		Limit:    limit,
 	})
 	if err != nil {
@@ -163,6 +171,9 @@ func (s *VectorServer) handleSearchHybrid(ctx context.Context, req mcp.CallToolR
 	filter := map[string]any{}
 	if lang := req.GetString("language", ""); lang != "" {
 		filter["language"] = lang
+	}
+	if rv := parseRepoParam(req.GetString("repo", "")); rv != nil {
+		filter["repo"] = rv
 	}
 
 	vecRet := &index.VectorHybridAdapter{V: s.idx}

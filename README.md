@@ -18,6 +18,35 @@
 - **LSP MCP (`lsp`)** — проксирует официальные LSP-сервера (`gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls`). Работает с локально установленными серверами.
 - **`ai-tools watch .`** — поднимает Qdrant в Docker (если указано `--start-docker`), использует Ollama на хосте, запускает индексаторы (vector + BM25 + AST/graph), открывает TUI-дашборд (bubbletea).
 
+### Multi-repo workspace
+
+`ai-tools` автоматически определяет, что лежит в указанной корневой директории:
+
+- **Single-repo.** Если в самом корне есть `.git`, индексируется одна репа с именем = `basename(root)`.
+- **Multi-repo workspace.** Если в корне нет `.git`, но среди его непосредственных поддиректорий есть директории с `.git` — каждая такая директория считается отдельной репой. Соседние поддиректории на том же верхнем уровне (без `.git`) тоже попадают в индекс как «прицепленные репы». Скрытые директории (`.*`) пропускаются.
+
+Правила, которым подчиняется индекс:
+
+- Индекс — **единый на весь workspace** (одна Qdrant-коллекция, один SQLite, один BM25), но у каждого AST-юнита, ребра графа, BM25-документа и Qdrant-точки есть поле `repo` с именем репы.
+- **`vec.*` поиски по умолчанию — глобальные** (по всем репам сразу). Чтобы заскоупить — передайте параметр `repo`:
+  - `repo: "alpha"` — только репа alpha;
+  - `repo: "[\"alpha\",\"beta\"]"` — JSON-массив имён;
+  - `repo: "*"` или отсутствие параметра — все репы.
+  Каждый результат содержит `repo`, чтобы агент видел, откуда он взят.
+- **Граф строится строго в пределах одной репы.** Резолв `dst_id` в `ResolvePendingEdges` фильтрует кандидатов по `dst.repo = src.repo`. Это значит, что одноимённые функции в разных репах (например, `Save` в alpha и `Save` в beta) не смешиваются.
+- **`sym.*` инструменты с параметром `repo`** (синтаксис тот же, что у `vec.*`: имя | JSON-массив | CSV | `"*"`/пусто):
+  - `sym.find_references(symbol, repo?)`
+  - `sym.find_implementations(interface, repo?)`
+  - `sym.find_callers(function, repo?)`
+  - `sym.find_callees(function, repo?)`
+  - `sym.expand_neighbors(node_id, depth?, kinds?, repo?)` — по умолчанию = репа `node_id`; передайте `repo="*"` для всех реп.
+  - `sym.get_call_graph(function|symbol_id, depth?, repo?)` — по умолчанию = репа стартового узла (или единственная репа найденных определений при поиске по `function`).
+  - `ts.search_symbols(query, kind?, language?, limit?, repo?)` — глобален по умолчанию, как `vec.*`.
+- **`sym.*` без `repo`** (работают по конкретному id/path и не нуждаются в фильтре): `sym.find_definition`, `sym.get_symbol`, `sym.get_parent`, `sym.get_children`, `sym.get_file_symbols`, `sym.get_dependency_graph`, `sym.traverse_graph`, `sym.get_surrounding_context`, `sym.get_related_files`, `sym.get_similar_code`, `sym.get_execution_context`, `sym.get_symbol_summary`, `sym.get_file_intent`, `sym.get_semantic_neighborhood`.
+- **Правило для агентов:** `vec.*` и `ts.search_symbols` — глобальны по умолчанию, скоупьте их через `repo`. `sym.*` граф-инструменты — per-repo по умолчанию, расширяйте до `repo="*"` (или списка) только при осознанной необходимости. Всегда смотрите поле `repo` в результатах при сравнении/слиянии сущностей из разных реп.
+- При коллизии имён репо к дубликату добавляется короткий hash-суффикс (например, `myrepo-9f3a1c8e`).
+- При смене состава репо/корня старый SQLite сносится автоматически (workspace-signature). Bleve-индекс и Qdrant — при необходимости пересоздаются обычным путём (`vec.reindex` или удаление коллекции).
+
 ### Требования
 
 - Go 1.26+
@@ -105,7 +134,7 @@ ai-tools serve-lsp        --root /path/to/project
 #### Методы MCP
 
 **ts (Tree-Sitter)** — структурный поиск символов
-- `ts.search_symbols(query, kind?, language?, limit?)` — поиск по имени. **Go-specific**: `kind="function"` finds only functions (e.g., `func foo()`), `kind="method"` finds only methods (e.g., `func (r Receiver) foo()`). Use the correct kind for your search target.
+- `ts.search_symbols(query, kind?, language?, limit?, repo?)` — поиск по имени. **Go-specific**: `kind="function"` finds only functions (e.g., `func foo()`), `kind="method"` finds only methods (e.g., `func (r Receiver) foo()`). `repo` (опц.): имя | JSON-массив | CSV | `"*"`/пусто (по умолчанию — все репы).
 - `ts.list_symbols(file)` — дерево символов файла.
 - `ts.reindex(path?)` — переиндексация.
 - `ts.stats()` — статистика индекса.
@@ -122,10 +151,10 @@ ai-tools serve-lsp        --root /path/to/project
 **sym (Symbol)** — symbol-aware навигация (AST units + code graph)
 - Symbol lookup:
   - `sym.find_definition(symbol)`
-  - `sym.find_references(symbol)`
-  - `sym.find_implementations(interface)`
-  - `sym.find_callers(function)`
-  - `sym.find_callees(function)`
+  - `sym.find_references(symbol, repo?)` — `repo`: имя | JSON-массив | CSV | `"*"`/пусто (все репы).
+  - `sym.find_implementations(interface, repo?)` — те же `repo`-семантики.
+  - `sym.find_callers(function, repo?)` — те же `repo`-семантики.
+  - `sym.find_callees(function, repo?)` — те же `repo`-семантики.
 - AST / structure:
   - `sym.get_file_symbols(path)`
   - `sym.get_symbol(symbol_id)`
@@ -137,9 +166,9 @@ ai-tools serve-lsp        --root /path/to/project
   - `sym.get_parent(symbol_id)`
   - `sym.get_children(symbol_id)`
 - Graph:
-  - `sym.expand_neighbors(node_id, depth)` — BFS по edges.
-  - `sym.get_dependency_graph(module)` — граф import-связей.
-  - `sym.get_call_graph(function)` — граф вызовов.
+  - `sym.expand_neighbors(node_id, depth?, kinds?, repo?)` — BFS по edges. `repo` по умолчанию = репа `node_id`; `"*"` — все репы.
+  - `sym.get_dependency_graph(module, depth?)` — граф import-связей (репа выводится из `module`).
+  - `sym.get_call_graph(function|symbol_id, depth?, repo?)` — граф вызовов. `repo` по умолчанию = репа стартового узла (или единственная репа найденных определений); `"*"` — все репы.
 - Context:
   - `sym.get_surrounding_context(symbol_id)`
   - `sym.get_related_files(symbol_id)`

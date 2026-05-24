@@ -13,6 +13,7 @@ import (
 	"aitools/internal/lsp"
 	mcppkg "aitools/internal/mcp"
 	"aitools/internal/qdrant"
+	"aitools/internal/repos"
 	"aitools/internal/rerank"
 	"aitools/internal/state"
 	"aitools/internal/store"
@@ -32,6 +33,23 @@ func loadCfg(root string) (*config.Config, error) {
 	return config.Load(root, configPath)
 }
 
+// resolveWorkspace выполняет auto-discovery репозиториев и возвращает
+// резолвер + signature для invalidation БД. Стандартный путь для всех
+// serve-команд: даёт согласованный multi-repo контекст.
+func resolveWorkspace(cfg *config.Config) (*repos.Resolver, string, error) {
+	rs, err := repos.Discover(cfg.Root)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(rs) > 1 {
+		fmt.Fprintf(os.Stderr, "ai-tools: multi-repo workspace, найдено %d репо:\n", len(rs))
+		for _, r := range rs {
+			fmt.Fprintf(os.Stderr, "  - %s -> %s\n", r.Name, r.Path)
+		}
+	}
+	return repos.NewResolver(rs), repos.Signature(rs), nil
+}
+
 func newServeTreesitterCmd() *cobra.Command {
 	var root string
 	c := &cobra.Command{
@@ -42,8 +60,12 @@ func newServeTreesitterCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			_, repoSig, err := resolveWorkspace(cfg)
+			if err != nil {
+				return err
+			}
 			bus := state.NewBus(cfg.Root)
-			st, err := store.Open(cfg.SQLitePath())
+			st, err := store.OpenFresh(cfg.SQLitePath(), repoSig)
 			if err != nil {
 				return err
 			}
@@ -67,14 +89,19 @@ func newServeVectorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			resolver, repoSig, err := resolveWorkspace(cfg)
+			if err != nil {
+				return err
+			}
 			bus := state.NewBus(cfg.Root)
 			qd := qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))
 			emb := embedder.New(cfg.Ollama.URL, cfg.Ollama.EmbedModel)
-			st, _ := store.Open(cfg.SQLitePath())
+			st, _ := store.OpenFresh(cfg.SQLitePath(), repoSig)
 			if st != nil {
 				defer st.Close()
 			}
 			idx := index.NewVector(cfg, qd, emb, st, bus)
+			idx.SetRepoResolver(resolver)
 
 			var bleveIx bm25.Index
 			if cfg.BM25.Enabled {
@@ -119,8 +146,12 @@ func newServeLSPCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			resolver, repoSig, err := resolveWorkspace(cfg)
+			if err != nil {
+				return err
+			}
 			bus := state.NewBus(cfg.Root)
-			st, _ := store.Open(cfg.SQLitePath())
+			st, _ := store.OpenFresh(cfg.SQLitePath(), repoSig)
 			if st != nil {
 				defer st.Close()
 			}
@@ -135,6 +166,7 @@ func newServeLSPCmd() *cobra.Command {
 				})
 			}
 			mgr := lsp.NewManager(cfg.Root, specs)
+			mgr.SetRepoResolver(resolver)
 			defer mgr.Close()
 			srv := mcppkg.NewLSPServer(cfg, mgr, st, bus).Build()
 			return server.ServeStdio(srv)
@@ -154,8 +186,12 @@ func newServeSymbolCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			resolver, repoSig, err := resolveWorkspace(cfg)
+			if err != nil {
+				return err
+			}
 			bus := state.NewBus(cfg.Root)
-			st, err := store.Open(cfg.SQLitePath())
+			st, err := store.OpenFresh(cfg.SQLitePath(), repoSig)
 			if err != nil {
 				return err
 			}
@@ -172,6 +208,7 @@ func newServeSymbolCmd() *cobra.Command {
 				})
 			}
 			lspMgr := lsp.NewManager(cfg.Root, specs)
+			lspMgr.SetRepoResolver(resolver)
 			defer lspMgr.Close()
 			gr := graph.NewWithLSP(cfg, st, lspMgr)
 			syms := symbols.New(st, gr, nil)
@@ -179,6 +216,7 @@ func newServeSymbolCmd() *cobra.Command {
 			qd := qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))
 			emb := embedder.New(cfg.Ollama.URL, cfg.Ollama.EmbedModel)
 			vIdx := index.NewVector(cfg, qd, emb, st, bus)
+			vIdx.SetRepoResolver(resolver)
 			syms.SetSimilarSearcher(vIdx)
 
 			srv := mcppkg.NewSymbolServer(cfg, st, syms, gr, bus).Build()

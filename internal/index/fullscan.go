@@ -163,10 +163,15 @@ func (v *Vector) prepareFile(ctx context.Context, abs string) (*preparedFile, er
 	}
 
 	rel, _ := filepath.Rel(v.cfg.Root, abs)
+	var repo string
+	if v.resolv != nil {
+		repo = v.resolv.For(abs)
+	}
 	return &preparedFile{
 		abs:      abs,
 		rel:      rel,
 		lang:     lang,
+		repo:     repo,
 		hash:     hash,
 		chunks:   chunks,
 		collSpec: collection,
@@ -320,6 +325,7 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 				Payload: map[string]any{
 					"file":       f.abs,
 					"rel":        f.rel,
+					"repo":       f.repo,
 					"language":   f.lang,
 					"start_line": ch.StartLine,
 					"end_line":   ch.EndLine,
@@ -345,6 +351,7 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 			for i, ch := range f.chunks {
 				allDocs = append(allDocs, bm25.Doc{
 					ID:        fmt.Sprintf("%s#%d", f.abs, i),
+					Repo:      f.repo,
 					Path:      f.abs,
 					Language:  f.lang,
 					Kind:      ch.Kind,

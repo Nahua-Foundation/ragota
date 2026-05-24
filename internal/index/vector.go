@@ -33,6 +33,7 @@ import (
 	"aitools/internal/fileutil"
 	"aitools/internal/parser"
 	"aitools/internal/qdrant"
+	"aitools/internal/repos"
 	"aitools/internal/state"
 	"aitools/internal/store"
 )
@@ -66,6 +67,8 @@ type Vector struct {
 	bus     *state.Bus
 	matcher *fileutil.Matcher
 	store   *store.SQLite
+	// resolv — резолвер репо (multi-repo workspace). nil = single-root.
+	resolv *repos.Resolver
 
 	mu           sync.Mutex
 	totalChunks  atomic.Int64
@@ -79,6 +82,7 @@ type preparedFile struct {
 	abs      string
 	rel      string
 	lang     string
+	repo     string // имя репы (multi-repo workspace), "" = legacy/single-root
 	hash     string
 	chunks   []chunker.Chunk
 	collSpec config.CollectionSpec
@@ -127,6 +131,10 @@ func (v *Vector) GetSemaphore() chan struct{} {
 // SetBM25 подключает Bleve-индекс к индексатору; если bm25 == nil —
 // лексический индекс не используется.
 func (v *Vector) SetBM25(idx bm25.Index) { v.bm25 = idx }
+
+// SetRepoResolver подключает резолвер репозиториев для multi-repo
+// workspace. Если не вызван — поле `repo` в payload остаётся пустым.
+func (v *Vector) SetRepoResolver(r *repos.Resolver) { v.resolv = r }
 
 // Init создаёт обе коллекции в Qdrant и при необходимости запускает
 // автоматическую переиндексацию (когда модель эмбеддингов сменилась).

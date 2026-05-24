@@ -37,17 +37,26 @@ import (
 	"aitools/internal/config"
 	"aitools/internal/fileutil"
 	pkgparser "aitools/internal/parser"
+	"aitools/internal/repos"
 	"aitools/internal/state"
 	"aitools/internal/store"
 )
 
 // Indexer — индексатор AST units и edges.
+//
+// В multi-repo workspace индексатор получает резолвер репо
+// (repos.Resolver) и проставляет поле Repo каждой AST-единицы и ребра по
+// prefix-match абсолютного пути файла к одному из известных репо.
+// Если резолвер пуст (nil) или путь не соответствует ни одной репе —
+// repo остаётся пустым (обратная совместимость со старым single-root
+// поведением).
 type Indexer struct {
 	cfg     *config.Config
 	st      *store.SQLite
 	ts      *pkgparser.Parser
 	bus     *state.Bus
 	matcher *fileutil.Matcher
+	resolv  *repos.Resolver
 }
 
 // New создаёт индексатор.
@@ -59,6 +68,10 @@ func New(cfg *config.Config, st *store.SQLite) *Indexer {
 		matcher: fileutil.NewMatcher(cfg.Ignore),
 	}
 }
+
+// SetRepoResolver подключает резолвер репозиториев. Если не вызван,
+// индексатор ведёт себя как раньше (одна анонимная репа = "").
+func (i *Indexer) SetRepoResolver(r *repos.Resolver) { i.resolv = r }
 
 // SetBus устанавливает шину событий для статистики.
 func (i *Indexer) SetBus(bus *state.Bus) {
@@ -106,6 +119,18 @@ func (i *Indexer) indexFile(ctx context.Context, path string, resolveEdges bool)
 	}
 	if err != nil {
 		return err
+	}
+
+	// Определяем репу, к которой относится файл (multi-repo workspace).
+	// Если резолвер не подключён или путь не покрывается ни одной репой —
+	// repo = "" (legacy single-root режим).
+	var repo string
+	if i.resolv != nil {
+		repo = i.resolv.For(path)
+	}
+	// Проставляем repo всем юнитам файла.
+	for k := range units {
+		units[k].Repo = repo
 	}
 
 	// Запись units. parent_id здесь — индексный (0-based) reference на
@@ -165,6 +190,7 @@ func (i *Indexer) indexFile(ctx context.Context, path string, resolveEdges bool)
 			continue
 		}
 		ed := store.Edge{
+			Repo:     repo,
 			SrcID:    persisted[e.srcIdx].ID,
 			Kind:     e.kind,
 			DstName:  e.dstName,

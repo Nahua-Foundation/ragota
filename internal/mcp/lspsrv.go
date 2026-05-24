@@ -141,7 +141,7 @@ func (s *LSPServer) handleDefinition(ctx context.Context, req mcp.CallToolReques
 		}
 		word, wordErr := s.wordAt(abs, line, char)
 		if wordErr == nil && word != "" && s.st != nil {
-			units, _ := s.st.FindASTUnits(ctx, word, "", "", 10)
+			units, _ := s.st.FindASTUnits(ctx, word, "", "", "", 10)
 			if len(units) > 0 {
 				var fallbackLocs []lsp.Location
 				for _, u := range units {
@@ -204,7 +204,7 @@ func (s *LSPServer) handleReferences(ctx context.Context, req mcp.CallToolReques
 		}
 		word, _ := s.wordAt(abs, line, char)
 		if word != "" && s.st != nil {
-			units, _ := s.st.FindASTUnits(ctx, word, "", "", 10)
+			units, _ := s.st.FindASTUnits(ctx, word, "", "", "", 10)
 			if len(units) > 0 {
 				// Ищем все упоминания символа в файлах (упрощённо — по имени)
 				var fallbackLocs []lsp.Location
@@ -266,7 +266,7 @@ func (s *LSPServer) handleHover(ctx context.Context, req mcp.CallToolRequest) (*
 		}
 		word, _ := s.wordAt(abs, line, char)
 		if word != "" && s.st != nil {
-			units, _ := s.st.FindASTUnits(ctx, word, "", "", 1)
+			units, _ := s.st.FindASTUnits(ctx, word, "", "", "", 1)
 			if len(units) > 0 {
 				u := units[0]
 				fallbackTxt := fmt.Sprintf("Symbol: %s (%s)\n%s", u.Name, u.Kind, u.Signature)

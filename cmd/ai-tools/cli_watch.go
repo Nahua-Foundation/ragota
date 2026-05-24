@@ -16,6 +16,7 @@ import (
 	"aitools/internal/fileutil"
 	"aitools/internal/index"
 	"aitools/internal/qdrant"
+	"aitools/internal/repos"
 	"aitools/internal/state"
 	"aitools/internal/store"
 	"aitools/internal/tui"
@@ -59,6 +60,20 @@ func newWatchCmd() *cobra.Command {
 
 			bus := state.NewBus(cfg.Root)
 
+			// 0. Auto-discovery репо в workspace. Один резолвер пробрасывается
+			// во все индексаторы и watcher для multi-repo маршрутизации.
+			discovered, err := repos.Discover(cfg.Root)
+			if err != nil {
+				return err
+			}
+			if len(discovered) > 1 {
+				fmt.Fprintf(os.Stderr, "repos: найдено %d репо в workspace:\n", len(discovered))
+				for _, r := range discovered {
+					fmt.Fprintf(os.Stderr, "  - %s (%s)\n", r.Name, r.Path)
+				}
+			}
+			repoResolver := repos.NewResolver(discovered)
+
 			// 1. docker — только по флагу --start-docker (контейнеры из конфига).
 			if startDocker {
 				runner := docker.New(cfg.Root, cfg.Docker)
@@ -97,6 +112,7 @@ func newWatchCmd() *cobra.Command {
 				tsIdx = index.NewTreeSitter(cfg, st, bus)
 				astIdx = astindex.New(cfg, st)
 				astIdx.SetBus(bus)
+				astIdx.SetRepoResolver(repoResolver)
 			}
 
 			// 3. vector
@@ -105,6 +121,7 @@ func newWatchCmd() *cobra.Command {
 				qd := qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))
 				emb := embedder.New(cfg.Ollama.URL, cfg.Ollama.EmbedModel)
 				vIdx = index.NewVector(cfg, qd, emb, st, bus)
+				vIdx.SetRepoResolver(repoResolver)
 				// ждём готовности qdrant/ollama (10 попыток по 2с)
 				go func() {
 					for i := 0; i < 30; i++ {
@@ -145,6 +162,7 @@ func newWatchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			w.SetRepoResolver(repoResolver)
 			defer w.Close()
 			if err := w.Start(ctx); err != nil {
 				return err
@@ -208,4 +226,3 @@ func newWatchCmd() *cobra.Command {
 	c.Flags().BoolVar(&noTUI, "no-tui", false, "no TUI dashboard, just run in background")
 	return c
 }
-

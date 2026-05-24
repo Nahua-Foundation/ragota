@@ -11,27 +11,29 @@ import (
 
 // ResolvePendingEdges пытается разрешить dst_id для всех edges с dst_id=0,
 // используя точное совпадение dst_name с ast_units.qualified или
-// ast_units.name. Резолв выполняется в пределах одного языка — это
-// предотвращает кросс-языковые ложные привязки (например, TS-вызов
-// log() матчится с Go-функцией log в другом пакете).
+// ast_units.name. Резолв выполняется в пределах одного языка И одной репы:
+//
+//   - Языковая граница: предотвращает кросс-языковые ложные привязки
+//     (например, TS-вызов log() не должен матчиться с Go-функцией log).
+//   - Repo-граница (multi-repo workspace): функция Save в репо A никогда
+//     не должна резолвиться в Save из репо B — графы репо независимы.
 //
 // Алгоритм:
-//  1. Определяем язык каждого ребра по его src (через JOIN с ast_units).
-//  2. Ищем кандидата в ast_units, у которого тот же language и совпадает
-//     qualified или name (qualified имеет приоритет).
-//  3. Сначала прогон с qualified-матчем, затем — с name-матчем для
-//     оставшихся (двухпроходный резолв проще и стабильнее, чем единый
-//     UPDATE с коррелированным CASE ORDER BY в SQLite).
+//  1. Определяем язык/репо каждого ребра по его src (JOIN с ast_units).
+//  2. Ищем кандидата в ast_units того же language И того же repo.
+//  3. Сначала qualified-матч, затем name-матч для оставшихся.
 //
 // Возвращает суммарное количество разрешённых рёбер.
 func (s *SQLite) ResolvePendingEdges(ctx context.Context) (int, error) {
-	// Pass 1: qualified-матч (точный, кросс-файловый, но одноязычный).
+	// Pass 1: qualified-матч (точный, кросс-файловый, одноязычный,
+	// одна репа).
 	res1, err := s.db.ExecContext(ctx, `
 		UPDATE edges SET dst_id = (
 			SELECT dst.id FROM ast_units AS dst
 			 JOIN ast_units AS src ON src.id = edges.src_id
 			 WHERE dst.qualified = edges.dst_name
 			   AND dst.language = src.language
+			   AND dst.repo = src.repo
 			 LIMIT 1
 		)
 		WHERE dst_id = 0 AND dst_name <> '' AND EXISTS (
@@ -39,21 +41,21 @@ func (s *SQLite) ResolvePendingEdges(ctx context.Context) (int, error) {
 			 JOIN ast_units AS src ON src.id = edges.src_id
 			 WHERE dst.qualified = edges.dst_name
 			   AND dst.language = src.language
+			   AND dst.repo = src.repo
 		)`)
 	if err != nil {
 		return 0, err
 	}
 	n1, _ := res1.RowsAffected()
 
-	// Pass 2: name-матч для всё ещё неразрешённых (всё так же в пределах
-	// одного языка). qualified уже был разрешён в первом проходе и сюда не
-	// попадёт благодаря условию dst_id = 0.
+	// Pass 2: name-матч для всё ещё неразрешённых (тот же язык + репа).
 	res2, err := s.db.ExecContext(ctx, `
 		UPDATE edges SET dst_id = (
 			SELECT dst.id FROM ast_units AS dst
 			 JOIN ast_units AS src ON src.id = edges.src_id
 			 WHERE dst.name = edges.dst_name
 			   AND dst.language = src.language
+			   AND dst.repo = src.repo
 			 LIMIT 1
 		)
 		WHERE dst_id = 0 AND dst_name <> '' AND EXISTS (
@@ -61,6 +63,7 @@ func (s *SQLite) ResolvePendingEdges(ctx context.Context) (int, error) {
 			 JOIN ast_units AS src ON src.id = edges.src_id
 			 WHERE dst.name = edges.dst_name
 			   AND dst.language = src.language
+			   AND dst.repo = src.repo
 		)`)
 	if err != nil {
 		return 0, err
@@ -87,13 +90,13 @@ func (s *SQLite) ReplaceEdges(ctx context.Context, srcFile string, edges []Edge)
 		return tx.Commit()
 	}
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO edges(src_id, dst_id, kind, dst_name, file_path, line) VALUES(?,?,?,?,?,?)`)
+		`INSERT INTO edges(repo, src_id, dst_id, kind, dst_name, file_path, line) VALUES(?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, e := range edges {
-		if _, err := stmt.ExecContext(ctx, e.SrcID, e.DstID, e.Kind, e.DstName, e.FilePath, e.Line); err != nil {
+		if _, err := stmt.ExecContext(ctx, e.Repo, e.SrcID, e.DstID, e.Kind, e.DstName, e.FilePath, e.Line); err != nil {
 			return err
 		}
 	}
@@ -105,7 +108,7 @@ func scanEdges(rows *sql.Rows) ([]Edge, error) {
 	out := []Edge{}
 	for rows.Next() {
 		var e Edge
-		if err := rows.Scan(&e.ID, &e.SrcID, &e.DstID, &e.Kind, &e.DstName, &e.FilePath, &e.Line); err != nil {
+		if err := rows.Scan(&e.ID, &e.Repo, &e.SrcID, &e.DstID, &e.Kind, &e.DstName, &e.FilePath, &e.Line); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -113,7 +116,7 @@ func scanEdges(rows *sql.Rows) ([]Edge, error) {
 	return out, rows.Err()
 }
 
-const edgeColumns = `id, src_id, dst_id, kind, dst_name, file_path, line`
+const edgeColumns = `id, repo, src_id, dst_id, kind, dst_name, file_path, line`
 
 // EdgesFrom возвращает все исходящие рёбра из srcID. kind="" — без фильтра.
 func (s *SQLite) EdgesFrom(ctx context.Context, srcID int64, kind string) ([]Edge, error) {
@@ -177,25 +180,46 @@ func (s *SQLite) EdgesByDstName(ctx context.Context, name, kind string) ([]Edge,
 }
 
 // EdgesByDstNameForLang — то же, что EdgesByDstName, но дополнительно
-// фильтрует рёбра по языку источника: учитываются только рёбра, у которых
-// исходный ast_unit (edges.src_id) имеет ast_units.language = lang.
-// Если lang == "" — поведение совпадает с EdgesByDstName.
+// фильтрует рёбра по языку источника. Repo-фильтр не применяется (поиск
+// идёт по всем репо). Эквивалентен EdgesByDstNameForLangRepo с repo="".
 //
 // Цель: при поиске callers/references/implementations не подмешивать
 // совпадения имён из других языков (например, TS-вызов log() не должен
 // возвращать Go-определения log).
 func (s *SQLite) EdgesByDstNameForLang(ctx context.Context, name, kind, lang string) ([]Edge, error) {
-	if lang == "" {
+	return s.EdgesByDstNameForLangRepo(ctx, name, kind, lang, "")
+}
+
+// EdgesByDstNameForLangRepo — расширение EdgesByDstNameForLang с
+// фильтром по репе источника. В multi-repo workspace используется для
+// гарантии, что граф не пересекает границы репы: callers/references для
+// функции Save из репо A не должны вернуть совпадения dst_name="Save"
+// из репо B.
+//
+// Параметры:
+//   - name — имя или qualified-имя dst;
+//   - kind — фильтр edges.kind ("" = без фильтра);
+//   - lang — фильтр src.language ("" = без фильтра);
+//   - repo — фильтр src.repo ("" или "*" — без фильтра).
+func (s *SQLite) EdgesByDstNameForLangRepo(ctx context.Context, name, kind, lang, repo string) ([]Edge, error) {
+	if lang == "" && (repo == "" || repo == "*") {
 		return s.EdgesByDstName(ctx, name, kind)
 	}
-	// Явные алиасы в SELECT обязательны: после JOIN с ast_units колонка
-	// `id` становится неоднозначной (есть и в edges, и в ast_units).
-	q := `SELECT edges.id, edges.src_id, edges.dst_id, edges.kind, edges.dst_name, edges.file_path, edges.line
+	// Явные алиасы edges.* обязательны: после JOIN с ast_units такие
+	// колонки как `id`, `repo` становятся неоднозначными.
+	q := `SELECT edges.id, edges.repo, edges.src_id, edges.dst_id, edges.kind, edges.dst_name, edges.file_path, edges.line
 	      FROM edges
 	      JOIN ast_units AS src ON src.id = edges.src_id
-	      WHERE (edges.dst_name = ? OR edges.dst_name LIKE ?)
-	        AND src.language = ?`
-	args := []any{name, "%." + name, lang}
+	      WHERE (edges.dst_name = ? OR edges.dst_name LIKE ?)`
+	args := []any{name, "%." + name}
+	if lang != "" {
+		q += ` AND src.language = ?`
+		args = append(args, lang)
+	}
+	if repo != "" && repo != "*" {
+		q += ` AND src.repo = ?`
+		args = append(args, repo)
+	}
 	if kind != "" {
 		q += ` AND edges.kind = ?`
 		args = append(args, kind)

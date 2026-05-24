@@ -15,14 +15,14 @@ func scanASTUnit(rows interface {
 }) (ASTUnit, error) {
 	var u ASTUnit
 	err := rows.Scan(
-		&u.ID, &u.FilePath, &u.Language, &u.Kind, &u.Name, &u.Qualified,
+		&u.ID, &u.Repo, &u.FilePath, &u.Language, &u.Kind, &u.Name, &u.Qualified,
 		&u.ParentID, &u.StartLine, &u.EndLine, &u.StartByte, &u.EndByte,
 		&u.Signature, &u.Doc, &u.Hash,
 	)
 	return u, err
 }
 
-const astUnitColumns = `id, file_path, language, kind, name, qualified, parent_id, start_line, end_line, start_byte, end_byte, signature, doc, hash`
+const astUnitColumns = `id, repo, file_path, language, kind, name, qualified, parent_id, start_line, end_line, start_byte, end_byte, signature, doc, hash`
 
 // ReplaceASTUnits атомарно заменяет все AST-единицы файла. Возвращает map
 // "name -> id" для свежезаписанных юнитов — удобно при последующей записи
@@ -43,9 +43,9 @@ func (s *SQLite) ReplaceASTUnits(ctx context.Context, filePath string, units []A
 		return nil, err
 	}
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO ast_units(file_path, language, kind, name, qualified, parent_id,
+		`INSERT INTO ast_units(repo, file_path, language, kind, name, qualified, parent_id,
 			start_line, end_line, start_byte, end_byte, signature, doc, hash)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func (s *SQLite) ReplaceASTUnits(ctx context.Context, filePath string, units []A
 	ids := make(map[string]int64, len(units))
 	for _, u := range units {
 		res, err := stmt.ExecContext(ctx,
-			filePath, u.Language, u.Kind, u.Name, u.Qualified, u.ParentID,
+			u.Repo, filePath, u.Language, u.Kind, u.Name, u.Qualified, u.ParentID,
 			u.StartLine, u.EndLine, u.StartByte, u.EndByte,
 			u.Signature, u.Doc, u.Hash)
 		if err != nil {
@@ -113,8 +113,14 @@ func (s *SQLite) GetASTUnit(ctx context.Context, id int64) (*ASTUnit, error) {
 }
 
 // FindASTUnits ищет AST units по имени/qualified (LIKE), опционально
-// фильтруя по kind/language.
-func (s *SQLite) FindASTUnits(ctx context.Context, query, kind, language string, limit int) ([]ASTUnit, error) {
+// фильтруя по kind/language/repo.
+//
+// repo:
+//   - ""    — без фильтра (поиск по всем репо workspace);
+//   - имя репы — точное совпадение по полю repo;
+//   - "*"   — эквивалентно "" (специальное значение для совместимости с
+//     MCP-параметром «все репо»).
+func (s *SQLite) FindASTUnits(ctx context.Context, query, kind, language, repo string, limit int) ([]ASTUnit, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -130,6 +136,10 @@ func (s *SQLite) FindASTUnits(ctx context.Context, query, kind, language string,
 	if language != "" {
 		q += ` AND language = ?`
 		args = append(args, language)
+	}
+	if repo != "" && repo != "*" {
+		q += ` AND repo = ?`
+		args = append(args, repo)
 	}
 	// Точные совпадения раньше LIKE.
 	q += ` ORDER BY CASE WHEN name = ? COLLATE NOCASE OR qualified = ? COLLATE NOCASE THEN 0 ELSE 1 END, length(name) ASC LIMIT ?`

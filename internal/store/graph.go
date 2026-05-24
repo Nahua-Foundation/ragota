@@ -19,7 +19,12 @@ import "database/sql"
 // ASTUnit — самостоятельная AST-единица: function/method/class/interface/module/...
 // Используется для hybrid retrieval, parent-child навигации и graph expansion.
 type ASTUnit struct {
-	ID        int64
+	ID int64
+	// Repo — имя репозитория, к которому относится юнит. В multi-repo
+	// workspace используется для разделения графа: рёбра графа никогда
+	// не пересекают границу репы (см. ResolvePendingEdges и
+	// EdgesByDstNameForLangRepo).
+	Repo      string
 	FilePath  string
 	Language  string
 	Kind      string
@@ -45,9 +50,12 @@ type ASTUnit struct {
 //   - "reference"   : src ссылается на dst (поле/переменная/тип)
 //   - "contains"    : src содержит dst (parent-child, дублирует ParentID, опционально)
 type Edge struct {
-	ID       int64  `json:"id"`
-	SrcID    int64  `json:"src_id"`
-	DstID    int64  `json:"dst_id"` // 0 если ещё не разрешено — тогда используется DstName
+	ID    int64 `json:"id"`
+	SrcID int64 `json:"src_id"`
+	DstID int64 `json:"dst_id"` // 0 если ещё не разрешено — тогда используется DstName
+	// Repo — имя репозитория источника ребра. Резолв dst допускается
+	// только внутри той же репы (см. ResolvePendingEdges).
+	Repo     string `json:"repo"`
 	Kind     string `json:"kind"`
 	DstName  string `json:"dst_name"`
 	FilePath string `json:"file_path"`

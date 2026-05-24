@@ -24,6 +24,7 @@ var ErrClosed = errors.New("bm25: index is closed")
 // "<file>:<ast_unit_id>" либо "<file>:<chunk_idx>").
 type Doc struct {
 	ID        string `json:"id"`
+	Repo      string `json:"repo"` // имя репы (multi-repo workspace), "" = single-root
 	Path      string `json:"path"`
 	Language  string `json:"language"`
 	Kind      string `json:"kind"`   // ast unit kind (function/class/...) либо "chunk" для текстовых чанков
@@ -38,6 +39,7 @@ type Doc struct {
 type Hit struct {
 	ID        string  `json:"id"`
 	Score     float64 `json:"score"`
+	Repo      string  `json:"repo"`
 	Path      string  `json:"path"`
 	Language  string  `json:"language"`
 	Kind      string  `json:"kind"`
@@ -51,8 +53,9 @@ type Hit struct {
 // Query — параметры BM25-поиска.
 type Query struct {
 	Text     string
-	Language string // фильтр
-	Kind     string // фильтр (function/class/...)
+	Language string   // фильтр
+	Kind     string   // фильтр (function/class/...)
+	Repos    []string // фильтр по репам (multi-repo). nil/пусто = все репы.
 	Limit    int
 }
 
@@ -121,7 +124,7 @@ func buildMapping() mapping.IndexMapping {
 	keywordField := bleve.NewTextFieldMapping()
 	keywordField.Analyzer = "keyword"
 	keywordField.Store = true
-	for _, name := range []string{"path", "language", "kind", "id"} {
+	for _, name := range []string{"path", "language", "kind", "id", "repo"} {
 		docMap.AddFieldMappingsAt(name, keywordField)
 	}
 
@@ -220,10 +223,25 @@ func (b *bleveIndex) Search(ctx context.Context, q Query) ([]Hit, error) {
 		f.SetField("kind")
 		parts = append(parts, f)
 	}
+	if len(q.Repos) > 0 {
+		repoParts := make([]query.Query, 0, len(q.Repos))
+		for _, r := range q.Repos {
+			if r == "" || r == "*" {
+				repoParts = nil // "*" среди значений отключает фильтр
+				break
+			}
+			t := bleve.NewTermQuery(r)
+			t.SetField("repo")
+			repoParts = append(repoParts, t)
+		}
+		if len(repoParts) > 0 {
+			parts = append(parts, bleve.NewDisjunctionQuery(repoParts...))
+		}
+	}
 
 	req := bleve.NewSearchRequest(bleve.NewConjunctionQuery(parts...))
 	req.Size = limit
-	req.Fields = []string{"path", "language", "kind", "symbol", "ast_unit_id", "start_line", "end_line", "content"}
+	req.Fields = []string{"repo", "path", "language", "kind", "symbol", "ast_unit_id", "start_line", "end_line", "content"}
 	req.Highlight = bleve.NewHighlight()
 
 	res, err := b.idx.SearchInContext(ctx, req)
@@ -233,6 +251,7 @@ func (b *bleveIndex) Search(ctx context.Context, q Query) ([]Hit, error) {
 	out := make([]Hit, 0, len(res.Hits))
 	for _, h := range res.Hits {
 		hit := Hit{ID: h.ID, Score: h.Score}
+		hit.Repo, _ = h.Fields["repo"].(string)
 		hit.Path, _ = h.Fields["path"].(string)
 		hit.Language, _ = h.Fields["language"].(string)
 		hit.Kind, _ = h.Fields["kind"].(string)
