@@ -171,6 +171,8 @@ func (s *SQLite) init() error {
 			end_line    INTEGER NOT NULL,
 			start_byte  INTEGER NOT NULL,
 			end_byte    INTEGER NOT NULL,
+			name_start_line INTEGER NOT NULL DEFAULT 0,
+			name_start_col  INTEGER NOT NULL DEFAULT 0,
 			signature   TEXT NOT NULL DEFAULT '',
 			doc         TEXT NOT NULL DEFAULT '',
 			hash        TEXT NOT NULL DEFAULT '', -- хэш содержимого юнита для инкрементальной индексации
@@ -178,13 +180,13 @@ func (s *SQLite) init() error {
 			FOREIGN KEY (parent_id) REFERENCES ast_units(id) ON DELETE SET NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_file ON ast_units(file_path)`,
-		`CREATE INDEX IF NOT EXISTS idx_ast_units_name ON ast_units(name)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_name ON ast_units(name COLLATE NOCASE)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_kind ON ast_units(kind)`,
-		`CREATE INDEX IF NOT EXISTS idx_ast_units_qualified ON ast_units(qualified)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_qualified ON ast_units(qualified COLLATE NOCASE)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_parent ON ast_units(parent_id)`,
 		// Repo-aware индексы (multi-repo).
-		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_qualified ON ast_units(repo, qualified)`,
-		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_name ON ast_units(repo, name)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_qualified ON ast_units(repo, qualified COLLATE NOCASE)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_name ON ast_units(repo, name COLLATE NOCASE)`,
 
 		// Edges — направленные связи между AST-единицами для graph expansion.
 		// kind: call | import | implements | reference | extends | contains
@@ -204,6 +206,7 @@ func (s *SQLite) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_edges_src  ON edges(src_id, kind)`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_dst  ON edges(dst_id, kind)`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind)`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_unresolved ON edges(dst_id, dst_name) WHERE dst_id = 0`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name ON edges(dst_name) WHERE dst_id = 0`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_repo_dst_name_kind ON edges(repo, dst_name, kind)`,
 
@@ -236,6 +239,8 @@ func (s *SQLite) init() error {
 		`ALTER TABLE files ADD COLUMN vec_hash TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ast_units ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE edges ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ast_units ADD COLUMN name_start_line INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE ast_units ADD COLUMN name_start_col INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, q := range alters {
 		_, _ = s.db.Exec(q)

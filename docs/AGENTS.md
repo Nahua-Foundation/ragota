@@ -35,7 +35,7 @@ Rules agents must observe:
   - `sym.get_call_graph(function|symbol_id, depth?, repo?)` — default = repo of the start node (or the single repo of all matched definitions when `function` is given).
   - `ts.search_symbols(query, kind?, language?, limit?, repo?)`
 - **Defaults for `sym.*` graph tools**: when `repo` is omitted, the result is scoped to the repo of the starting node/definition. Pass `repo="*"` to override and span all repos; pass a name / JSON-array / CSV to restrict to one or several specific repos.
-- **Tools without a `repo` parameter** (operate on a single AST unit / file / id and need no filter): `sym.find_definition`, `sym.get_symbol`, `sym.get_parent`, `sym.get_children`, `sym.get_file_symbols`, `sym.get_dependency_graph`, `sym.traverse_graph`, `sym.get_surrounding_context`, `sym.get_related_files`, `sym.get_similar_code`, `sym.get_execution_context`, `sym.get_symbol_summary`, `sym.get_file_intent`, `sym.get_semantic_neighborhood`. For these, repo is implied by the input id/path.
+- **Tools without a `repo` parameter** (operate on a single AST unit / file / id and need no filter): `sym.find_definition`, `sym.get_symbol`, `sym.get_parent`, `sym.get_children`, `sym.get_file_symbols`, `sym.get_dependency_graph`, `sym.traverse_graph`, `sym.get_surrounding_context`, `sym.get_related_files`, `sym.get_similar_code`, `sym.get_execution_context`, `sym.get_symbol_summary`, `sym.get_file_intent`, `sym.get_semantic_neighborhood` (requires symbol ID, not file path). For these, repo is implied by the input id/path.
 - Every result includes a `repo` field — always use it to disambiguate same-named files/symbols across repos when reasoning about multi-repo results.
 
 ---
@@ -82,7 +82,7 @@ AST / structure retrieval:
 
 Graph retrieval:
 - `sym.expand_neighbors(node_id, depth?, kinds?, repo?)` — N-hop neighborhood. `kinds` is a comma-separated subset of `call,import,implements,extends,reference` (empty = all). `repo` default = repo of `node_id`; pass `"*"` to span all repos, or a name / JSON-array / CSV to restrict.
-- `sym.get_dependency_graph(module, depth?)` — import-graph around a module/file (repo derived from `module`).
+- `sym.get_dependency_graph(module, depth?)` — import-graph around a module/file (repo derived from `module`). **For Go, a full or relative path is required (filenames are not enough).**
 - `sym.get_call_graph(function|symbol_id, depth?, repo?)` — call graph around a function. `repo` default = repo of the start node (or unique repo of matched definitions); use `"*"` to override and span all repos.
 
 Context retrieval:

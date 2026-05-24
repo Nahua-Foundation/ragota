@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -37,6 +38,25 @@ func (i *Indexer) parseWithTreeSitter(ctx context.Context, lang, path string, sr
 	root := tree.RootNode()
 
 	moduleName := filepath.Base(path)
+	parentQualified := moduleName
+
+	// Для Java: пытаемся найти package declaration, чтобы построить правильный qualified name.
+	if lang == "java" {
+		for i := 0; i < int(root.NamedChildCount()); i++ {
+			ch := root.NamedChild(i)
+			if ch.Type() == "package_declaration" {
+				// Внутри package_declaration обычно identifier или scoped_identifier.
+				for j := 0; j < int(ch.NamedChildCount()); j++ {
+					sub := ch.NamedChild(j)
+					if sub.Type() == "identifier" || sub.Type() == "scoped_identifier" {
+						parentQualified = nodeText(sub, src)
+						break
+					}
+				}
+				break
+			}
+		}
+	}
 
 	var units []store.ASTUnit
 	var edges []pendingEdge
@@ -48,7 +68,7 @@ func (i *Indexer) parseWithTreeSitter(ctx context.Context, lang, path string, sr
 		Language:  lang,
 		Kind:      "module",
 		Name:      moduleName,
-		Qualified: moduleName,
+		Qualified: parentQualified,
 		StartLine: 1,
 		EndLine:   int(root.EndPoint().Row) + 1,
 		StartByte: 0,
@@ -56,7 +76,8 @@ func (i *Indexer) parseWithTreeSitter(ctx context.Context, lang, path string, sr
 		Hash:      hashBytes(src),
 	})
 
-	walkTS(root, src, lang, moduleName, moduleIdx, moduleIdx, &units, &edges)
+	walkTS(root, src, lang, parentQualified, moduleIdx, moduleIdx, &units, &edges)
+	collectCalls(root, src, moduleIdx, &edges)
 	return units, edges, nil
 }
 
@@ -137,7 +158,8 @@ func walkTS(node *sitter.Node, src []byte, lang, parentQualified string, parentI
 			continue
 
 		// ---------- container types ----------
-		case "class_declaration", "class_definition", "interface_declaration", "enum_declaration", "type_declaration", "struct_declaration", "type_alias_declaration":
+		case "class_declaration", "class_definition", "interface_declaration", "enum_declaration", "type_declaration", "struct_declaration", "type_alias_declaration",
+			"module_declaration", "internal_module", "namespace_declaration":
 			name := fieldName(ch, src)
 			if name == "" {
 				walkTS(ch, src, lang, parentQualified, parentIdx, moduleIdx, units, edges)
@@ -151,38 +173,26 @@ func walkTS(node *sitter.Node, src []byte, lang, parentQualified string, parentI
 				kind = "enum"
 			case "type_declaration", "struct_declaration", "type_alias_declaration":
 				kind = "type"
+			case "module_declaration", "internal_module", "namespace_declaration":
+				kind = "namespace"
 			}
 			qualified := parentQualified + "." + name
 			idx := len(*units)
 			*units = append(*units, makeUnit(src, ch, lang, kind, name, qualified, doc, parentIdx))
 
+			// Извлекаем ссылки из JSDoc.
+			if doc != "" {
+				extractJSDocRefs(doc, idx, edges, int(ch.StartPoint().Row)+1)
+			}
+
 			// extends / implements (Java + TS).
 			for j := 0; j < int(ch.NamedChildCount()); j++ {
 				sub := ch.NamedChild(j)
-				switch sub.Type() {
-				case "superclass", "extends_clause":
-					if tname := firstTypeRef(sub, src); tname != "" {
-						*edges = append(*edges, pendingEdge{
-							srcIdx: idx, dstIdx: -1, dstName: tname, kind: "extends",
-							line: int(sub.StartPoint().Row) + 1,
-						})
-					}
-				case "super_interfaces", "implements_clause", "extends_type_clause":
-					// extends_type_clause встречается у TS interface-наследования
-					// и должно тоже маппиться в extends.
-					ekind := "implements"
-					if sub.Type() == "extends_type_clause" {
-						ekind = "extends"
-					}
-					for k := 0; k < int(sub.NamedChildCount()); k++ {
-						if tname := firstTypeRef(sub.NamedChild(k), src); tname != "" {
-							*edges = append(*edges, pendingEdge{
-								srcIdx: idx, dstIdx: -1, dstName: tname, kind: ekind,
-								line: int(sub.StartPoint().Row) + 1,
-							})
-						}
-					}
+				stype := sub.Type()
+				if stype == "class_body" || stype == "interface_body" || stype == "enum_body" {
+					continue
 				}
+				searchHeritage(sub, src, idx, edges)
 			}
 
 			// Рекурсия внутрь body — за методами/полями.
@@ -190,22 +200,36 @@ func walkTS(node *sitter.Node, src []byte, lang, parentQualified string, parentI
 
 		// ---------- functions / methods ----------
 		case "function_declaration", "function_definition", "method_definition", "method_declaration",
-			"constructor_declaration", "function":
+			"constructor_declaration", "function", "method_signature":
 			name := fieldName(ch, src)
 			if name == "" {
 				walkTS(ch, src, lang, parentQualified, parentIdx, moduleIdx, units, edges)
 				continue
 			}
 			kind := "function"
-			if t == "method_definition" || t == "method_declaration" || t == "constructor_declaration" {
+			if t == "method_definition" || t == "method_declaration" || t == "constructor_declaration" || t == "method_signature" {
 				kind = "method"
 			}
 			qualified := parentQualified + "." + name
 			idx := len(*units)
 			*units = append(*units, makeUnit(src, ch, lang, kind, name, qualified, doc, parentIdx))
 
+			// Извлекаем ссылки из JSDoc.
+			if doc != "" {
+				extractJSDocRefs(doc, idx, edges, int(ch.StartPoint().Row)+1)
+			}
+
 			// call edges внутри тела.
 			collectCalls(ch, src, idx, edges)
+
+			// Рекурсия внутрь тела (для вложенных функций/классов).
+			walkTS(ch, src, lang, qualified, idx, moduleIdx, units, edges)
+
+		case "arrow_function", "function_expression":
+			// Для анонимных функций на месте (не назначенных переменной)
+			// мы не создаем отдельный ASTUnit, чтобы не засорять граф,
+			// но рекурсируем внутрь для поиска вложенных именованных сущностей.
+			walkTS(ch, src, lang, parentQualified, parentIdx, moduleIdx, units, edges)
 
 		// ---------- variables / fields ----------
 		case "variable_declarator", "field_declaration":
@@ -215,8 +239,23 @@ func walkTS(node *sitter.Node, src []byte, lang, parentQualified string, parentI
 				continue
 			}
 			kind := "variable"
+			if t == "field_declaration" {
+				kind = "field"
+			}
 			qualified := parentQualified + "." + name
+			idx := len(*units)
 			*units = append(*units, makeUnit(src, ch, lang, kind, name, qualified, doc, parentIdx))
+
+			// Извлекаем ссылки из JSDoc.
+			if doc != "" {
+				extractJSDocRefs(doc, idx, edges, int(ch.StartPoint().Row)+1)
+			}
+
+			// Собираем вызовы в инициализаторе переменной.
+			collectCalls(ch, src, idx, edges)
+
+			// Рекурсия внутрь для поиска вложенных сущностей (например, анонимных функций).
+			walkTS(ch, src, lang, qualified, idx, moduleIdx, units, edges)
 
 		default:
 			walkTS(ch, src, lang, parentQualified, parentIdx, moduleIdx, units, edges)
@@ -247,16 +286,34 @@ func makeUnit(src []byte, n *sitter.Node, lang, kind, name, qualified, doc strin
 		EndLine:   int(n.EndPoint().Row) + 1,
 		StartByte: startByte,
 		EndByte:   endByte,
+		NameStartLine: func() int {
+			if nm := nameNode(n); nm != nil {
+				return int(nm.StartPoint().Row) + 1
+			}
+			return int(n.StartPoint().Row) + 1
+		}(),
+		NameStartCol: func() int {
+			if nm := nameNode(n); nm != nil {
+				return int(nm.StartPoint().Column)
+			}
+			return int(n.StartPoint().Column)
+		}(),
 		Signature: firstLine(body),
 		Hash:      hashBytes([]byte(body)),
 	}
 }
 
 // collectCalls обходит тело узла и собирает call_expression → edge call,
-// а также ищет упоминания типов (reference).
+// а также ищет упоминания типов (reference). Она не заходит внутрь вложенных
+// узлов, которые сами являются ASTUnit (функции, классы и т.д.), так как
+// для них вызовы будут собраны отдельно.
 func collectCalls(node *sitter.Node, src []byte, srcIdx int, edges *[]pendingEdge) {
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
+	var walk func(n *sitter.Node, first bool)
+	walk = func(n *sitter.Node, first bool) {
+		if !first && isUnitType(n.Type()) {
+			return // Останавливаемся на границе другого юнита.
+		}
+
 		cnt := int(n.NamedChildCount())
 		for i := 0; i < cnt; i++ {
 			ch := n.NamedChild(i)
@@ -282,10 +339,23 @@ func collectCalls(node *sitter.Node, src []byte, srcIdx int, edges *[]pendingEdg
 				}
 			}
 
-			walk(ch)
+			walk(ch, false)
 		}
 	}
-	walk(node)
+	walk(node, true)
+}
+
+func isUnitType(t string) bool {
+	switch t {
+	case "class_declaration", "class_definition", "interface_declaration", "enum_declaration",
+		"type_declaration", "struct_declaration", "type_alias_declaration",
+		"function_declaration", "function_definition", "method_definition", "method_declaration",
+		"constructor_declaration", "function", "method_signature",
+		"variable_declarator", "field_declaration", "module",
+		"module_declaration", "internal_module", "namespace_declaration":
+		return true
+	}
+	return false
 }
 
 // callTarget извлекает имя цели вызова (function/method).
@@ -371,6 +441,34 @@ func importTarget(n *sitter.Node, src []byte) string {
 	return strings.TrimSpace(nodeText(n, src))
 }
 
+func searchHeritage(n *sitter.Node, src []byte, srcIdx int, edges *[]pendingEdge) {
+	t := n.Type()
+	if t == "superclass" || t == "extends_clause" || t == "heritage" || t == "extends_type_clause" {
+		if tname := firstTypeRef(n, src); tname != "" {
+			*edges = append(*edges, pendingEdge{
+				srcIdx: srcIdx, dstIdx: -1, dstName: tname, kind: "extends",
+				line: int(n.StartPoint().Row) + 1,
+			})
+		}
+		return
+	}
+	if t == "implements_clause" || t == "super_interfaces" {
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			c := n.NamedChild(i)
+			if tname := firstTypeRef(c, src); tname != "" {
+				*edges = append(*edges, pendingEdge{
+					srcIdx: srcIdx, dstIdx: -1, dstName: tname, kind: "implements",
+					line: int(c.StartPoint().Row) + 1,
+				})
+			}
+		}
+		return
+	}
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		searchHeritage(n.NamedChild(i), src, srcIdx, edges)
+	}
+}
+
 // firstTypeRef ищет первое имя типа в подузле extends/implements.
 func firstTypeRef(n *sitter.Node, src []byte) string {
 	if n == nil {
@@ -388,23 +486,34 @@ func firstTypeRef(n *sitter.Node, src []byte) string {
 		case "identifier", "type_identifier", "scoped_type_identifier", "scoped_identifier":
 			return nodeText(ch, src)
 		}
+		// Рекурсивно ищем внутри (например в extends_clause)
+		if res := firstTypeRef(ch, src); res != "" {
+			return res
+		}
 	}
-	return strings.TrimSpace(nodeText(n, src))
+	return ""
 }
 
-func fieldName(n *sitter.Node, src []byte) string {
+func nameNode(n *sitter.Node) *sitter.Node {
+	if n == nil {
+		return nil
+	}
 	if nm := n.ChildByFieldName("name"); nm != nil {
-		return nodeText(nm, src)
+		return nm
 	}
 	cnt := int(n.NamedChildCount())
 	for i := 0; i < cnt; i++ {
 		ch := n.NamedChild(i)
 		switch ch.Type() {
 		case "identifier", "property_identifier", "type_identifier":
-			return nodeText(ch, src)
+			return ch
 		}
 	}
-	return ""
+	return nil
+}
+
+func fieldName(n *sitter.Node, src []byte) string {
+	return nodeText(nameNode(n), src)
 }
 
 func nodeText(n *sitter.Node, src []byte) string {
@@ -422,4 +531,33 @@ func fileFromNode(n *sitter.Node) string {
 	// tree-sitter не хранит имя файла на узле; вернём пусто, заполнится
 	// вызывающим (parseWithTreeSitter) через сам path.
 	return ""
+}
+
+var jsDocTypeRef = regexp.MustCompile(`@(?:param|returns?|type|throws|see)\s+\{([^}]+)\}`)
+var identRe = regexp.MustCompile(`[a-zA-Z_][a-zA-Z0-9_]*`)
+
+// extractJSDocRefs извлекает упоминания типов из JSDoc-комментария.
+// Она ищет конструкции {Type} и вытягивает из них все идентификаторы.
+func extractJSDocRefs(doc string, srcIdx int, edges *[]pendingEdge, line int) {
+	matches := jsDocTypeRef.FindAllStringSubmatch(doc, -1)
+	for _, m := range matches {
+		typeContent := m[1]
+		// Внутри { ... } может быть сложный тип, например Array<User> или User|null.
+		// Извлекаем все слова, похожие на идентификаторы.
+		idents := identRe.FindAllString(typeContent, -1)
+		for _, id := range idents {
+			// Пропускаем встроенные примитивы JS.
+			switch id {
+			case "string", "number", "boolean", "any", "void", "null", "undefined", "object", "Array", "Promise", "Map", "Set":
+				continue
+			}
+			*edges = append(*edges, pendingEdge{
+				srcIdx:  srcIdx,
+				dstIdx:  -1,
+				dstName: id,
+				kind:    "reference",
+				line:    line,
+			})
+		}
+	}
 }

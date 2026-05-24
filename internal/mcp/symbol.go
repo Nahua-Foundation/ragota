@@ -83,7 +83,7 @@ func (s *SymbolServer) Build() *server.MCPServer {
 	), s.wrap("sym.get_file_intent", s.handleGetFileIntent))
 
 	srv.AddTool(mcp.NewTool("sym.get_semantic_neighborhood",
-		mcp.WithDescription("Get a clustered view of a symbol's neighborhood (deterministic + LLM clustering)."),
+		mcp.WithDescription("Get a clustered view of a symbol's neighborhood (deterministic + LLM clustering). Requires a valid symbol_id (class, interface, method, function), not a module/file ID."),
 		mcp.WithNumber("symbol_id", mcp.Required()),
 	), s.wrap("sym.get_semantic_neighborhood", s.handleGetSemanticNeighborhood))
 
@@ -118,7 +118,7 @@ func (s *SymbolServer) Build() *server.MCPServer {
 	), s.wrap("sym.expand_neighbors", s.handleExpandNeighbors))
 
 	srv.AddTool(mcp.NewTool("sym.get_dependency_graph",
-		mcp.WithDescription("Get the import-dependency graph around a module/file."),
+		mcp.WithDescription("Get the import-dependency graph around a module/file. For Go, a full or relative path is required (filenames are not enough)."),
 		mcp.WithString("module", mcp.Required()),
 		mcp.WithNumber("depth", mcp.DefaultNumber(2)),
 	), s.wrap("sym.get_dependency_graph", s.handleDependencyGraph))

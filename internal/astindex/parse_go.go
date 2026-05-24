@@ -85,6 +85,27 @@ func (i *Indexer) parseGo(path string, src []byte) ([]store.ASTUnit, []pendingEd
 			i.addGenDecl(fset, src, d, pkgName, moduleIdx, &units, &edges)
 		}
 	}
+
+	// Post-process units to fix ParentID for methods.
+	typeIdx := make(map[string]int)
+	for idx, u := range units {
+		if u.Kind == "struct" || u.Kind == "interface" || u.Kind == "type" {
+			typeIdx[u.Name] = idx
+		}
+	}
+	for idx, u := range units {
+		if u.Kind == "method" {
+			// В Go qualified name для метода: pkg.Type.Method
+			parts := strings.Split(u.Qualified, ".")
+			if len(parts) >= 3 {
+				typeName := parts[len(parts)-2]
+				if tIdx, ok := typeIdx[typeName]; ok {
+					units[idx].ParentID = sql.NullInt64{Int64: int64(tIdx), Valid: true}
+				}
+			}
+		}
+	}
+
 	return units, edges, nil
 }
 
@@ -115,6 +136,7 @@ func (i *Indexer) addFuncDecl(fset *token.FileSet, src []byte, d *ast.FuncDecl, 
 	}
 	startPos := fset.Position(declStart)
 	endPos := fset.Position(d.End())
+	namePos := fset.Position(d.Name.Pos())
 	startByte := int(declStart - 1) // token positions are 1-based
 	endByte := int(d.End() - 1)
 	if startByte < 0 {
@@ -131,19 +153,21 @@ func (i *Indexer) addFuncDecl(fset *token.FileSet, src []byte, d *ast.FuncDecl, 
 
 	idx := len(*units)
 	*units = append(*units, store.ASTUnit{
-		FilePath:  fset.Position(d.Pos()).Filename,
-		Language:  "go",
-		Kind:      kind,
-		Name:      name,
-		Qualified: qualified,
-		ParentID:  sql.NullInt64{Int64: int64(parentIdx), Valid: true},
-		StartLine: startPos.Line,
-		EndLine:   endPos.Line,
-		StartByte: startByte,
-		EndByte:   endByte,
-		Signature: signatureOf(src, d),
-		Doc:       commentText(d.Doc),
-		Hash:      hashBytes([]byte(body)),
+		FilePath:      fset.Position(d.Pos()).Filename,
+		Language:      "go",
+		Kind:          kind,
+		Name:          name,
+		Qualified:     qualified,
+		ParentID:      sql.NullInt64{Int64: int64(parentIdx), Valid: true},
+		StartLine:     startPos.Line,
+		EndLine:       endPos.Line,
+		StartByte:     startByte,
+		EndByte:       endByte,
+		NameStartLine: namePos.Line,
+		NameStartCol:  namePos.Column - 1, // position is 1-based, we want 0-based for LSP
+		Signature:     signatureOf(src, d),
+		Doc:           commentText(d.Doc),
+		Hash:          hashBytes([]byte(body)),
 	})
 
 	// Call/Reference edges внутри тела.
@@ -230,6 +254,7 @@ func (i *Indexer) addGenDecl(fset *token.FileSet, src []byte, d *ast.GenDecl, pk
 			}
 			startPos := fset.Position(declStart)
 			endPos := fset.Position(d.End())
+			namePos := fset.Position(ts.Name.Pos())
 			startByte := int(declStart - 1)
 			endByte := int(d.End() - 1)
 			if startByte < 0 {
@@ -245,19 +270,21 @@ func (i *Indexer) addGenDecl(fset *token.FileSet, src []byte, d *ast.GenDecl, pk
 
 			idx := len(*units)
 			*units = append(*units, store.ASTUnit{
-				FilePath:  fset.Position(d.Pos()).Filename,
-				Language:  "go",
-				Kind:      kind,
-				Name:      name,
-				Qualified: qualified,
-				ParentID:  sql.NullInt64{Int64: int64(moduleIdx), Valid: true},
-				StartLine: startPos.Line,
-				EndLine:   endPos.Line,
-				StartByte: startByte,
-				EndByte:   endByte,
-				Signature: firstLine(body),
-				Doc:       commentText(d.Doc),
-				Hash:      hashBytes([]byte(body)),
+				FilePath:      fset.Position(d.Pos()).Filename,
+				Language:      "go",
+				Kind:          kind,
+				Name:          name,
+				Qualified:     qualified,
+				ParentID:      sql.NullInt64{Int64: int64(moduleIdx), Valid: true},
+				StartLine:     startPos.Line,
+				EndLine:       endPos.Line,
+				StartByte:     startByte,
+				EndByte:       endByte,
+				NameStartLine: namePos.Line,
+				NameStartCol:  namePos.Column - 1,
+				Signature:     firstLine(body),
+				Doc:           commentText(d.Doc),
+				Hash:          hashBytes([]byte(body)),
 			})
 
 			switch tt := ts.Type.(type) {
@@ -282,16 +309,41 @@ func (i *Indexer) addGenDecl(fset *token.FileSet, src []byte, d *ast.GenDecl, pk
 			case *ast.InterfaceType:
 				if tt.Methods != nil {
 					for _, f := range tt.Methods.List {
-						if len(f.Names) == 0 { // embedded interface
-							if nm := exprName(f.Type); nm != "" {
-								*edges = append(*edges, pendingEdge{
-									srcIdx:  idx,
-									dstIdx:  -1,
-									dstName: nm,
-									kind:    "extends",
-									line:    fset.Position(f.Pos()).Line,
+						if len(f.Names) > 0 {
+							// Метод интерфейса
+							for _, mName := range f.Names {
+								mStart := fset.Position(f.Pos())
+								mEnd := fset.Position(f.End())
+								mNamePos := fset.Position(mName.Pos())
+								mBody := ""
+								if int(f.Pos()-1) < int(f.End()-1) && int(f.End()-1) <= len(src) {
+									mBody = string(src[f.Pos()-1 : f.End()-1])
+								}
+								*units = append(*units, store.ASTUnit{
+									FilePath:      fset.Position(f.Pos()).Filename,
+									Language:      "go",
+									Kind:          "method", // или "function"? обычно "method" для интерфейса
+									Name:          mName.Name,
+									Qualified:     qualified + "." + mName.Name,
+									ParentID:      sql.NullInt64{Int64: int64(idx), Valid: true},
+									StartLine:     mStart.Line,
+									EndLine:       mEnd.Line,
+									StartByte:     int(f.Pos() - 1),
+									EndByte:       int(f.End() - 1),
+									NameStartLine: mNamePos.Line,
+									NameStartCol:  mNamePos.Column - 1,
+									Signature:     firstLine(mBody),
+									Hash:          hashBytes([]byte(mBody)),
 								})
 							}
+						} else if nm := exprName(f.Type); nm != "" { // embedded interface
+							*edges = append(*edges, pendingEdge{
+								srcIdx:  idx,
+								dstIdx:  -1,
+								dstName: nm,
+								kind:    "extends",
+								line:    fset.Position(f.Pos()).Line,
+							})
 						}
 					}
 				}

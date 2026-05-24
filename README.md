@@ -161,13 +161,13 @@ ai-tools serve-lsp        --root /path/to/project
   - `sym.get_execution_context(symbol_id)` — возвращает полный контекст исполнения (definition, callers, callees, references, related_types, imports, important_files).
   - `sym.get_symbol_summary(symbol_id)` — семантическое резюме символа (цель, роль, важность) через LLM.
   - `sym.get_file_intent(path)` — анализ назначения и ответственности исходного файла через LLM.
-  - `sym.get_semantic_neighborhood(symbol_id)` — кластеризованное представление окрестности символа (граф + LLM).
+  - `sym.get_semantic_neighborhood(symbol_id)` — кластеризованное представление окрестности символа (граф + LLM). **Требуется ID символа (класс, метод и т.д.), а не файла.**
   - `sym.traverse_graph(symbol_id, edge_types, depth)` — семантическая навигация по графу (хождение по связям).
   - `sym.get_parent(symbol_id)`
   - `sym.get_children(symbol_id)`
 - Graph:
   - `sym.expand_neighbors(node_id, depth?, kinds?, repo?)` — BFS по edges. `repo` по умолчанию = репа `node_id`; `"*"` — все репы.
-  - `sym.get_dependency_graph(module, depth?)` — граф import-связей (репа выводится из `module`).
+  - `sym.get_dependency_graph(module, depth?)` — граф import-связей (репа выводится из `module`). **Для Go требуется полный или относительный путь (названия файла недостаточно).**
   - `sym.get_call_graph(function|symbol_id, depth?, repo?)` — граф вызовов. `repo` по умолчанию = репа стартового узла (или единственная репа найденных определений); `"*"` — все репы.
 - Context:
   - `sym.get_surrounding_context(symbol_id)`

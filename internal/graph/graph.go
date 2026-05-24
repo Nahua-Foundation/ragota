@@ -227,9 +227,16 @@ func (s *Service) Implementations(ctx context.Context, interfaceID int64) ([]sto
 	return base, nil
 }
 
-// References — возвращает только рёбра типа "reference".
+// References — возвращает рёбра, указывающие на данный юнит (ссылки, реализации, наследование, вызовы).
 func (s *Service) References(ctx context.Context, unitID int64) ([]store.Edge, error) {
-	return s.st.EdgesTo(ctx, unitID, EdgeReference)
+	var out []store.Edge
+	for _, kind := range []string{EdgeReference, EdgeImplements, EdgeExtends, EdgeCall} {
+		es, err := s.st.EdgesTo(ctx, unitID, kind)
+		if err == nil {
+			out = append(out, es...)
+		}
+	}
+	return out, nil
 }
 
 // ExpandNeighbors — делегирует SQLite BFS-обходчику.

@@ -212,6 +212,7 @@ func newServeSymbolCmd() *cobra.Command {
 			defer lspMgr.Close()
 			gr := graph.NewWithLSP(cfg, st, lspMgr)
 			syms := symbols.New(st, gr, nil)
+			syms.SetLSPManager(lspMgr)
 			// Опционально подключаем similar-search через Vector, если qdrant доступен.
 			qd := qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))
 			emb := embedder.New(cfg.Ollama.URL, cfg.Ollama.EmbedModel)

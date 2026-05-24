@@ -35,9 +35,12 @@ type ASTUnit struct {
 	EndLine   int
 	StartByte int
 	EndByte   int
-	Signature string
-	Doc       string
-	Hash      string
+	// Позиция имени (для LSP)
+	NameStartLine int
+	NameStartCol  int
+	Signature     string
+	Doc           string
+	Hash          string
 }
 
 // Edge — направленная связь между AST units.

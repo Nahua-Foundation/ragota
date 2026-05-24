@@ -17,12 +17,13 @@ func scanASTUnit(rows interface {
 	err := rows.Scan(
 		&u.ID, &u.Repo, &u.FilePath, &u.Language, &u.Kind, &u.Name, &u.Qualified,
 		&u.ParentID, &u.StartLine, &u.EndLine, &u.StartByte, &u.EndByte,
+		&u.NameStartLine, &u.NameStartCol,
 		&u.Signature, &u.Doc, &u.Hash,
 	)
 	return u, err
 }
 
-const astUnitColumns = `id, repo, file_path, language, kind, name, qualified, parent_id, start_line, end_line, start_byte, end_byte, signature, doc, hash`
+const astUnitColumns = `id, repo, file_path, language, kind, name, qualified, parent_id, start_line, end_line, start_byte, end_byte, name_start_line, name_start_col, signature, doc, hash`
 
 // ReplaceASTUnits атомарно заменяет все AST-единицы файла. Возвращает map
 // "name -> id" для свежезаписанных юнитов — удобно при последующей записи
@@ -44,8 +45,8 @@ func (s *SQLite) ReplaceASTUnits(ctx context.Context, filePath string, units []A
 	}
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT INTO ast_units(repo, file_path, language, kind, name, qualified, parent_id,
-			start_line, end_line, start_byte, end_byte, signature, doc, hash)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+			start_line, end_line, start_byte, end_byte, name_start_line, name_start_col, signature, doc, hash)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +57,7 @@ func (s *SQLite) ReplaceASTUnits(ctx context.Context, filePath string, units []A
 		res, err := stmt.ExecContext(ctx,
 			u.Repo, filePath, u.Language, u.Kind, u.Name, u.Qualified, u.ParentID,
 			u.StartLine, u.EndLine, u.StartByte, u.EndByte,
+			u.NameStartLine, u.NameStartCol,
 			u.Signature, u.Doc, u.Hash)
 		if err != nil {
 			return nil, err
@@ -127,36 +129,81 @@ func (s *SQLite) FindASTUnits(ctx context.Context, query, kind, language, repo s
 	kind = strings.ToLower(kind)
 	language = strings.ToLower(language)
 
-	q := `SELECT ` + astUnitColumns + ` FROM ast_units WHERE (name = ? COLLATE NOCASE OR qualified = ? COLLATE NOCASE OR name LIKE ? OR qualified LIKE ?)`
-	args := []any{query, query, "%" + query + "%", "%" + query + "%"}
+	// Сначала пробуем точное совпадение (по индексам idx_ast_units_name или idx_ast_units_qualified).
+	// Используем COLLATE NOCASE для соответствия индексам.
+	qExact := `SELECT ` + astUnitColumns + ` FROM ast_units WHERE (name = ? COLLATE NOCASE OR qualified = ? COLLATE NOCASE)`
+	argsExact := []any{query, query}
 	if kind != "" {
-		q += ` AND kind = ?`
-		args = append(args, kind)
+		qExact += ` AND kind = ?`
+		argsExact = append(argsExact, kind)
 	}
 	if language != "" {
-		q += ` AND language = ?`
-		args = append(args, language)
+		qExact += ` AND language = ?`
+		argsExact = append(argsExact, language)
 	}
 	if repo != "" && repo != "*" {
-		q += ` AND repo = ?`
-		args = append(args, repo)
+		qExact += ` AND repo = ?`
+		argsExact = append(argsExact, repo)
 	}
-	// Точные совпадения раньше LIKE.
-	q += ` ORDER BY CASE WHEN name = ? COLLATE NOCASE OR qualified = ? COLLATE NOCASE THEN 0 ELSE 1 END, length(name) ASC LIMIT ?`
-	args = append(args, query, query, limit)
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	qExact += ` LIMIT ?`
+	argsExact = append(argsExact, limit)
+
+	rows, err := s.db.QueryContext(ctx, qExact, argsExact...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
 	out := []ASTUnit{}
 	for rows.Next() {
 		u, err := scanASTUnit(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		out = append(out, u)
 	}
+	rows.Close()
+
+	// Если нашли достаточно точных совпадений, возвращаем их.
+	if len(out) >= limit {
+		return out, nil
+	}
+
+	// Иначе добираем через LIKE.
+	// LIKE в SQLite по умолчанию case-insensitive для ASCII, но не использует обычные индексы.
+	// Мы исключаем точные совпадения, так как они уже в out.
+	remaining := limit - len(out)
+	qLike := `SELECT ` + astUnitColumns + ` FROM ast_units WHERE (name LIKE ? OR qualified LIKE ?) AND name <> ? COLLATE NOCASE AND qualified <> ? COLLATE NOCASE`
+	argsLike := []any{"%" + query + "%", "%" + query + "%", query, query}
+	if kind != "" {
+		qLike += ` AND kind = ?`
+		argsLike = append(argsLike, kind)
+	}
+	if language != "" {
+		qLike += ` AND language = ?`
+		argsLike = append(argsLike, language)
+	}
+	if repo != "" && repo != "*" {
+		qLike += ` AND repo = ?`
+		argsLike = append(argsLike, repo)
+	}
+	qLike += ` ORDER BY length(name) ASC LIMIT ?`
+	argsLike = append(argsLike, remaining)
+
+	rows, err = s.db.QueryContext(ctx, qLike, argsLike...)
+	if err != nil {
+		return out, nil // Возвращаем то, что уже нашли
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		u, err := scanASTUnit(rows)
+		if err != nil {
+			return out, nil
+		}
+		out = append(out, u)
+	}
+
 	return out, rows.Err()
 }
 

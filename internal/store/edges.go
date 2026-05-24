@@ -25,52 +25,121 @@ import (
 //
 // Возвращает суммарное количество разрешённых рёбер.
 func (s *SQLite) ResolvePendingEdges(ctx context.Context) (int, error) {
-	// Pass 1: qualified-матч (точный, кросс-файловый, одноязычный,
-	// одна репа).
-	res1, err := s.db.ExecContext(ctx, `
-		UPDATE edges SET dst_id = (
-			SELECT dst.id FROM ast_units AS dst
-			 JOIN ast_units AS src ON src.id = edges.src_id
-			 WHERE dst.qualified = edges.dst_name
-			   AND dst.language = src.language
-			   AND dst.repo = src.repo
-			 LIMIT 1
-		)
-		WHERE dst_id = 0 AND dst_name <> '' AND EXISTS (
-			SELECT 1 FROM ast_units AS dst
-			 JOIN ast_units AS src ON src.id = edges.src_id
-			 WHERE dst.qualified = edges.dst_name
-			   AND dst.language = src.language
-			   AND dst.repo = src.repo
-		)`)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	// Используем временную таблицу для сбора разрешенных ID.
+	// Это НАМНОГО быстрее, чем коррелированные подзапросы в UPDATE.
+	if _, err := tx.ExecContext(ctx, `CREATE TEMPORARY TABLE IF NOT EXISTS tmp_resolved (row_id INTEGER PRIMARY KEY, dst_id INTEGER)`); err != nil {
+		return 0, err
+	}
+	defer func() {
+		_, _ = tx.ExecContext(ctx, `DELETE FROM tmp_resolved`)
+	}()
+
+	var total int64
+
+	// Pass 1: qualified-матч (точный, кросс-файловый, одноязычный, одна репа).
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO tmp_resolved (row_id, dst_id)
+		SELECT e.rowid, MIN(dst.id)
+		FROM edges e
+		JOIN ast_units src ON src.id = e.src_id
+		JOIN ast_units dst ON dst.qualified = e.dst_name 
+		                  AND dst.language = src.language 
+		                  AND dst.repo = src.repo
+		WHERE e.dst_id = 0 AND e.dst_name <> ''
+		GROUP BY e.rowid`); err != nil {
+		return 0, err
+	}
+	res1, err := tx.ExecContext(ctx, `UPDATE edges SET dst_id = (SELECT dst_id FROM tmp_resolved WHERE row_id = edges.rowid) WHERE rowid IN (SELECT row_id FROM tmp_resolved)`)
 	if err != nil {
 		return 0, err
 	}
 	n1, _ := res1.RowsAffected()
+	total += n1
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tmp_resolved`); err != nil {
+		return 0, err
+	}
 
-	// Pass 2: name-матч для всё ещё неразрешённых (тот же язык + репа).
-	res2, err := s.db.ExecContext(ctx, `
-		UPDATE edges SET dst_id = (
-			SELECT dst.id FROM ast_units AS dst
-			 JOIN ast_units AS src ON src.id = edges.src_id
-			 WHERE dst.name = edges.dst_name
-			   AND dst.language = src.language
-			   AND dst.repo = src.repo
-			 LIMIT 1
-		)
-		WHERE dst_id = 0 AND dst_name <> '' AND EXISTS (
-			SELECT 1 FROM ast_units AS dst
-			 JOIN ast_units AS src ON src.id = edges.src_id
-			 WHERE dst.name = edges.dst_name
-			   AND dst.language = src.language
-			   AND dst.repo = src.repo
-		)`)
+	// Pass 2: Локальный name-матч (в пределах того же файла).
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO tmp_resolved (row_id, dst_id)
+		SELECT e.rowid, MIN(dst.id)
+		FROM edges e
+		JOIN ast_units src ON src.id = e.src_id
+		JOIN ast_units dst ON dst.name = e.dst_name 
+		                  AND dst.language = src.language 
+		                  AND dst.file_path = src.file_path
+		                  AND dst.repo = src.repo
+		WHERE e.dst_id = 0 AND e.dst_name <> ''
+		GROUP BY e.rowid`); err != nil {
+		return 0, err
+	}
+	res2, err := tx.ExecContext(ctx, `UPDATE edges SET dst_id = (SELECT dst_id FROM tmp_resolved WHERE row_id = edges.rowid) WHERE rowid IN (SELECT row_id FROM tmp_resolved)`)
 	if err != nil {
 		return 0, err
 	}
 	n2, _ := res2.RowsAffected()
+	total += n2
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tmp_resolved`); err != nil {
+		return 0, err
+	}
 
-	return int(n1 + n2), nil
+	// Pass 3: Относительный путь для импортов (JS/TS).
+	// Pass 3 оставляем как есть или тоже через tmp, но там LIKE, он медленный сам по себе.
+	// Для консистентности сделаем через tmp.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO tmp_resolved (row_id, dst_id)
+		SELECT e.rowid, MIN(dst.id)
+		FROM edges e
+		JOIN ast_units src ON src.id = e.src_id
+		JOIN ast_units dst ON dst.kind = 'module'
+		                  AND dst.language = src.language
+		                  AND dst.repo = src.repo
+		                  AND dst.file_path LIKE '%' || REPLACE(REPLACE(e.dst_name, './', ''), '../', '') || '%'
+		WHERE e.dst_id = 0 AND e.kind = 'import' AND (e.dst_name LIKE './%' OR e.dst_name LIKE '../%')
+		GROUP BY e.rowid`); err != nil {
+		return 0, err
+	}
+	res3, err := tx.ExecContext(ctx, `UPDATE edges SET dst_id = (SELECT dst_id FROM tmp_resolved WHERE row_id = edges.rowid) WHERE rowid IN (SELECT row_id FROM tmp_resolved)`)
+	if err != nil {
+		return 0, err
+	}
+	n3, _ := res3.RowsAffected()
+	total += n3
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tmp_resolved`); err != nil {
+		return 0, err
+	}
+
+	// Pass 4: Глобальный name-матч для всё ещё неразрешённых.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO tmp_resolved (row_id, dst_id)
+		SELECT e.rowid, MIN(dst.id)
+		FROM edges e
+		JOIN ast_units src ON src.id = e.src_id
+		JOIN ast_units dst ON dst.name = e.dst_name 
+		                  AND dst.language = src.language 
+		                  AND dst.repo = src.repo
+		WHERE e.dst_id = 0 AND e.dst_name <> ''
+		GROUP BY e.rowid`); err != nil {
+		return 0, err
+	}
+	res4, err := tx.ExecContext(ctx, `UPDATE edges SET dst_id = (SELECT dst_id FROM tmp_resolved WHERE row_id = edges.rowid) WHERE rowid IN (SELECT row_id FROM tmp_resolved)`)
+	if err != nil {
+		return 0, err
+	}
+	n4, _ := res4.RowsAffected()
+	total += n4
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return int(total), nil
 }
 
 // ReplaceEdges атомарно заменяет рёбра, исходящие из любого ast_unit'а

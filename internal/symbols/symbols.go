@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"aitools/internal/graph"
+	"aitools/internal/lsp"
 	"aitools/internal/store"
 )
 
@@ -35,12 +36,16 @@ type Service struct {
 	st  *store.SQLite
 	g   *graph.Service
 	sim SimilarSearcher
+	mgr *lsp.Manager // LSP для точного поиска (implementations и др.)
 }
 
 // New создаёт сервис. sim может быть nil.
 func New(st *store.SQLite, g *graph.Service, sim SimilarSearcher) *Service {
 	return &Service{st: st, g: g, sim: sim}
 }
+
+// SetLSPManager подключает LSP менеджер для уточнения результатов.
+func (s *Service) SetLSPManager(mgr *lsp.Manager) { s.mgr = mgr }
 
 // SetSimilarSearcher позднее подключает векторный поиск (после создания).
 func (s *Service) SetSimilarSearcher(sim SimilarSearcher) { s.sim = sim }
@@ -74,16 +79,36 @@ func (s *Service) Children(ctx context.Context, id int64) ([]store.ASTUnit, erro
 
 func (s *Service) FindDefinition(ctx context.Context, symbol string) ([]store.ASTUnit, error) {
 	// Ищем определения (любой kind, кроме module — модуль не «определение символа»).
-	units, err := s.st.FindASTUnits(ctx, symbol, "", "", "", 20)
+	// Берем с запасом, так как будем фильтровать модули.
+	units, err := s.st.FindASTUnits(ctx, symbol, "", "", "", 100)
 	if err != nil {
 		return nil, err
 	}
 	out := []store.ASTUnit{}
+	hasExactNonModule := false
 	for _, u := range units {
 		if u.Kind == "module" {
 			continue
 		}
-		out = append(out, u)
+		if strings.EqualFold(u.Name, symbol) || strings.EqualFold(u.Qualified, symbol) {
+			hasExactNonModule = true
+			break
+		}
+	}
+
+	for _, u := range units {
+		if u.Kind == "module" {
+			continue
+		}
+		if hasExactNonModule {
+			// Если есть хотя бы одно точное совпадение среди не-модулей, возвращаем только их
+			if strings.EqualFold(u.Name, symbol) || strings.EqualFold(u.Qualified, symbol) {
+				out = append(out, u)
+			}
+		} else {
+			// Иначе возвращаем всё, что нашли (кроме модулей)
+			out = append(out, u)
+		}
 	}
 	return out, nil
 }
@@ -127,44 +152,109 @@ func (s *Service) FindReferences(ctx context.Context, symbol string) ([]store.Ed
 	// фильтром по языку определения. Если defs пуст (например, символ
 	// внешний), деградируем до прежнего поведения с предупреждением о
 	// кросс-языковом матче — но только под исходным symbol без языка.
+	kinds := []string{graph.EdgeReference, graph.EdgeImplements, graph.EdgeExtends, graph.EdgeCall}
 	if len(namesToSearch) == 0 {
-		byName, err := s.st.EdgesByDstName(ctx, symbol, graph.EdgeReference)
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range byName {
-			if seen[e.ID] {
+		for _, kind := range kinds {
+			byName, err := s.st.EdgesByDstName(ctx, symbol, kind)
+			if err != nil {
 				continue
 			}
-			seen[e.ID] = true
-			out = append(out, e)
+			for _, e := range byName {
+				if seen[e.ID] {
+					continue
+				}
+				seen[e.ID] = true
+				out = append(out, e)
+			}
 		}
+
+		// Fallback для методов (например, l.log() -> ищем просто log)
+		if parts := strings.Split(symbol, "."); len(parts) > 1 {
+			lastName := parts[len(parts)-1]
+			for _, kind := range kinds {
+				byLastName, err := s.st.EdgesByDstName(ctx, lastName, kind)
+				if err == nil {
+					for _, e := range byLastName {
+						if seen[e.ID] {
+							continue
+						}
+						seen[e.ID] = true
+						out = append(out, e)
+					}
+				}
+			}
+		}
+
 		return out, nil
 	}
 
 	for k := range namesToSearch {
-		byName, err := s.st.EdgesByDstNameForLang(ctx, k.name, graph.EdgeReference, k.lang)
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range byName {
-			if seen[e.ID] {
-				continue
+		// Ищем все типы рёбер, которые могут считаться "ссылками" на символ
+		for _, kind := range kinds {
+			byName, err := s.st.EdgesByDstNameForLang(ctx, k.name, kind, k.lang)
+			if err != nil {
+				return nil, err
 			}
-			seen[e.ID] = true
-			out = append(out, e)
+			for _, e := range byName {
+				if seen[e.ID] {
+					continue
+				}
+				seen[e.ID] = true
+				out = append(out, e)
+			}
 		}
 	}
 	return out, nil
 }
 
 func (s *Service) FindImplementations(ctx context.Context, iface string) ([]store.ASTUnit, error) {
-	units, err := s.st.FindASTUnits(ctx, iface, "interface", "", "", 5)
-	if err != nil {
-		return nil, err
+	// Ищем интерфейс или класс (для JS/TS наследования)
+	var units []store.ASTUnit
+	for _, k := range []string{"interface", "class", "type", "struct"} {
+		us, err := s.st.FindASTUnits(ctx, iface, k, "", "", 50)
+		if err == nil {
+			units = append(units, us...)
+		}
+	}
+	if len(units) == 0 {
+		return nil, nil
 	}
 	out := []store.ASTUnit{}
 	seen := map[int64]bool{}
+
+	// 0. Попытка использовать LSP для точного поиска реализаций (если доступен)
+	if s.mgr != nil {
+		for _, u := range units {
+			c, err := s.mgr.EnsureOpen(ctx, u.Language, u.FilePath)
+			if err == nil {
+				// Метод Implementation в LSP работает по позиции.
+				line := u.StartLine - 1
+				col := 0
+				if u.NameStartLine > 0 {
+					line = u.NameStartLine - 1
+					col = u.NameStartCol
+				}
+				locs, err := c.Implementation(ctx, u.FilePath, line, col)
+				if err == nil && len(locs) > 0 {
+					for _, loc := range locs {
+						path := strings.TrimPrefix(loc.URI, "file://")
+						// На самом деле проще найти все юниты в этом файле и взять тот, что на этой строке
+						fileUnits, _ := s.st.ListASTUnitsByFile(ctx, path)
+						for _, fu := range fileUnits {
+							// Проверяем, что юнит находится на той же строке, что и результат LSP.
+							// LSP возвращает 0-based строки.
+							if fu.StartLine == loc.StartLine+1 || fu.NameStartLine == loc.StartLine+1 {
+								if !seen[fu.ID] {
+									seen[fu.ID] = true
+									out = append(out, fu)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 
 	// 1. По ID найденных интерфейсов
 	for _, u := range units {
@@ -180,8 +270,8 @@ func (s *Service) FindImplementations(ctx context.Context, iface string) ([]stor
 			out = append(out, im)
 		}
 
-		// Эвристика для Go: если интерфейс имеет методы, ищем структуры с такими же методами
-		if u.Language == "go" {
+		// Эвристика для Go/TS/JS: если интерфейс имеет методы, ищем структуры/классы с такими же методами
+		if u.Language == "go" || u.Language == "typescript" || u.Language == "javascript" {
 			methods, err := s.st.ChildrenOf(ctx, u.ID)
 			if err == nil && len(methods) > 0 {
 				methodNames := make([]string, 0, len(methods))
@@ -199,33 +289,43 @@ func (s *Service) FindImplementations(ctx context.Context, iface string) ([]stor
 					}
 
 					for i := 0; i < maxMethodsToCheck; i++ {
-						candidates, err := s.st.FindASTUnits(ctx, methodNames[i], "method", "go", "", 100)
+						candidates, err := s.st.FindASTUnits(ctx, methodNames[i], "method", u.Language, "", 100)
 						if err != nil {
 							continue
 						}
 						for _, cand := range candidates {
 							if cand.ParentID.Valid {
 								owner, err := s.st.GetASTUnit(ctx, cand.ParentID.Int64)
-								if err == nil && owner != nil && (owner.Kind == "struct" || owner.Kind == "type") {
-									if seen[owner.ID] {
-										continue
+								if err == nil && owner != nil {
+									// Для Go: struct или type. Для TS: class или interface.
+									isPotentialOwner := false
+									if u.Language == "go" {
+										isPotentialOwner = (owner.Kind == "struct" || owner.Kind == "type")
+									} else if u.Language == "typescript" || u.Language == "javascript" {
+										isPotentialOwner = (owner.Kind == "class" || owner.Kind == "interface")
 									}
-									// Проверяем, что у этой структуры есть все остальные методы интерфейса
-									ownerMethods, err := s.st.ChildrenOf(ctx, owner.ID)
-									if err == nil {
-										ownerMethodNames := make(map[string]bool)
-										for _, om := range ownerMethods {
-											ownerMethodNames[om.Name] = true
+
+									if isPotentialOwner {
+										if seen[owner.ID] {
+											continue
 										}
-										matchCount := 0
-										for _, mn := range methodNames {
-											if ownerMethodNames[mn] {
-												matchCount++
+										// Проверяем, что у этой структуры/класса есть все остальные методы интерфейса
+										ownerMethods, err := s.st.ChildrenOf(ctx, owner.ID)
+										if err == nil {
+											ownerMethodNames := make(map[string]bool)
+											for _, om := range ownerMethods {
+												ownerMethodNames[om.Name] = true
 											}
-										}
-										if matchCount == len(methodNames) {
-											seen[owner.ID] = true
-											out = append(out, *owner)
+											matchCount := 0
+											for _, mn := range methodNames {
+												if ownerMethodNames[mn] {
+													matchCount++
+												}
+											}
+											if matchCount == len(methodNames) {
+												seen[owner.ID] = true
+												out = append(out, *owner)
+											}
 										}
 									}
 								}
@@ -247,6 +347,7 @@ func (s *Service) FindImplementations(ctx context.Context, iface string) ([]stor
 		}
 	}
 	var byNameAll []store.Edge
+	var err error
 	if len(langs) == 0 {
 		// Интерфейс не найден как юнит — fallback на старое поведение
 		// (без языкового фильтра, иначе вообще ничего не найдём).
@@ -305,7 +406,7 @@ func (s *Service) FindCallers(ctx context.Context, function string) ([]store.AST
 		}
 	}
 
-	// 2. По имени (для неразрешённых вызовов, например методов Go).
+	// 2. По имени (для неразрешённых вызовов, например методов Go/TS/JS).
 	// Ограничиваем поиск языками найденных определений, чтобы избежать
 	// кросс-языковых ложных совпадений (TS-вызов log() ↔ Go-функция log).
 	langs := map[string]bool{}
@@ -314,20 +415,34 @@ func (s *Service) FindCallers(ctx context.Context, function string) ([]store.AST
 			langs[d.Language] = true
 		}
 	}
+
+	// Если определений не найдено, мы не знаем целевой язык.
+	// В этом случае разрешаем поиск по всем языкам (fallback).
+
 	var byNameAll []store.Edge
 	if len(langs) == 0 {
-		byNameAll, err = s.st.EdgesByDstName(ctx, function, graph.EdgeCall)
-		if err != nil {
-			return nil, err
-		}
+		byNameAll, _ = s.st.EdgesByDstName(ctx, function, graph.EdgeCall)
 	} else {
 		for lang := range langs {
-			part, err := s.st.EdgesByDstNameForLang(ctx, function, graph.EdgeCall, lang)
-			if err != nil {
-				return nil, err
-			}
+			part, _ := s.st.EdgesByDstNameForLang(ctx, function, graph.EdgeCall, lang)
 			byNameAll = append(byNameAll, part...)
 		}
+	}
+
+	// Всегда делаем fallback для методов (например, Logger.log -> ищем просто log),
+	// так как в TS/JS/Go вызовы часто записываются по имени метода без квалификатора.
+	if parts := strings.Split(function, "."); len(parts) > 1 {
+		lastName := parts[len(parts)-1]
+		var byLastName []store.Edge
+		if len(langs) == 0 {
+			byLastName, _ = s.st.EdgesByDstName(ctx, lastName, graph.EdgeCall)
+		} else {
+			for lang := range langs {
+				part, _ := s.st.EdgesByDstNameForLang(ctx, lastName, graph.EdgeCall, lang)
+				byLastName = append(byLastName, part...)
+			}
+		}
+		byNameAll = append(byNameAll, byLastName...)
 	}
 	for _, e := range byNameAll {
 		if seen[e.SrcID] {
@@ -363,6 +478,32 @@ func (s *Service) FindCallees(ctx context.Context, function string) ([]store.AST
 			seen[c.ID] = true
 			out = append(out, c)
 		}
+
+		// Если Callees по графу вернул не всё (например, из-за неразрешенных DstID),
+		// пробуем найти цели по имени из эджей этого юнита.
+		edges, _ := s.st.EdgesFrom(ctx, d.ID, graph.EdgeCall)
+		for _, e := range edges {
+			if e.DstID == 0 && e.DstName != "" {
+				// Пытаемся найти цели по имени в том же языке.
+				// Если имя квалифицированное (pkg.Name), пробуем также по короткому имени.
+				names := []string{e.DstName}
+				if dot := strings.LastIndex(e.DstName, "."); dot >= 0 {
+					names = append(names, e.DstName[dot+1:])
+				}
+
+				for _, name := range names {
+					targets, _ := s.st.FindASTUnits(ctx, name, "function", d.Language, "", 50)
+					meths, _ := s.st.FindASTUnits(ctx, name, "method", d.Language, "", 50)
+					targets = append(targets, meths...)
+					for _, t := range targets {
+						if !seen[t.ID] {
+							seen[t.ID] = true
+							out = append(out, t)
+						}
+					}
+				}
+			}
+		}
 	}
 	return out, nil
 }
@@ -370,7 +511,7 @@ func (s *Service) FindCallees(ctx context.Context, function string) ([]store.AST
 func (s *Service) findCallable(ctx context.Context, name string) ([]store.ASTUnit, error) {
 	all := []store.ASTUnit{}
 	for _, k := range []string{"function", "method"} {
-		us, err := s.st.FindASTUnits(ctx, name, k, "", "", 20)
+		us, err := s.st.FindASTUnits(ctx, name, k, "", "", 100)
 		if err != nil {
 			return nil, err
 		}

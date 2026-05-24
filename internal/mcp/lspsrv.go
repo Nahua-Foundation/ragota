@@ -75,6 +75,16 @@ func (s *LSPServer) Build() *server.MCPServer {
 	)
 
 	srv.AddTool(
+		mcp.NewTool("lsp.implementation",
+			mcp.WithDescription("Find implementations for symbol at given position."),
+			mcp.WithString("file", mcp.Required()),
+			mcp.WithNumber("line", mcp.Required()),
+			mcp.WithNumber("character", mcp.Required()),
+		),
+		s.wrap("lsp.implementation", s.handleImplementation),
+	)
+
+	srv.AddTool(
 		mcp.NewTool("lsp.languages",
 			mcp.WithDescription("List configured LSP languages."),
 		),
@@ -288,6 +298,46 @@ func (s *LSPServer) handleHover(ctx context.Context, req mcp.CallToolRequest) (*
 	}
 
 	return mcp.NewToolResultText(txt), nil
+}
+
+func (s *LSPServer) handleImplementation(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	file := req.GetString("file", "")
+	if file == "" {
+		return mcp.NewToolResultError("file is required"), nil
+	}
+	abs, err := s.resolveAbs(file)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	lang := fileutil.LanguageByExt(filepath.Ext(abs))
+
+	line := int(req.GetFloat("line", 0))
+	char := int(req.GetFloat("character", 0))
+
+	lspCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var lspErr error
+	var locs []lsp.Location
+
+	c, err := s.mgr.EnsureOpen(lspCtx, lang, abs)
+	if err == nil {
+		locs, lspErr = c.Implementation(lspCtx, abs, line, char)
+	} else {
+		lspErr = err
+	}
+
+	if lspErr != nil {
+		if s.bus != nil {
+			s.bus.AddLSPError("implementation", abs, line, char, lspErr)
+		}
+		// Для Implementation fallback на treesitter сложнее, так как Implementation
+		// обычно вызывается на интерфейсе или методе.
+		// Пока просто возвращаем ошибку, так как sym.find_implementations уже делает эвристику.
+		return mcp.NewToolResultText(fmt.Sprintf("Error: LSP failed (%v)", lspErr)), nil
+	}
+
+	return jsonResult(locs)
 }
 
 func (s *LSPServer) handleLanguages(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
