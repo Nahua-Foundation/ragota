@@ -14,6 +14,7 @@ func (s *SQLite) ExpandNeighbors(ctx context.Context, nodeID int64, depth int, k
 		depth = 1
 	}
 	visited := map[int64]bool{nodeID: true}
+	seenEdges := map[int64]bool{}
 	frontier := []int64{nodeID}
 	allNodes := []ASTUnit{}
 	allEdges := []Edge{}
@@ -34,6 +35,12 @@ func (s *SQLite) ExpandNeighbors(ctx context.Context, nodeID int64, depth int, k
 				return nil, nil, err
 			}
 			for _, e := range outE {
+				if e.ID != 0 {
+					if seenEdges[e.ID] {
+						continue
+					}
+					seenEdges[e.ID] = true
+				}
 				allEdges = append(allEdges, e)
 				var other int64
 				if e.SrcID == id {
@@ -52,6 +59,76 @@ func (s *SQLite) ExpandNeighbors(ctx context.Context, nodeID int64, depth int, k
 				if u != nil {
 					allNodes = append(allNodes, *u)
 					next = append(next, other)
+				}
+			}
+		}
+		frontier = next
+	}
+	return allNodes, allEdges, nil
+}
+
+// TraverseGraph — направленный обход от startID по исходящим рёбрам.
+func (s *SQLite) TraverseGraph(ctx context.Context, startID int64, depth int, kinds []string) ([]ASTUnit, []Edge, error) {
+	if depth <= 0 {
+		depth = 1
+	}
+	visited := map[int64]bool{startID: true}
+	seenEdges := map[int64]bool{}
+	frontier := []int64{startID}
+	allNodes := []ASTUnit{}
+	allEdges := []Edge{}
+
+	root, err := s.GetASTUnit(ctx, startID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if root != nil {
+		allNodes = append(allNodes, *root)
+	}
+
+	for d := 0; d < depth && len(frontier) > 0; d++ {
+		var next []int64
+		for _, id := range frontier {
+			// Только исходящие ребра
+			es, err := s.EdgesFrom(ctx, id, "")
+			if err != nil {
+				return nil, nil, err
+			}
+
+			for _, e := range es {
+				// Фильтр по типам если задан
+				if len(kinds) > 0 {
+					found := false
+					for _, k := range kinds {
+						if e.Kind == k {
+							found = true
+							break
+						}
+					}
+					if !found {
+						continue
+					}
+				}
+
+				if e.ID != 0 {
+					if seenEdges[e.ID] {
+						continue
+					}
+					seenEdges[e.ID] = true
+				}
+				allEdges = append(allEdges, e)
+				if e.DstID == 0 || visited[e.DstID] {
+					continue
+				}
+
+				visited[e.DstID] = true
+				u, err := s.GetASTUnit(ctx, e.DstID)
+				if err != nil {
+					return nil, nil, err
+				}
+				if u != nil {
+					allNodes = append(allNodes, *u)
+					next = append(next, e.DstID)
 				}
 			}
 		}

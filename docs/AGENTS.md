@@ -27,7 +27,7 @@ Base retrieval:
 - `vec.search_keyword(query, top_k?, language?, kind?)` — BM25 lexical search (Bleve).
 - `vec.search_hybrid(query, top_k?, language?)` — vector + BM25 merged via RRF (or weighted sum if `hybrid.vector_weight`/`bm25_weight` are configured).
 - `vec.rerank(query, candidates, top_n?)` — reranks a JSON array of candidates `[{id, content, score?}]` via the BGE Reranker (`qllama/bge-reranker-v2-m3`) in Ollama. **Graceful fallback**: if the reranker model is not loaded and `rerank.required = false`, returns the original ordering.
-- `vec.search(query, limit?, language?)` — backward-compatible alias of `vec.search_semantic`.
+- `vec.search(query, limit?, language?)` — backward-compatible alias of `vec.search_hybrid`.
 
 Infrastructure:
 - `vec.reindex(path?)` — re-index a file or run a full scan.
@@ -47,6 +47,8 @@ Symbol lookup:
 - `sym.find_implementations(interface)` — implementations of the interface.
 - `sym.find_callers(function)` — direct callers.
 - `sym.find_callees(function)` — direct callees.
+- `sym.get_execution_context(symbol_id)` — **High-level context aggregator**. Returns definition, callers, callees, references, related types (implements/extends), and a list of important files. Use this for a quick 360° view of a symbol.
+- `sym.traverse_graph(symbol_id, edge_types?, depth?)` — **Semantic navigation**. Walk the graph along specific edge types (call, import, etc.) to understand dependencies or flow.
 
 AST / structure retrieval:
 - `sym.get_file_symbols(path)` — AST units in a file with `parent_id` (parent-child).
@@ -98,6 +100,11 @@ Tree-sitter based symbol index (substring lookup, fast).
 2. `sym.get_dependency_graph(module, depth=2)` — surrounding modules.
 3. `sym.get_call_graph(function, depth=2)` — execution flow.
 
+### Scenario D: Symbol Context Investigation (Quick Deep Dive)
+1. **Locate** — find target `symbol_id` via `sym.find_definition` or `ts.search_symbols`.
+2. **Aggregated View** — `sym.get_execution_context(symbol_id)` to get definition, callers, callees, references, and related types in a single call.
+3. **File Survey** — use `important_files` from the result to prioritize which files to read or list symbols for.
+
 ---
 
 ## 🤖 System Prompt Implementation (Hard-Wiring)
@@ -112,8 +119,10 @@ Integrate the following policy into your core operational instructions:
 > 5. EXPAND with `sym.expand_neighbors` (1–2 hops) instead of re-querying retrieval for related code.
 > 6. MANDATE `sym.get_file_symbols` (or `ts.list_symbols`) before reading any source file exceeding 100 lines.
 > 7. USE `sym.find_callers` / `sym.find_references` / `sym.find_implementations` as the primary mechanisms for impact analysis and refactoring scope.
-> 8. APPLY `kind` and `language` filters where supported to minimize search noise.
-> 9. MITIGATE context-window saturation: prefer `lsp.hover`, `sym.get_surrounding_context`, and `sym.get_similar_code` over multi-file ingestion.
+> 8. PREFER `sym.get_execution_context` when you need a comprehensive overview of a symbol (callers, references, related types) to minimize round-trips.
+> 9. USE `sym.traverse_graph` for directed semantic exploration (e.g., following a specific dependency chain or execution path).
+> 10. APPLY `kind` and `language` filters where supported to minimize search noise.
+> 11. MITIGATE context-window saturation: prefer `lsp.hover`, `sym.get_surrounding_context`, and `sym.get_similar_code` over multi-file ingestion.
 
 ---
 

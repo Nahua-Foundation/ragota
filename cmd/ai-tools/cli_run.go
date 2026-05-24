@@ -135,9 +135,15 @@ func newRunCmd() *cobra.Command {
 					Required: cfg.Rerank.Required,
 					TopN:     cfg.Rerank.TopN,
 				})
+				if vIdx != nil {
+					rer.SetSemaphore(vIdx.GetSemaphore())
+				}
 			}
 			if enableSymbol || doWatch {
-				grSvc = graph.New(st)
+				grSvc = graph.New(cfg, st)
+				if lspMgr != nil {
+					grSvc = graph.NewWithLSP(cfg, st, lspMgr)
+				}
 				symSvc = symbols.New(st, grSvc, nil)
 				if vIdx != nil {
 					symSvc.SetSimilarSearcher(vIdx)
@@ -201,10 +207,15 @@ func newRunCmd() *cobra.Command {
 					return err
 				}
 				if tsIdx != nil {
+					time.Sleep(1 * time.Second) // Даем немного времени TUI и другим процессам
 					go func() { _ = tsIdx.FullScan(ctx) }()
 				}
 				if astIdx != nil {
-					go func() { _ = astIdx.FullScan(ctx) }()
+					// Не запускаем одновременно с TS чтобы не грузить SQLite
+					go func() {
+						time.Sleep(2 * time.Second)
+						_ = astIdx.FullScan(ctx)
+					}()
 				}
 				go fanoutWatchEvents(ctx, w, tsIdx, vIdx, astIdx)
 			}
@@ -313,6 +324,8 @@ func waitAndScanVector(ctx context.Context, qd *qdrant.Client, emb *embedder.Oll
 		oErr := emb.Ping(pCtx)
 		c2()
 		if qErr == nil && oErr == nil {
+			// Даем Ollama немного времени на прогрев после старта контейнера, если нужно
+			time.Sleep(1 * time.Second)
 			if err := vIdx.Init(ctx); err != nil {
 				bus.SetIndexer("vector", func(i *state.Indexer) {
 					i.Status = "error"

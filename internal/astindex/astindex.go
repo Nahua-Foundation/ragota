@@ -66,8 +66,16 @@ func (i *Indexer) SetBus(bus *state.Bus) {
 }
 
 // IndexFile парсит файл, извлекает AST units + edges и сохраняет в SQLite.
-// path должен быть абсолютным.
+// path должен быть абсолютным. Сразу резолвит отложенные dst_id у edges —
+// предназначен для инкрементальной переиндексации (watcher / явный reindex).
 func (i *Indexer) IndexFile(ctx context.Context, path string) error {
+	return i.indexFile(ctx, path, true)
+}
+
+// indexFile — внутренняя реализация. resolveEdges=false используется в FullScan,
+// чтобы избежать N лишних вызовов ResolvePendingEdges на каждый файл; финальный
+// резолв выполняется один раз в конце скана.
+func (i *Indexer) indexFile(ctx context.Context, path string, resolveEdges bool) error {
 	if i == nil || i.st == nil {
 		return nil
 	}
@@ -177,6 +185,18 @@ func (i *Indexer) IndexFile(ctx context.Context, path string) error {
 		return fmt.Errorf("astindex: replace edges: %w", err)
 	}
 
+	// Резолвим dst_id для новых рёбер сразу после записи: это важно для
+	// инкрементальной переиндексации (watcher / явный reindex одного файла),
+	// иначе find_references / find_callers / find_implementations /
+	// expand_neighbors остаются пустыми до полного FullScan.
+	// В режиме FullScan (resolveEdges=false) пропускаем — там один общий
+	// финальный вызов ResolvePendingEdges.
+	if resolveEdges {
+		if _, err := i.st.ResolvePendingEdges(ctx); err != nil {
+			return fmt.Errorf("astindex: resolve pending edges: %w", err)
+		}
+	}
+
 	if i.bus != nil {
 		i.bus.AddRecent(state.FileEntry{
 			Path:       path,
@@ -190,7 +210,9 @@ func (i *Indexer) IndexFile(ctx context.Context, path string) error {
 }
 
 // FullScan индексирует все подходящие файлы под cfg.Root и затем разрешает
-// отложенные dst_id у edges.
+// отложенные dst_id у edges одним финальным вызовом ResolvePendingEdges.
+// Per-file резолв отключён для производительности — на крупных проектах это
+// убирает N лишних запросов к SQLite.
 func (i *Indexer) FullScan(ctx context.Context) error {
 	if i.bus != nil {
 		i.bus.SetIndexer("graph", func(st *state.Indexer) {
@@ -209,13 +231,23 @@ func (i *Indexer) FullScan(ctx context.Context) error {
 	var indexed int
 	var lastErr error
 
+	// Страховка на случай раннего выхода (ctx cancel / panic recover в
+	// вызывающем коде): разрешаем накопленные pending edges, чтобы граф
+	// не остался полу-связным. Безопасно вызывать многократно.
+	defer func() {
+		// Используем context.Background, т.к. ctx может быть уже отменён.
+		if _, err := i.st.ResolvePendingEdges(context.Background()); err != nil && lastErr == nil {
+			lastErr = err
+		}
+	}()
+
 	for idx, abs := range allFiles {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
-		if err := i.IndexFile(ctx, abs); err == nil {
+		if err := i.indexFile(ctx, abs, false); err == nil {
 			indexed++
 		} else {
 			lastErr = err

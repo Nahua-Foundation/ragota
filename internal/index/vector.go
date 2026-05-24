@@ -7,16 +7,16 @@
 // Реализация декомпозирована по доменам (все файлы — package index):
 //
 //   - vector.go         — типы (Vector, preparedFile), конструктор,
-//                         Init/ensureCollection/pickCollection/SyncStats,
-//                         SetBM25 и константа codeCollectionLanguages.
+//     Init/ensureCollection/pickCollection/SyncStats,
+//     SetBM25 и константа codeCollectionLanguages.
 //   - fullscan.go       — FullScan и пакетный пайплайн
-//                         (prepareFile → batcher.run → processBatch).
+//     (prepareFile → batcher.run → processBatch).
 //   - indexfile.go      — инкрементальный путь: IndexFile, RemoveFile, Watch.
 //   - search.go         — Search, SimilarToUnit и общие helper'ы
-//                         (combinedText, chunkID, buildFilter).
+//     (combinedText, chunkID, buildFilter).
 //   - hybrid_adapter.go — реализация интерфейсов internal/hybrid.
 //   - treesitter.go     — вспомогательные функции tree-sitter символьного
-//                         поиска поверх векторного индекса.
+//     поиска поверх векторного индекса.
 package index
 
 import (
@@ -90,10 +90,20 @@ type preparedFile struct {
 func NewVector(cfg *config.Config, qd *qdrant.Client, emb *embedder.Ollama, st *store.SQLite, bus *state.Bus) *Vector {
 	codeSpec := cfg.CodeCollection()
 	textSpec := cfg.TextCollection()
+
+	sem := make(chan struct{}, cfg.EmbedParallelism)
+
 	code := embedder.New(cfg.Ollama.URL, codeSpec.EmbedModel)
 	code.SetDim(int(codeSpec.EmbedDim))
+	code.SetSemaphore(sem)
+
 	text := embedder.New(cfg.Ollama.URL, textSpec.EmbedModel)
 	text.SetDim(int(textSpec.EmbedDim))
+	text.SetSemaphore(sem)
+
+	if emb != nil {
+		emb.SetSemaphore(sem)
+	}
 
 	return &Vector{
 		cfg:     cfg,
@@ -106,8 +116,12 @@ func NewVector(cfg *config.Config, qd *qdrant.Client, emb *embedder.Ollama, st *
 		bus:     bus,
 		matcher: fileutil.NewMatcher(cfg.Ignore),
 		store:   st,
-		sem:     make(chan struct{}, cfg.EmbedParallelism),
+		sem:     sem,
 	}
+}
+
+func (v *Vector) GetSemaphore() chan struct{} {
+	return v.sem
 }
 
 // SetBM25 подключает Bleve-индекс к индексатору; если bm25 == nil —

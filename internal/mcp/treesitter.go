@@ -1,4 +1,4 @@
-// Package mcp реализует три MCP-сервера: tree-sitter, vector, lsp.
+// Package mcp реализует четыре MCP-сервера: tree-sitter, vector, lsp, symbol.
 // Все они общаются по stdio (стандарт MCP) и используют mark3labs/mcp-go.
 package mcp
 
@@ -148,4 +148,3 @@ func (s *TreeSitterServer) handleStats(ctx context.Context, _ mcp.CallToolReques
 	}
 	return jsonResult(map[string]any{"files": st.Files, "symbols": st.Symbols})
 }
-

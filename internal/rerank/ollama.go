@@ -23,6 +23,7 @@ type ollamaReranker struct {
 	opts Options
 	http *http.Client
 	log  *log.Logger
+	sem  chan struct{}
 }
 
 func (r *ollamaReranker) warnf(format string, a ...any) {
@@ -117,6 +118,15 @@ func (r *ollamaReranker) Rerank(ctx context.Context, query string, candidates []
 // чат-шаблонов, что критично для специализированных моделей типа bge-reranker.
 // Промпт включает инструкцию и контекст, завершаясь призывом к выводу оценки.
 func (r *ollamaReranker) scoreOne(ctx context.Context, query string, c Candidate) (float64, error) {
+	if r.sem != nil {
+		select {
+		case r.sem <- struct{}{}:
+			defer func() { <-r.sem }()
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+
 	content := c.Content
 	if content == "" {
 		return 0, nil
@@ -180,4 +190,8 @@ func (r *ollamaReranker) scoreOne(ctx context.Context, query string, c Candidate
 		r.warnf("rerank: model returned non-numeric content %q, using score 0", displayRes)
 	}
 	return score, nil
+}
+
+func (r *ollamaReranker) SetSemaphore(sem chan struct{}) {
+	r.sem = sem
 }

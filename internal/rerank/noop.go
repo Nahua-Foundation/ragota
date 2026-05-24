@@ -9,6 +9,7 @@ import "context"
 type noop struct{ opts Options }
 
 func (n *noop) Available(ctx context.Context) bool { return false }
+func (n *noop) SetSemaphore(sem chan struct{})     {}
 
 func (n *noop) Rerank(ctx context.Context, query string, candidates []Candidate, topN int) ([]Scored, error) {
 	if n.opts.Required {

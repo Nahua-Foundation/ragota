@@ -61,6 +61,10 @@ func Open(path string) (*SQLite, error) {
 // Close закрывает БД.
 func (s *SQLite) Close() error { return s.db.Close() }
 
+func (s *SQLite) GetDB() *sql.DB {
+	return s.db
+}
+
 func (s *SQLite) init() error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS files (

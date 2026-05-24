@@ -45,7 +45,7 @@ func (s *SymbolServer) Build() *server.MCPServer {
 
 	srv.AddTool(mcp.NewTool("sym.find_references",
 		mcp.WithDescription("Find all references (edges) to the given symbol across the project."),
-		mcp.WithString("symbol", mcp.Required()),
+		mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name.")),
 	), s.wrap("sym.find_references", s.handleFindReferences))
 
 	srv.AddTool(mcp.NewTool("sym.find_implementations",
@@ -55,13 +55,33 @@ func (s *SymbolServer) Build() *server.MCPServer {
 
 	srv.AddTool(mcp.NewTool("sym.find_callers",
 		mcp.WithDescription("Find functions/methods that call the given function."),
-		mcp.WithString("function", mcp.Required()),
+		mcp.WithString("function", mcp.Required(), mcp.Description("Function name.")),
 	), s.wrap("sym.find_callers", s.handleFindCallers))
 
 	srv.AddTool(mcp.NewTool("sym.find_callees",
 		mcp.WithDescription("Find functions/methods called by the given function."),
-		mcp.WithString("function", mcp.Required()),
+		mcp.WithString("function", mcp.Required(), mcp.Description("Function name.")),
 	), s.wrap("sym.find_callees", s.handleFindCallees))
+
+	srv.AddTool(mcp.NewTool("sym.get_execution_context",
+		mcp.WithDescription("Get a comprehensive execution context for a symbol (definition, callers, callees, references, related types, imports, important files)."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+	), s.wrap("sym.get_execution_context", s.handleGetExecutionContext))
+
+	srv.AddTool(mcp.NewTool("sym.get_symbol_summary",
+		mcp.WithDescription("Get a semantic summary of a symbol (purpose, role, importance) enriched by LLM."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+	), s.wrap("sym.get_symbol_summary", s.handleGetSymbolSummary))
+
+	srv.AddTool(mcp.NewTool("sym.get_file_intent",
+		mcp.WithDescription("Analyze the purpose and responsibilities of a source file."),
+		mcp.WithString("path", mcp.Required()),
+	), s.wrap("sym.get_file_intent", s.handleGetFileIntent))
+
+	srv.AddTool(mcp.NewTool("sym.get_semantic_neighborhood",
+		mcp.WithDescription("Get a clustered view of a symbol's neighborhood (deterministic + LLM clustering)."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+	), s.wrap("sym.get_semantic_neighborhood", s.handleGetSemanticNeighborhood))
 
 	// --- AST / structure retrieval ---
 	srv.AddTool(mcp.NewTool("sym.get_file_symbols",
@@ -99,10 +119,18 @@ func (s *SymbolServer) Build() *server.MCPServer {
 	), s.wrap("sym.get_dependency_graph", s.handleDependencyGraph))
 
 	srv.AddTool(mcp.NewTool("sym.get_call_graph",
-		mcp.WithDescription("Get the call graph around a function/method (by symbol_id)."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
+		mcp.WithDescription("Get the call graph around a function/method. Accepts either `function` (name) or `symbol_id`."),
+		mcp.WithString("function", mcp.Description("Function/method name (e.g. 'Foo.bar' or 'bar').")),
+		mcp.WithNumber("symbol_id", mcp.Description("Symbol ID of the function/method (alternative to `function`).")),
 		mcp.WithNumber("depth", mcp.DefaultNumber(2)),
 	), s.wrap("sym.get_call_graph", s.handleCallGraph))
+
+	srv.AddTool(mcp.NewTool("sym.traverse_graph",
+		mcp.WithDescription("Perform semantic navigation by walking edges from a starting symbol."),
+		mcp.WithNumber("symbol_id", mcp.Required()),
+		mcp.WithString("edge_types", mcp.Description("Comma-separated edge kinds: call,import,implements,extends,reference. Empty = all.")),
+		mcp.WithNumber("depth", mcp.DefaultNumber(1)),
+	), s.wrap("sym.traverse_graph", s.handleTraverseGraph))
 
 	// --- Context retrieval ---
 	srv.AddTool(mcp.NewTool("sym.get_surrounding_context",
@@ -296,16 +324,78 @@ func (s *SymbolServer) handleDependencyGraph(ctx context.Context, req mcp.CallTo
 }
 
 func (s *SymbolServer) handleCallGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	depth := int(req.GetFloat("depth", 2))
+
+	// Вариант 1: явный symbol_id.
+	if id := int64(req.GetFloat("symbol_id", 0)); id > 0 {
+		n, err := s.gr.CallGraph(ctx, id, depth)
+		if err != nil {
+			return nil, err
+		}
+		return jsonResult(n)
+	}
+
+	// Вариант 2: имя функции (как описано в README/AGENTS.md).
+	fn := strings.TrimSpace(req.GetString("function", ""))
+	if fn == "" {
+		return mcp.NewToolResultError("either `function` (name) or `symbol_id` is required"), nil
+	}
+	defs, err := s.syms.FindDefinition(ctx, fn)
+	if err != nil {
+		return nil, err
+	}
+	// Отфильтруем callable (function/method) и объединим окрестности.
+	seenNodes := map[int64]bool{}
+	seenEdges := map[int64]bool{}
+	merged := &graph.Neighborhood{}
+	for _, d := range defs {
+		if d.Kind != "function" && d.Kind != "method" {
+			continue
+		}
+		n, err := s.gr.CallGraph(ctx, d.ID, depth)
+		if err != nil {
+			return nil, err
+		}
+		if n == nil {
+			continue
+		}
+		for _, u := range n.Nodes {
+			if !seenNodes[u.ID] {
+				seenNodes[u.ID] = true
+				merged.Nodes = append(merged.Nodes, u)
+			}
+		}
+		for _, e := range n.Edges {
+			if !seenEdges[e.ID] {
+				seenEdges[e.ID] = true
+				merged.Edges = append(merged.Edges, e)
+			}
+		}
+	}
+	return jsonResult(merged)
+}
+
+func (s *SymbolServer) handleTraverseGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	id := int64(req.GetFloat("symbol_id", 0))
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}
-	depth := int(req.GetFloat("depth", 2))
-	n, err := s.gr.CallGraph(ctx, id, depth)
+	depth := int(req.GetFloat("depth", 1))
+	kindsStr := req.GetString("edge_types", "")
+	var kinds []string
+	if kindsStr != "" {
+		for _, k := range strings.Split(kindsStr, ",") {
+			k = strings.TrimSpace(k)
+			if k != "" {
+				kinds = append(kinds, k)
+			}
+		}
+	}
+	res, err := s.gr.TraverseGraph(ctx, id, depth, kinds)
 	if err != nil {
 		return nil, err
 	}
-	return jsonResult(n)
+	return jsonResult(res)
 }
 
 func (s *SymbolServer) handleSurroundingContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -344,5 +434,56 @@ func (s *SymbolServer) handleSimilarCode(ctx context.Context, req mcp.CallToolRe
 	if err != nil {
 		return nil, err
 	}
+	if us == nil {
+		us = []store.ASTUnit{}
+	}
 	return jsonResult(us)
+}
+
+func (s *SymbolServer) handleGetExecutionContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("symbol_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("symbol_id is required"), nil
+	}
+	ectx, err := s.gr.GetExecutionContext(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(ectx)
+}
+
+func (s *SymbolServer) handleGetSymbolSummary(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("symbol_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("symbol_id is required"), nil
+	}
+	res, err := s.gr.GetSymbolSummary(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(res)
+}
+
+func (s *SymbolServer) handleGetFileIntent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path := req.GetString("path", "")
+	if path == "" {
+		return mcp.NewToolResultError("path is required"), nil
+	}
+	res, err := s.gr.GetFileIntent(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(res)
+}
+
+func (s *SymbolServer) handleGetSemanticNeighborhood(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := int64(req.GetFloat("symbol_id", 0))
+	if id <= 0 {
+		return mcp.NewToolResultError("symbol_id is required"), nil
+	}
+	res, err := s.gr.GetSemanticNeighborhood(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(res)
 }

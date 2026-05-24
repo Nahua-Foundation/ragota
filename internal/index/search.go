@@ -140,7 +140,12 @@ func (v *Vector) SimilarToUnit(ctx context.Context, u store.ASTUnit, limit int) 
 			if cu.Kind == "module" || seen[cu.ID] {
 				continue
 			}
-			if int(startLine) >= cu.StartLine && int(endLine) <= cu.EndLine {
+			// Берём unit, чей диапазон строк пересекается с чанком.
+			sl := int(startLine)
+			el := int(endLine)
+			if sl <= cu.EndLine && el >= cu.StartLine {
+				// Если чанк пересекается с юнитом, считаем это попаданием.
+				// Выбираем наиболее специфичный (короткий) юнит, если их несколько.
 				if best == nil || (cu.EndLine-cu.StartLine) < (best.EndLine-best.StartLine) {
 					best = &cu
 				}

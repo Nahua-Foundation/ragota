@@ -44,6 +44,15 @@ func (r *ollamaReranker) scoreEmbed(ctx context.Context, query, content string) 
 
 // embed — обращение к Ollama /api/embed для получения вектора одного входа.
 func (r *ollamaReranker) embed(ctx context.Context, input string) ([]float64, error) {
+	if r.sem != nil {
+		select {
+		case r.sem <- struct{}{}:
+			defer func() { <-r.sem }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
 	body, _ := json.Marshal(map[string]any{
 		"model": r.opts.Model,
 		"input": input,

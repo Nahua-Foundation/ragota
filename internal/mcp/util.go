@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -12,6 +13,11 @@ import (
 // инициализированы в store. Но для надежности проверяет.
 func jsonResult(v any) (*mcp.CallToolResult, error) {
 	if v == nil {
+		return mcp.NewToolResultText("[]"), nil
+	}
+	// Если это слайс и он nil, вернем "[]"
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Slice && rv.IsNil() {
 		return mcp.NewToolResultText("[]"), nil
 	}
 	data, err := json.MarshalIndent(v, "", "  ")

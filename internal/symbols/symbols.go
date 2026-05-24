@@ -98,8 +98,13 @@ func (s *Service) FindReferences(ctx context.Context, symbol string) ([]store.Ed
 	var out []store.Edge = []store.Edge{}
 
 	// 2. Для каждого определения ищем разрешённые ссылки (dst_id).
-	// Также собираем имена (name и qualified) для поиска неразрешённых.
-	namesToSearch := map[string]bool{symbol: true}
+	// Также собираем (имя, язык) для языко-чувствительного поиска
+	// нерезолвленных рёбер — иначе TS-`log()` подтянет Go-`log`.
+	type nameLangKey struct {
+		name string
+		lang string
+	}
+	namesToSearch := map[nameLangKey]bool{}
 	for _, d := range defs {
 		es, err := s.g.References(ctx, d.ID)
 		if err != nil {
@@ -112,15 +117,33 @@ func (s *Service) FindReferences(ctx context.Context, symbol string) ([]store.Ed
 			seen[e.ID] = true
 			out = append(out, e)
 		}
-		namesToSearch[d.Name] = true
+		namesToSearch[nameLangKey{d.Name, d.Language}] = true
 		if d.Qualified != "" {
-			namesToSearch[d.Qualified] = true
+			namesToSearch[nameLangKey{d.Qualified, d.Language}] = true
 		}
 	}
 
-	// 3. Дополнительно — edges по именам (для внешних/нерезолвленных).
-	for name := range namesToSearch {
-		byName, err := s.st.EdgesByDstName(ctx, name, "")
+	// 3. Дополнительно — edges по именам (для внешних/нерезолвленных) с
+	// фильтром по языку определения. Если defs пуст (например, символ
+	// внешний), деградируем до прежнего поведения с предупреждением о
+	// кросс-языковом матче — но только под исходным symbol без языка.
+	if len(namesToSearch) == 0 {
+		byName, err := s.st.EdgesByDstName(ctx, symbol, graph.EdgeReference)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range byName {
+			if seen[e.ID] {
+				continue
+			}
+			seen[e.ID] = true
+			out = append(out, e)
+		}
+		return out, nil
+	}
+
+	for k := range namesToSearch {
+		byName, err := s.st.EdgesByDstNameForLang(ctx, k.name, graph.EdgeReference, k.lang)
 		if err != nil {
 			return nil, err
 		}
@@ -142,6 +165,8 @@ func (s *Service) FindImplementations(ctx context.Context, iface string) ([]stor
 	}
 	out := []store.ASTUnit{}
 	seen := map[int64]bool{}
+
+	// 1. По ID найденных интерфейсов
 	for _, u := range units {
 		impls, err := s.g.Implementations(ctx, u.ID)
 		if err != nil {
@@ -154,7 +179,106 @@ func (s *Service) FindImplementations(ctx context.Context, iface string) ([]stor
 			seen[im.ID] = true
 			out = append(out, im)
 		}
+
+		// Эвристика для Go: если интерфейс имеет методы, ищем структуры с такими же методами
+		if u.Language == "go" {
+			methods, err := s.st.ChildrenOf(ctx, u.ID)
+			if err == nil && len(methods) > 0 {
+				methodNames := make([]string, 0, len(methods))
+				for _, m := range methods {
+					if m.Kind == "method" || m.Kind == "function" {
+						methodNames = append(methodNames, m.Name)
+					}
+				}
+				if len(methodNames) > 0 {
+					// Ищем методы с такими же именами
+					// Берем первые несколько методов для поиска кандидатов
+					maxMethodsToCheck := 3
+					if len(methodNames) < maxMethodsToCheck {
+						maxMethodsToCheck = len(methodNames)
+					}
+
+					for i := 0; i < maxMethodsToCheck; i++ {
+						candidates, err := s.st.FindASTUnits(ctx, methodNames[i], "method", "go", 100)
+						if err != nil {
+							continue
+						}
+						for _, cand := range candidates {
+							if cand.ParentID.Valid {
+								owner, err := s.st.GetASTUnit(ctx, cand.ParentID.Int64)
+								if err == nil && owner != nil && (owner.Kind == "struct" || owner.Kind == "type") {
+									if seen[owner.ID] {
+										continue
+									}
+									// Проверяем, что у этой структуры есть все остальные методы интерфейса
+									ownerMethods, err := s.st.ChildrenOf(ctx, owner.ID)
+									if err == nil {
+										ownerMethodNames := make(map[string]bool)
+										for _, om := range ownerMethods {
+											ownerMethodNames[om.Name] = true
+										}
+										matchCount := 0
+										for _, mn := range methodNames {
+											if ownerMethodNames[mn] {
+												matchCount++
+											}
+										}
+										if matchCount == len(methodNames) {
+											seen[owner.ID] = true
+											out = append(out, *owner)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 	}
+
+	// 2. По имени (для неразрешённых связей или если интерфейс не найден как юнит).
+	// Если мы знаем язык(и) найденных интерфейсов — ограничиваем поиск ими,
+	// чтобы Java-implements Foo не подтягивало Go-тип Foo и наоборот.
+	langs := map[string]bool{}
+	for _, u := range units {
+		if u.Language != "" {
+			langs[u.Language] = true
+		}
+	}
+	var byNameAll []store.Edge
+	if len(langs) == 0 {
+		// Интерфейс не найден как юнит — fallback на старое поведение
+		// (без языкового фильтра, иначе вообще ничего не найдём).
+		byNameAll, err = s.st.EdgesByDstName(ctx, iface, graph.EdgeImplements)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		for lang := range langs {
+			part, err := s.st.EdgesByDstNameForLang(ctx, iface, graph.EdgeImplements, lang)
+			if err != nil {
+				return nil, err
+			}
+			byNameAll = append(byNameAll, part...)
+		}
+	}
+	for _, e := range byNameAll {
+		if seen[e.SrcID] {
+			continue
+		}
+		u, err := s.st.GetASTUnit(ctx, e.SrcID)
+		if err != nil || u == nil {
+			continue
+		}
+		// Для Go исключаем интерфейсы из списка реализаций
+		if u.Language == "go" && u.Kind == "interface" {
+			continue
+		}
+		seen[u.ID] = true
+		out = append(out, *u)
+	}
+
 	return out, nil
 }
 
@@ -181,12 +305,31 @@ func (s *Service) FindCallers(ctx context.Context, function string) ([]store.AST
 		}
 	}
 
-	// 2. По имени (для неразрешённых вызовов, например методов Go)
-	byName, err := s.st.EdgesByDstName(ctx, function, graph.EdgeCall)
-	if err != nil {
-		return nil, err
+	// 2. По имени (для неразрешённых вызовов, например методов Go).
+	// Ограничиваем поиск языками найденных определений, чтобы избежать
+	// кросс-языковых ложных совпадений (TS-вызов log() ↔ Go-функция log).
+	langs := map[string]bool{}
+	for _, d := range defs {
+		if d.Language != "" {
+			langs[d.Language] = true
+		}
 	}
-	for _, e := range byName {
+	var byNameAll []store.Edge
+	if len(langs) == 0 {
+		byNameAll, err = s.st.EdgesByDstName(ctx, function, graph.EdgeCall)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		for lang := range langs {
+			part, err := s.st.EdgesByDstNameForLang(ctx, function, graph.EdgeCall, lang)
+			if err != nil {
+				return nil, err
+			}
+			byNameAll = append(byNameAll, part...)
+		}
+	}
+	for _, e := range byNameAll {
 		if seen[e.SrcID] {
 			continue
 		}

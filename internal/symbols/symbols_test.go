@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"aitools/internal/config"
 	"aitools/internal/graph"
 	"aitools/internal/store"
 )
@@ -56,7 +57,7 @@ func seedTwoFunctions(t *testing.T, st *store.SQLite, path string) (idF, idG int
 
 func newService(t *testing.T, st *store.SQLite) *Service {
 	t.Helper()
-	return New(st, graph.New(st), nil)
+	return New(st, graph.New(config.Default(), st), nil)
 }
 
 func TestService_FileSymbols(t *testing.T) {
@@ -152,17 +153,59 @@ func TestService_FindDefinition_NotFound(t *testing.T) {
 	}
 }
 
-func TestService_findCallable(t *testing.T) {
+func TestService_FindReferences(t *testing.T) {
 	st := openStore(t)
-	path := "/tmp/x.go"
-	seedTwoFunctions(t, st, path)
-	s := newService(t, st)
-
-	units, err := s.findCallable(context.Background(), "g")
-	if err != nil {
-		t.Fatalf("findCallable: %v", err)
+	path := "/tmp/refs.go"
+	ctx := context.Background()
+	if err := st.EnsureFile(ctx, path, "go"); err != nil {
+		t.Fatalf("EnsureFile: %v", err)
 	}
-	if len(units) == 0 {
-		t.Errorf("findCallable(g) returned 0 units")
+	// Seed: f calls g
+	units := []store.ASTUnit{
+		{ID: 1, FilePath: path, Language: "go", Kind: "function", Name: "f", Qualified: "pkg.f", StartLine: 1, EndLine: 5},
+		{ID: 2, FilePath: path, Language: "go", Kind: "function", Name: "g", Qualified: "pkg.g", StartLine: 10, EndLine: 15},
+	}
+	ids, _ := st.ReplaceASTUnits(ctx, path, units)
+	idF, idG := ids["pkg.f"], ids["pkg.g"]
+
+	// Edge from f to g
+	edges := []store.Edge{
+		{SrcID: idF, DstID: idG, Kind: "reference", DstName: "g", FilePath: path, Line: 2},
+	}
+	if err := st.ReplaceEdges(ctx, path, edges); err != nil {
+		t.Fatalf("ReplaceEdges: %v", err)
+	}
+
+	s := newService(t, st)
+	refs, err := s.FindReferences(ctx, "g")
+	if err != nil {
+		t.Fatalf("FindReferences: %v", err)
+	}
+	if len(refs) == 0 {
+		t.Errorf("expected references to g, got 0")
+	}
+}
+
+type mockSimilar struct {
+	units []store.ASTUnit
+}
+
+func (m *mockSimilar) SimilarToUnit(ctx context.Context, u store.ASTUnit, limit int) ([]store.ASTUnit, error) {
+	return m.units, nil
+}
+
+func TestService_SimilarCode(t *testing.T) {
+	st := openStore(t)
+	path := "/tmp/sim.go"
+	seedTwoFunctions(t, st, path)
+	ms := &mockSimilar{units: []store.ASTUnit{{Name: "similar_func"}}}
+	s := New(st, graph.New(config.Default(), st), ms)
+
+	res, err := s.SimilarCode(context.Background(), 1, 10)
+	if err != nil {
+		t.Fatalf("SimilarCode: %v", err)
+	}
+	if len(res) == 0 || res[0].Name != "similar_func" {
+		t.Errorf("SimilarCode returned unexpected results: %+v", res)
 	}
 }

@@ -173,7 +173,7 @@ func newServeSymbolCmd() *cobra.Command {
 			}
 			lspMgr := lsp.NewManager(cfg.Root, specs)
 			defer lspMgr.Close()
-			gr := graph.NewWithLSP(st, lspMgr)
+			gr := graph.NewWithLSP(cfg, st, lspMgr)
 			syms := symbols.New(st, gr, nil)
 			// Опционально подключаем similar-search через Vector, если qdrant доступен.
 			qd := qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))

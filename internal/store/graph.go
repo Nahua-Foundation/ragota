@@ -45,11 +45,17 @@ type ASTUnit struct {
 //   - "reference"   : src ссылается на dst (поле/переменная/тип)
 //   - "contains"    : src содержит dst (parent-child, дублирует ParentID, опционально)
 type Edge struct {
-	ID       int64
-	SrcID    int64
-	DstID    int64 // 0 если ещё не разрешено — тогда используется DstName
-	Kind     string
-	DstName  string
-	FilePath string
-	Line     int
+	ID       int64  `json:"id"`
+	SrcID    int64  `json:"src_id"`
+	DstID    int64  `json:"dst_id"` // 0 если ещё не разрешено — тогда используется DstName
+	Kind     string `json:"kind"`
+	DstName  string `json:"dst_name"`
+	FilePath string `json:"file_path"`
+	Line     int    `json:"line"`
+}
+
+// TraverseResult — результат направленного обхода.
+type TraverseResult struct {
+	Nodes []ASTUnit `json:"nodes"`
+	Edges []Edge    `json:"edges"`
 }

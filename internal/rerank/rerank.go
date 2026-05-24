@@ -54,6 +54,7 @@ type Scored struct {
 type Reranker interface {
 	Rerank(ctx context.Context, query string, candidates []Candidate, topN int) ([]Scored, error)
 	Available(ctx context.Context) bool
+	SetSemaphore(sem chan struct{})
 }
 
 // Options — настройки конкретного экземпляра реранкера.

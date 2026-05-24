@@ -19,6 +19,7 @@ type Ollama struct {
 	model   string
 	dim     int // желаемая размерность (0 - дефолт модели)
 	http    *http.Client
+	sem     chan struct{} // опциональный семафор для ограничения параллелизма
 }
 
 // New создаёт клиента. baseURL обычно "http://localhost:11434".
@@ -29,6 +30,33 @@ func New(baseURL, model string) *Ollama {
 		http: &http.Client{
 			Timeout: 120 * time.Second,
 		},
+	}
+}
+
+// SetSemaphore устанавливает канал-семафор для ограничения количества параллельных запросов.
+func (o *Ollama) SetSemaphore(sem chan struct{}) {
+	o.sem = sem
+}
+
+// acquire/release для семафора
+func (o *Ollama) acquire(ctx context.Context) error {
+	if o.sem == nil {
+		return nil
+	}
+	select {
+	case o.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (o *Ollama) release() {
+	if o.sem != nil {
+		select {
+		case <-o.sem:
+		default:
+		}
 	}
 }
 
@@ -79,6 +107,11 @@ func (o *Ollama) Embed(ctx context.Context, prompt string) ([]float32, error) {
 }
 
 func (o *Ollama) embedModern(ctx context.Context, prompt string) ([]float32, error) {
+	if err := o.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer o.release()
+
 	opts := map[string]interface{}{
 		"num_ctx": 8192,
 	}
@@ -140,6 +173,11 @@ func (o *Ollama) embedModern(ctx context.Context, prompt string) ([]float32, err
 }
 
 func (o *Ollama) embedLegacy(ctx context.Context, prompt string) ([]float32, error) {
+	if err := o.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer o.release()
+
 	opts := map[string]interface{}{
 		"num_ctx": 8192,
 	}
@@ -235,6 +273,11 @@ func (o *Ollama) EmbedBatch(ctx context.Context, prompts []string) ([][]float32,
 }
 
 func (o *Ollama) tryEmbedBatch(ctx context.Context, prompts []string) ([][]float32, error) {
+	if err := o.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer o.release()
+
 	opts := map[string]interface{}{
 		"num_ctx": 8192,
 	}

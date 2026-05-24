@@ -290,14 +290,7 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 		}
 	}
 
-	// Семафор только на время эмбеддинга
-	select {
-	case v.sem <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 	vecs, err := emb.EmbedBatch(ctx, allTexts)
-	<-v.sem
 
 	if err != nil {
 		return err

@@ -129,6 +129,11 @@ ai-tools serve-lsp        --root /path/to/project
 - AST / structure:
   - `sym.get_file_symbols(path)`
   - `sym.get_symbol(symbol_id)`
+  - `sym.get_execution_context(symbol_id)` — возвращает полный контекст исполнения (definition, callers, callees, references, related_types, imports, important_files).
+  - `sym.get_symbol_summary(symbol_id)` — семантическое резюме символа (цель, роль, важность) через LLM.
+  - `sym.get_file_intent(path)` — анализ назначения и ответственности исходного файла через LLM.
+  - `sym.get_semantic_neighborhood(symbol_id)` — кластеризованное представление окрестности символа (граф + LLM).
+  - `sym.traverse_graph(symbol_id, edge_types, depth)` — семантическая навигация по графу (хождение по связям).
   - `sym.get_parent(symbol_id)`
   - `sym.get_children(symbol_id)`
 - Graph:
@@ -164,6 +169,11 @@ ai-tools serve-lsp        --root /path/to/project
   ```bash
   npm install -g pyright
   ```
+- **phi3:mini (via Ollama)**:
+  ```bash
+  ollama run phi3:mini
+  ```
+  Используется для семантического анализа в `sym.get_symbol_summary`, `sym.get_file_intent` и `sym.get_semantic_neighborhood`.
 - **Java (jdtls)**:
   - macOS: `brew install jdtls`
   - Linux / вручную: скачайте [Eclipse JDT.LS](https://github.com/eclipse-jdtls/eclipse.jdt.ls) и положите `jdtls` в `PATH`.

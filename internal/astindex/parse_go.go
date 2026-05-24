@@ -146,26 +146,65 @@ func (i *Indexer) addFuncDecl(fset *token.FileSet, src []byte, d *ast.FuncDecl, 
 		Hash:      hashBytes([]byte(body)),
 	})
 
-	// Call edges внутри тела.
+	// Call/Reference edges внутри тела.
 	if d.Body != nil {
 		ast.Inspect(d.Body, func(n ast.Node) bool {
-			ce, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+			switch node := n.(type) {
+			case *ast.CallExpr:
+				callee := exprName(node.Fun)
+				if callee != "" {
+					*edges = append(*edges, pendingEdge{
+						srcIdx:  idx,
+						dstIdx:  -1,
+						dstName: callee,
+						kind:    "call",
+						line:    fset.Position(node.Pos()).Line,
+					})
+				}
+			case *ast.SelectorExpr:
+				// pkg.Symbol или obj.Method
+				if nm := exprName(node); nm != "" {
+					*edges = append(*edges, pendingEdge{
+						srcIdx:  idx,
+						dstIdx:  -1,
+						dstName: nm,
+						kind:    "reference",
+						line:    fset.Position(node.Pos()).Line,
+					})
+				}
+			case *ast.Ident:
+				// Просто символ (если это не определение и не часть селектора выше)
+				if node.Obj == nil { // Обычно nil для внешних или если parser.ParseFile был без резолва
+					*edges = append(*edges, pendingEdge{
+						srcIdx:  idx,
+						dstIdx:  -1,
+						dstName: node.Name,
+						kind:    "reference",
+						line:    fset.Position(node.Pos()).Line,
+					})
+				}
 			}
-			callee := exprName(ce.Fun)
-			if callee == "" {
-				return true
-			}
-			*edges = append(*edges, pendingEdge{
-				srcIdx:  idx,
-				dstIdx:  -1,
-				dstName: callee,
-				kind:    "call",
-				line:    fset.Position(ce.Pos()).Line,
-			})
 			return true
 		})
+	}
+
+	// Heuristic: // implements InterfaceName in method comments
+	if doc := commentText(d.Doc); doc != "" {
+		for _, l := range strings.Split(doc, "\n") {
+			l = strings.TrimSpace(strings.ToLower(l))
+			if strings.HasPrefix(l, "implements ") {
+				iface := strings.TrimSpace(l[len("implements "):])
+				if iface != "" {
+					*edges = append(*edges, pendingEdge{
+						srcIdx:  idx,
+						dstIdx:  -1,
+						dstName: iface,
+						kind:    "implements",
+						line:    startPos.Line,
+					})
+				}
+			}
+		}
 	}
 }
 
@@ -178,7 +217,6 @@ func (i *Indexer) addGenDecl(fset *token.FileSet, src []byte, d *ast.GenDecl, pk
 			name := ts.Name.Name
 			qualified := pkg + "." + name
 			kind := "type"
-
 			switch ts.Type.(type) {
 			case *ast.StructType:
 				kind = "struct"
@@ -222,28 +260,29 @@ func (i *Indexer) addGenDecl(fset *token.FileSet, src []byte, d *ast.GenDecl, pk
 				Hash:      hashBytes([]byte(body)),
 			})
 
-			// Embedded типы у struct → reference; embedded interfaces → extends.
 			switch tt := ts.Type.(type) {
 			case *ast.StructType:
 				if tt.Fields != nil {
 					for _, f := range tt.Fields.List {
-						if len(f.Names) == 0 { // embedded
-							if nm := exprName(f.Type); nm != "" {
-								*edges = append(*edges, pendingEdge{
-									srcIdx:  idx,
-									dstIdx:  -1,
-									dstName: nm,
-									kind:    "reference",
-									line:    fset.Position(f.Pos()).Line,
-								})
+						if nm := exprName(f.Type); nm != "" {
+							kind := "reference"
+							if len(f.Names) == 0 {
+								// embedded type in struct is still a reference, but we can call it reference
 							}
+							*edges = append(*edges, pendingEdge{
+								srcIdx:  idx,
+								dstIdx:  -1,
+								dstName: nm,
+								kind:    kind,
+								line:    fset.Position(f.Pos()).Line,
+							})
 						}
 					}
 				}
 			case *ast.InterfaceType:
 				if tt.Methods != nil {
 					for _, f := range tt.Methods.List {
-						if len(f.Names) == 0 {
+						if len(f.Names) == 0 { // embedded interface
 							if nm := exprName(f.Type); nm != "" {
 								*edges = append(*edges, pendingEdge{
 									srcIdx:  idx,
@@ -253,6 +292,28 @@ func (i *Indexer) addGenDecl(fset *token.FileSet, src []byte, d *ast.GenDecl, pk
 									line:    fset.Position(f.Pos()).Line,
 								})
 							}
+						}
+					}
+				}
+			}
+
+			// Embedded типы у struct → reference; embedded interfaces → extends.
+			// Пытаемся также найти реализации интерфейсов через комментарии вида "// implements InterfaceName"
+			docText := commentText(d.Doc)
+			if docText != "" {
+				lines := strings.Split(docText, "\n")
+				for _, l := range lines {
+					l = strings.TrimSpace(strings.ToLower(l))
+					if strings.HasPrefix(l, "implements ") {
+						ifaceName := strings.TrimSpace(l[len("implements "):])
+						if ifaceName != "" {
+							*edges = append(*edges, pendingEdge{
+								srcIdx:  idx,
+								dstIdx:  -1,
+								dstName: ifaceName,
+								kind:    "implements",
+								line:    startPos.Line,
+							})
 						}
 					}
 				}

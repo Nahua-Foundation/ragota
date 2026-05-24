@@ -47,11 +47,11 @@ func (s *VectorServer) Build() *server.MCPServer {
 	)
 
 	srv.AddTool(mcp.NewTool("vec.search",
-		mcp.WithDescription("Semantic search over project code using vector index (alias for vec.search_semantic)."),
+		mcp.WithDescription("Hybrid search over project code (alias for vec.search_hybrid)."),
 		mcp.WithString("query", mcp.Required()),
 		mcp.WithNumber("limit", mcp.DefaultNumber(10)),
 		mcp.WithString("language"),
-	), s.wrap("vec.search", s.handleSearch))
+	), s.wrap("vec.search", s.handleSearchHybrid))
 
 	srv.AddTool(mcp.NewTool("vec.search_semantic",
 		mcp.WithDescription("Vector-only semantic search (qwen3-embedding for code, nomic-embed-text for markdown)."),
@@ -156,7 +156,10 @@ func (s *VectorServer) handleSearchHybrid(ctx context.Context, req mcp.CallToolR
 	if query == "" {
 		return mcp.NewToolResultError("query is required"), nil
 	}
-	limit := int(req.GetFloat("top_k", 10))
+	limit := int(req.GetFloat("top_k", 0))
+	if limit <= 0 {
+		limit = int(req.GetFloat("limit", 10))
+	}
 	filter := map[string]any{}
 	if lang := req.GetString("language", ""); lang != "" {
 		filter["language"] = lang
