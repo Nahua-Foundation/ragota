@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // Файл содержит публичные LSP-операции навигации поверх Call/Notify
@@ -82,32 +83,42 @@ func (c *Client) References(ctx context.Context, path string, line, character in
 func (c *Client) Hover(ctx context.Context, path string, line, character int) (string, error) {
 	params := c.positionParams(path, line, character)
 	var raw json.RawMessage
+	start := time.Now()
 	if err := c.Call(ctx, "textDocument/hover", params, &raw); err != nil {
-		lspDebug("LSP %s: Hover ERROR: %v\n", c.Language, err)
+		lspDebug("LSP %s: Hover ERROR: %v (elapsed %v)\n", c.Language, err, time.Since(start))
 		return "", err
 	}
 	if len(raw) == 0 || string(raw) == "null" {
-		lspDebug("LSP %s: Hover RESULT: empty\n", c.Language)
+		lspDebug("LSP %s: Hover RESULT: empty (elapsed %v)\n", c.Language, time.Since(start))
 		return "", nil
 	}
 	var h struct {
 		Contents any `json:"contents"`
 	}
 	if err := json.Unmarshal(raw, &h); err != nil {
-		lspDebug("LSP %s: Hover ERROR parse: %v\n", c.Language, err)
+		lspDebug("LSP %s: Hover ERROR parse: %v (elapsed %v)\n", c.Language, err, time.Since(start))
 		return "", err
 	}
 	txt := hoverString(h.Contents)
-	lspDebug("LSP %s: Hover RESULT: %d chars\n", c.Language, len(txt))
+	lspDebug("LSP %s: Hover RESULT: %d chars (elapsed %v)\n", c.Language, len(txt), time.Since(start))
 	return txt, nil
 }
 
 // Implementation — найти реализации интерфейса/метода.
 func (c *Client) Implementation(ctx context.Context, path string, line, character int) ([]Location, error) {
+	if c.Language == "python" {
+		// Pyright не поддерживает textDocument/implementation на уровне протокола.
+		// Возвращаем пустой результат без ошибки, так как это ожидаемое поведение.
+		lspDebug("LSP %s: Implementation NOT SUPPORTED at protocol level\n", c.Language)
+		return nil, nil
+	}
 	params := c.positionParams(path, line, character)
 	var raw json.RawMessage
 	if err := c.Call(ctx, "textDocument/implementation", params, &raw); err != nil {
+		lspDebug("LSP %s: Implementation ERROR: %v\n", c.Language, err)
 		return nil, err
 	}
-	return c.decodeLocations(raw), nil
+	locs := c.decodeLocations(raw)
+	lspDebug("LSP %s: Implementation RESULT: locations=%d raw=%q\n", c.Language, len(locs), string(raw))
+	return locs, nil
 }

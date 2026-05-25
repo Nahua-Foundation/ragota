@@ -147,18 +147,19 @@ func hoverString(contents any) string {
 	case string:
 		return v
 	case map[string]any:
+		// Сначала проверяем value, если оно есть и kind markdown/plaintext
 		if val, ok := v["value"].(string); ok {
 			return val
 		}
-		if val, ok := v["kind"].(string); ok && val == "plaintext" {
-			if vval, ok := v["value"].(string); ok {
-				return vval
+		// Для MarkupContent
+		if kind, ok := v["kind"].(string); ok && (kind == "plaintext" || kind == "markdown") {
+			if val, ok := v["value"].(string); ok {
+				return val
 			}
 		}
-		if val, ok := v["kind"].(string); ok && val == "markdown" {
-			if vval, ok := v["value"].(string); ok {
-				return vval
-			}
+		// Для MarkedString с языком: {language: "java", value: "..."}
+		if val, ok := v["value"].(string); ok {
+			return val
 		}
 	case []any:
 		var parts []string

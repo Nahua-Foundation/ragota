@@ -18,9 +18,6 @@ func pythonCapabilities() map[string]any {
 			"declaration": map[string]any{
 				"linkSupport": true,
 			},
-			"implementation": map[string]any{
-				"linkSupport": true,
-			},
 			"typeDefinition": map[string]any{
 				"linkSupport": true,
 			},

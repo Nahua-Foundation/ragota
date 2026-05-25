@@ -90,7 +90,7 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 			return json.Unmarshal(resp.Result, result)
 		}
 		return nil
-	case <-time.After(120 * time.Second):
+	case <-time.After(30 * time.Second):
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
@@ -173,11 +173,11 @@ func (c *Client) readLoop() {
 		// Случай 2: серверное уведомление (method != "" && id == nil).
 		// Pyright присылает publishDiagnostics после первичного анализа didOpen;
 		// используем это как сигнал, что definition уже можно спрашивать без гонки.
+		// ВАЖНО: обрабатываем в горутине, чтобы не блокировать readLoop.
 		if msg.Method != "" {
-			switch msg.Method {
-			case "textDocument/publishDiagnostics", "language/status":
-				c.handleServerNotification(msg.Method, msg.Params)
-			}
+			method := msg.Method
+			params := msg.Params
+			go c.handleServerNotification(method, params)
 			continue
 		}
 		// Случай 3: ответ на наш запрос.
@@ -260,7 +260,7 @@ func (c *Client) handleServerNotification(method string, params json.RawMessage)
 	case "$/progress":
 		// LSP прогресс. Для gopls ищем токен "gopls.indexing" с value.kind == "end".
 		var p struct {
-			Token string `json:"token"`
+			Token any `json:"token"` // может быть string или number
 			Value struct {
 				Kind string `json:"kind"`
 			} `json:"value"`
@@ -268,9 +268,10 @@ func (c *Client) handleServerNotification(method string, params json.RawMessage)
 		if err := json.Unmarshal(params, &p); err != nil {
 			return
 		}
+		tokenStr := fmt.Sprintf("%v", p.Token)
 		lspDebug("LSP %s: $/progress: token=%q kind=%q\n",
-			c.Language, p.Token, p.Value.Kind)
-		if (p.Token == "gopls.indexing" || p.Token == "Initial workspace scan") && p.Value.Kind == "end" {
+			c.Language, tokenStr, p.Value.Kind)
+		if (tokenStr == "gopls.indexing" || tokenStr == "Initial workspace scan") && p.Value.Kind == "end" {
 			if c.goplsReadyClosed.CompareAndSwap(false, true) {
 				close(c.goplsReady)
 			}

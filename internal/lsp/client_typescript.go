@@ -19,7 +19,7 @@ func typescriptCapabilities() map[string]any {
 				"linkSupport": true,
 			},
 			"implementation": map[string]any{
-				"linkSupport": true,
+				"linkSupport": false,
 			},
 			"typeDefinition": map[string]any{
 				"linkSupport": true,
