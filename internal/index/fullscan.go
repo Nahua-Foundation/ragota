@@ -13,6 +13,7 @@ package index
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -31,6 +32,9 @@ import (
 
 // FullScan индексирует все подходящие файлы с использованием глобального батчинга чанков.
 func (v *Vector) FullScan(ctx context.Context) error {
+	v.wg.Add(1)
+	defer v.wg.Done()
+
 	v.totalIndexed.Store(0)
 	v.SyncStats(ctx)
 	if v.bus != nil {
@@ -90,7 +94,11 @@ func (v *Vector) FullScan(ctx context.Context) error {
 					continue
 				}
 				if pf != nil {
-					preparedChan <- pf
+					select {
+					case preparedChan <- pf:
+					case <-ctx.Done():
+						return
+					}
 				} else {
 					// Файл пропущен (не изменился)
 					v.updateProgress(total)
@@ -189,16 +197,43 @@ func (v *Vector) processPreparedFiles(ctx context.Context, preparedChan <-chan *
 	go func() { defer wg.Done(); codeBatcher.run(ctx) }()
 	go func() { defer wg.Done(); textBatcher.run(ctx) }()
 
-	for pf := range preparedChan {
-		if codeBatcher.spec.Name == pf.collSpec.Name {
-			codeBatcher.items <- pf
-		} else {
-			textBatcher.items <- pf
+	var ctxErr error
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			ctxErr = ctx.Err()
+			break loop
+		case pf, ok := <-preparedChan:
+			if !ok {
+				break loop
+			}
+			var target chan *preparedFile
+			if codeBatcher.spec.Name == pf.collSpec.Name {
+				target = codeBatcher.items
+			} else {
+				target = textBatcher.items
+			}
+			select {
+			case target <- pf:
+			case <-ctx.Done():
+				ctxErr = ctx.Err()
+				break loop
+			}
 		}
 	}
 	close(codeBatcher.items)
 	close(textBatcher.items)
+	// Дренируем preparedChan, чтобы разблокировать воркеров-сканеров,
+	// которые могут висеть на отправке в канал после отмены ctx.
+	go func() {
+		for range preparedChan {
+		}
+	}()
 	wg.Wait()
+	if ctxErr != nil {
+		return ctxErr
+	}
 
 	if v.bus != nil {
 		v.bus.SetIndexer("vector", func(i *state.Indexer) {
@@ -248,7 +283,9 @@ func (b *batcher) run(ctx context.Context) {
 			return
 		}
 		if err := b.v.processBatch(ctx, b.spec, b.emb, currentBatch, b.total); err != nil {
-			log.Printf("vector: batch error: %v", err)
+			if !errors.Is(err, context.Canceled) {
+				log.Printf("vector: batch error: %v", err)
+			}
 		}
 		// Обновляем прогресс для всех файлов в батче в любом случае.
 		for range currentBatch {
@@ -272,7 +309,9 @@ func (b *batcher) run(ctx context.Context) {
 			if len(pf.chunks) > maxBatchChunks {
 				flush()
 				if err := b.v.processBatch(ctx, b.spec, b.emb, []*preparedFile{pf}, b.total); err != nil {
-					log.Printf("vector: large file error %s: %v", pf.abs, err)
+					if !errors.Is(err, context.Canceled) {
+						log.Printf("vector: large file error %s: %v", pf.abs, err)
+					}
 				}
 				b.v.updateProgress(b.total)
 				continue
@@ -288,6 +327,9 @@ func (b *batcher) run(ctx context.Context) {
 }
 
 func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, emb *embedder.Ollama, files []*preparedFile, total int) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	var allTexts []string
 	for _, f := range files {
 		for _, ch := range f.chunks {
@@ -301,10 +343,17 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 		return err
 	}
 
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	var allPoints []qdrant.Point
 	var allDocs []bm25.Doc
 	vecIdx := 0
 	for _, f := range files {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		// Старые данные в Qdrant удаляем только для тех коллекций, куда можем писать
 		_ = v.qd.DeleteByFilter(ctx, spec.Name, "file", f.abs)
 		// Если это текст, а мы в коллекции кода (или наоборот), на всякий случай чистим и другую
@@ -341,6 +390,10 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 			vecIdx++
 		}
 		allPoints = append(allPoints, points...)
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 
 		// Пишем хеш
 		if v.store != nil && f.hash != "" {
@@ -379,6 +432,9 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		setErr(v.qd.Upsert(ctx, spec.Name, allPoints))
 	}()
 
@@ -386,6 +442,9 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if ctx.Err() != nil {
+				return
+			}
 			setErr(v.bm25.IndexDocs(ctx, allDocs))
 		}()
 	}

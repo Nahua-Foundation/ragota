@@ -14,6 +14,7 @@ var DefaultIgnore = []string{
 	"*.pb.go", "*_grpc.pb.go", "*.gen.go", "*.pb.js", "*.pb.ts", "*_pb2.py", "*_pb2_grpc.py",
 	"ragota",
 	".ragota",
+	"migrations", "protodeps", "gen", "release-notes",
 }
 
 // DefaultExtensions — расширения для индексирования по умолчанию.
@@ -90,6 +91,11 @@ func Default() *Config {
 				Image:   "qdrant/qdrant:latest",
 				Ports:   []string{"127.0.0.1:6333:6333", "127.0.0.1:6334:6334"},
 				Volumes: []string{".ragota/qdrant_storage:/qdrant/storage"},
+			},
+			// Единый LSP-контейнер со всеми серверами
+			LSP: LSPDockerCfg{
+				Image:   "ragota-lsp:latest",
+				Volumes: []string{".:/workspace"},
 			},
 		},
 		LSP: []LSPServerConfig{

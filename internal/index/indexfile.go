@@ -18,6 +18,13 @@ import (
 
 // IndexFile полностью переиндексирует один файл.
 func (v *Vector) IndexFile(ctx context.Context, abs string) error {
+	v.wg.Add(1)
+	defer v.wg.Done()
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	start := time.Now()
 	pf, err := v.prepareFile(ctx, abs)
 	if err != nil {
@@ -147,6 +154,13 @@ func (v *Vector) IndexFile(ctx context.Context, abs string) error {
 
 // RemoveFile удаляет все точки файла из обеих коллекций + BM25.
 func (v *Vector) RemoveFile(ctx context.Context, abs string) error {
+	v.wg.Add(1)
+	defer v.wg.Done()
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	for _, name := range []string{v.cfg.CodeCollection().Name, v.cfg.TextCollection().Name} {
 		_ = v.qd.DeleteByFilter(ctx, name, "file", abs)
 	}

@@ -52,6 +52,13 @@ type Client struct {
 	rootURI   string
 	localRoot string
 
+	// Маппинг путей host ↔ контейнер для docker-режима. Когда LSP запущен в
+	// контейнере, пути в URI должны соответствовать тому, что видит процесс
+	// внутри контейнера (например, /workspace), а не путям на хосте. Если
+	// hostRoot пустой — режим тождественного маппинга (локальный запуск).
+	hostRoot   string // абсолютный путь корня проекта на хосте
+	remoteRoot string // путь корня внутри контейнера (например, /workspace)
+
 	// Состояние открытых документов.
 	openedFiles      map[string]string // path -> last sent content
 	openedVers       map[string]int    // path -> version

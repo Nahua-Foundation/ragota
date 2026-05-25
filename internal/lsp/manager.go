@@ -12,11 +12,13 @@ import (
 )
 
 // clientKey — составной ключ кэша LSP-клиентов. Позволяет держать
-// отдельный процесс LSP per (repo, language) — в multi-repo workspace
-// каждая репа получает свой сервер с rootURI = repo.Path.
+// отдельный процесс LSP per (repo, language, workspaceRoot) — в multi-repo
+// или multi-module workspace каждая репа/модуль получает свой сервер
+// с rootURI = repo.Path или workspaceRoot.
 type clientKey struct {
-	repo string // имя репы (из repos.Resolver); пусто = legacy/single-repo
-	lang string
+	repo   string // имя репы (из repos.Resolver); пусто = legacy/single-repo
+	lang   string
+	wsRoot string // workspace root (путь к go.mod/package.json и т.д.)
 }
 
 // Manager управляет LSP-клиентами per (repo, language). Ленивая
@@ -75,18 +77,19 @@ func (m *Manager) GetWithRoot(ctx context.Context, language, workspaceRoot strin
 }
 
 // GetForRepo возвращает или запускает клиента (repo, language) с указанным
-// workspace root. Ключ кэша — пара (repo, language); это позволяет держать
-// одновременно несколько LSP одного языка для разных репо.
+// workspace root. Ключ кэша — тройка (repo, language, workspaceRoot); это
+// позволяет держать одновременно несколько LSP одного языка для разных
+// репо или подпроектов (каждый go.mod/package.json — свой процесс).
 func (m *Manager) GetForRepo(ctx context.Context, repo, language, workspaceRoot string) (*Client, error) {
-	key := clientKey{repo: repo, lang: language}
+	key := clientKey{repo: repo, lang: language, wsRoot: workspaceRoot}
 	m.mu.Lock()
 	if c, ok := m.clients[key]; ok {
-		if c.IsAlive() && (workspaceRoot == "" || samePath(c.localRoot, workspaceRoot)) {
+		if c.IsAlive() {
 			lspDebug("LSP %s/%s: reusing existing client (alive, root %q)\n", repo, language, c.localRoot)
 			m.mu.Unlock()
 			return c, nil
 		}
-		lspDebug("LSP %s/%s: client dead or root changed (%q -> %q), recreating\n", repo, language, c.localRoot, workspaceRoot)
+		lspDebug("LSP %s/%s: client dead, recreating\n", repo, language)
 		_ = c.Close()
 		delete(m.clients, key)
 	}

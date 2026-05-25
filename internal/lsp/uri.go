@@ -36,14 +36,32 @@ func pathFromFileURI(uri string) string {
 }
 
 // toRemotePath преобразует локальный путь хоста в путь, видимый LSP-серверу.
-// Сейчас сервер запускается локально, поэтому маппинг тождественный — функция
-// оставлена точкой расширения (например, для docker-проброса).
+// В docker-режиме хостовый префикс (hostRoot) заменяется на remoteRoot
+// (например, /workspace) — именно по такому пути проект смонтирован
+// в контейнере. В локальном режиме маппинг тождественный.
 func (c *Client) toRemotePath(localPath string) string {
+	if c == nil || c.hostRoot == "" || c.remoteRoot == "" {
+		return localPath
+	}
+	abs, err := filepath.Abs(localPath)
+	if err != nil {
+		abs = localPath
+	}
+	abs = filepath.Clean(abs)
+	host := filepath.Clean(c.hostRoot)
+	if abs == host {
+		return c.remoteRoot
+	}
+	if rel, err := filepath.Rel(host, abs); err == nil && !strings.HasPrefix(rel, "..") {
+		// Внутри контейнера пути — POSIX, поэтому собираем через "/".
+		return c.remoteRoot + "/" + filepath.ToSlash(rel)
+	}
 	return localPath
 }
 
 // toLocalPath преобразует URI/путь, пришедший от сервера, обратно в локальный
-// файловый путь хоста.
+// файловый путь хоста. В docker-режиме префикс remoteRoot заменяется на
+// hostRoot, чтобы вызывающий код мог работать с обычными хостовыми путями.
 func (c *Client) toLocalPath(remoteURI string) string {
 	path := remoteURI
 	if strings.HasPrefix(remoteURI, "file://") {
@@ -53,6 +71,17 @@ func (c *Client) toLocalPath(remoteURI string) string {
 			if strings.HasPrefix(path, "/") && len(path) > 3 && path[2] == ':' {
 				path = path[1:]
 			}
+		}
+	}
+	if c != nil && c.hostRoot != "" && c.remoteRoot != "" {
+		clean := filepath.ToSlash(filepath.Clean(path))
+		remote := filepath.ToSlash(filepath.Clean(c.remoteRoot))
+		if clean == remote {
+			return filepath.Clean(c.hostRoot)
+		}
+		if strings.HasPrefix(clean, remote+"/") {
+			rel := strings.TrimPrefix(clean, remote+"/")
+			return filepath.Join(c.hostRoot, filepath.FromSlash(rel))
 		}
 	}
 	return filepath.FromSlash(path)

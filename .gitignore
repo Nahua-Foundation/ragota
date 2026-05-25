@@ -1,10 +1,10 @@
 # Binaries
 /ai-tools
 ai-tools
-ragota
 
 # Data and logs
 /.ai-tools/
+/.ragota/
 *.log
 
 # IDEs
@@ -19,3 +19,4 @@ vendor/
 
 # AGENTS
 .junie
+.qwen

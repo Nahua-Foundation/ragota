@@ -15,6 +15,9 @@ func goCapabilities() map[string]any {
 			"definition": map[string]any{
 				"linkSupport": true,
 			},
+			"implementation": map[string]any{
+				"linkSupport": true,
+			},
 			"hover": map[string]any{
 				"contentFormat": []string{"markdown", "plaintext"},
 			},
@@ -51,6 +54,7 @@ func goInitializationOptions() map[string]any {
 		"build.allowImplicitNetworks":  true,
 		"build.directoryFilters":       []string{"-vendor", "-node_modules", "-.git"},
 		"ui.navigation.importShortcut": "Both",
+		"hoverKind":                    "Full",
 	}
 }
 
@@ -68,6 +72,7 @@ func goConfigFor(section string) any {
 			"build.allowImplicitNetworks":  true,
 			"formatting.gofumpt":           false,
 			"ui.navigation.importShortcut": "Both",
+			"hoverKind":                    "Full",
 		},
 	}
 	switch section {

@@ -7,16 +7,19 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"ragota/internal/config"
 	"runtime"
 	"strings"
-
-	"ragota/internal/config"
 )
+
+//go:embed Dockerfile.lsp
+var lspDockerfile []byte
 
 // Runner запускает контейнеры через docker CLI.
 type Runner struct {
@@ -38,20 +41,48 @@ func Available(ctx context.Context) error {
 	return nil
 }
 
-// Up поднимает все сконфигурированные контейнеры (qdrant),
-// создаёт сеть.
-func (r *Runner) Up(ctx context.Context) error {
+// Up поднимает все сконфигурированные контейнеры.
+// Если all=true — запускает все сервисы (qdrant, lsp), иначе только qdrant.
+func (r *Runner) Up(ctx context.Context, all bool) error {
 	if r.Cfg.Network != "" {
 		fmt.Fprintf(os.Stderr, "docker: ensuring network %s\n", r.Cfg.Network)
 		if err := r.ensureNetwork(ctx, r.Cfg.Network); err != nil {
 			return err
 		}
 	}
+	// Создаём директории для томов перед запуском контейнеров
+	if err := r.ensureVolumes(); err != nil {
+		return fmt.Errorf("ensure volumes: %w", err)
+	}
+	// Qdrant запускается всегда
 	if r.Cfg.Qdrant.Image != "" {
-		// Для сторонних образов типа qdrant просто надеемся на docker run (он сам спуллит).
 		fmt.Fprintf(os.Stderr, "docker: starting qdrant (%s)\n", r.Cfg.Qdrant.Image)
 		if err := r.runContainer(ctx, r.Cfg.Qdrant); err != nil {
 			return fmt.Errorf("qdrant: %w", err)
+		}
+	}
+	// LSP только в режиме --env docker
+	if all {
+		// Запускаем единый LSP-контейнер
+		if r.Cfg.LSP.Image != "" {
+			fmt.Fprintf(os.Stderr, "docker: starting lsp container (%s)\n", r.Cfg.LSP.Image)
+			if err := r.runLSPContainer(ctx, r.Cfg.LSP); err != nil {
+				return fmt.Errorf("lsp: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// ensureVolumes создаёт директории для томов Docker на хосте.
+func (r *Runner) ensureVolumes() error {
+	dirs := []string{
+		".ragota/qdrant_storage",
+	}
+	for _, d := range dirs {
+		abs := filepath.Join(r.WorkingDir, d)
+		if err := os.MkdirAll(abs, 0755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", abs, err)
 		}
 	}
 	return nil
@@ -90,7 +121,11 @@ func (r *Runner) ensureImage(ctx context.Context, image string) error {
 // Down останавливает контейнеры (но не удаляет volumes).
 func (r *Runner) Down(ctx context.Context) error {
 	if r.Cfg.Qdrant.Name != "" {
-		_ = exec.CommandContext(ctx, "docker", "stop", r.Cfg.Qdrant.Name).Run()
+		_ = exec.CommandContext(ctx, "docker", "stop", "-t", "3", r.Cfg.Qdrant.Name).Run()
+	}
+	// Единый LSP-контейнер
+	if r.Cfg.LSP.Image != "" {
+		_ = exec.CommandContext(ctx, "docker", "stop", "-t", "3", "ragota-lsp").Run()
 	}
 	return nil
 }
@@ -102,11 +137,15 @@ type PsService struct {
 	Status string `json:"Status"`
 }
 
-// Ps возвращает статусы известных контейнеров (qdrant).
+// Ps возвращает статусы известных контейнеров (qdrant, lsp).
 func (r *Runner) Ps(ctx context.Context) ([]PsService, error) {
 	var result []PsService
 	if r.Cfg.Qdrant.Name != "" {
 		result = append(result, r.inspectPs(ctx, r.Cfg.Qdrant.Name))
+	}
+	// Единый LSP-контейнер
+	if r.Cfg.LSP.Image != "" {
+		result = append(result, r.inspectPs(ctx, "ragota-lsp"))
 	}
 	return result, nil
 }
@@ -192,13 +231,17 @@ func (r *Runner) runContainer(ctx context.Context, c config.DockerContainerCfg) 
 			return nil
 		}
 	}
-	args := []string{"run", "-di", "--name", c.Name, "--restart", "unless-stopped"}
+	args := []string{"run", "-di", "--init", "--name", c.Name, "--restart", "unless-stopped"}
 	network := c.Network
 	if network == "" {
 		network = r.Cfg.Network
 	}
 	if network != "" {
 		args = append(args, "--network", network)
+	}
+	// Проброс GPU для Ollama (nvidia, amd, macos)
+	if c.GPU != "" {
+		args = append(args, "--gpus", c.GPU)
 	}
 	for _, p := range c.Ports {
 		args = append(args, "-p", p)
@@ -258,14 +301,121 @@ func (r *Runner) runContainer(ctx context.Context, c config.DockerContainerCfg) 
 }
 
 // resolveVolume превращает относительный host-путь в абсолютный (относительно WorkingDir).
+// Поддерживает пути вида ".ragota/...", "./...", а также "~" для домашней директории.
 func (r *Runner) resolveVolume(v string) string {
 	parts := strings.SplitN(v, ":", 2)
 	if len(parts) != 2 {
 		return v
 	}
 	host := parts[0]
-	if !filepath.IsAbs(host) && !strings.HasPrefix(host, "~") {
-		host = filepath.Join(r.WorkingDir, host)
+	if !filepath.IsAbs(host) {
+		// Обрабатываем ~ для домашней директории
+		if strings.HasPrefix(host, "~/") {
+			home, err := os.UserHomeDir()
+			if err == nil {
+				host = filepath.Join(home, strings.TrimPrefix(host, "~/"))
+			}
+		} else {
+			// Относительный путь разрешаем относительно WorkingDir
+			host = filepath.Join(r.WorkingDir, host)
+		}
 	}
 	return host + ":" + parts[1]
+}
+
+// ensureLSPImage проверяет наличие образа ragota-lsp и билдит его при необходимости.
+// Образ не скачивается с Docker Hub — только локальная сборка из Dockerfile.
+func (r *Runner) ensureLSPImage(ctx context.Context, image string) error {
+	// Проверяем, есть ли образ локально
+	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", image)
+	if err := cmd.Run(); err == nil {
+		fmt.Fprintf(os.Stderr, "docker: image %s found locally\n", image)
+		return nil
+	}
+
+	// Образа нет — билдим локально из Dockerfile
+	fmt.Fprintf(os.Stderr, "docker: image %s not found, building from Dockerfile...\n", image)
+	return r.buildLSPImage(ctx, image)
+}
+
+// buildLSPImage билдит образ ragota-lsp из встроенного Dockerfile.
+// Dockerfile встраивается в бинарь через //go:embed.
+func (r *Runner) buildLSPImage(ctx context.Context, image string) error {
+	cmd := exec.CommandContext(ctx, "docker", "build", "-t", image, "-")
+	cmd.Stdin = bytes.NewReader(lspDockerfile)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker build failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "docker: image %s built successfully\n", image)
+	return nil
+}
+
+// runLSPContainer запускает единый LSP-контейнер со всеми серверами.
+// Образ ragota-lsp билдится из встроенного Dockerfile при отсутствии.
+func (r *Runner) runLSPContainer(ctx context.Context, cfg config.LSPDockerCfg) error {
+	if cfg.Image == "" {
+		return nil
+	}
+	containerName := "ragota-lsp"
+
+	// Сначала убеждаемся, что образ существует (билдим при необходимости)
+	if err := r.ensureLSPImage(ctx, cfg.Image); err != nil {
+		return fmt.Errorf("ensure image: %w", err)
+	}
+
+	// Проверяем, есть ли уже контейнер
+	if st, err := r.inspectState(ctx, containerName); err == nil {
+		if id, err := imageID(ctx, cfg.Image); err == nil && st.Image != "" && st.Image != id {
+			fmt.Fprintf(os.Stderr, "docker: container %s uses outdated image, recreating...\n", containerName)
+			_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
+		} else if st.Status == "restarting" || (!st.OpenStdin && st.Status != "running") {
+			fmt.Fprintf(os.Stderr, "docker: container %s is in bad state (%s, stdin=%v), recreating...\n", containerName, st.Status, st.OpenStdin)
+			_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
+		} else {
+			if st.Running {
+				return nil
+			}
+			out, err := exec.CommandContext(ctx, "docker", "start", containerName).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("docker start %s: %w: %s", containerName, err, string(out))
+			}
+			return nil
+		}
+	}
+
+	args := []string{"run", "-di", "--init", "--name", containerName, "--restart", "unless-stopped"}
+	network := cfg.Network
+	if network == "" {
+		network = r.Cfg.Network
+	}
+	if network != "" {
+		args = append(args, "--network", network)
+	}
+	for _, v := range cfg.Volumes {
+		args = append(args, "-v", r.resolveVolume(v))
+	}
+	for _, e := range cfg.Env {
+		args = append(args, "-e", e)
+	}
+
+	// Добавляем переменные окружения для GOPATH и PATH
+	args = append(args, "-e", "GOPATH=/go")
+	args = append(args, "-e", "GOROOT=/usr/local/go")
+	// Важно: PATH должен быть таким же как в Dockerfile, но мы его пробрасываем явно при run
+	args = append(args, "-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/go/bin:/root/go/bin")
+	// Прокидываем PYTHONPATH на всякий случай
+	args = append(args, "-e", "PYTHONPATH=/usr/lib/python3/dist-packages")
+
+	args = append(args, cfg.Image)
+
+	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker run %s: %w: %s", containerName, err, string(out))
+	}
+
+	fmt.Fprintf(os.Stderr, "docker: LSP container started successfully\n")
+	return nil
 }

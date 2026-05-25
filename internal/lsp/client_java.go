@@ -13,6 +13,9 @@ func javaCapabilities() map[string]any {
 			"definition": map[string]any{
 				"linkSupport": true,
 			},
+			"implementation": map[string]any{
+				"linkSupport": true,
+			},
 			"hover": map[string]any{
 				"contentFormat": []string{"markdown", "plaintext"},
 			},

@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "baseUrl": ".",
+    "moduleResolution": "node"
+  },
+  "include": ["**/*.js"],
+  "exclude": ["node_modules"]
+}

@@ -25,6 +25,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"ragota/internal/bm25"
 	"ragota/internal/chunker"
@@ -71,6 +72,7 @@ type Vector struct {
 	resolv *repos.Resolver
 
 	mu           sync.Mutex
+	wg           sync.WaitGroup
 	totalChunks  atomic.Int64
 	totalIndexed atomic.Int32
 	sem          chan struct{}
@@ -135,6 +137,21 @@ func (v *Vector) SetBM25(idx bm25.Index) { v.bm25 = idx }
 // SetRepoResolver подключает резолвер репозиториев для multi-repo
 // workspace. Если не вызван — поле `repo` в payload остаётся пустым.
 func (v *Vector) SetRepoResolver(r *repos.Resolver) { v.resolv = r }
+
+// Close ждет завершения всех активных операций индексации.
+// Имеет встроенный таймаут, чтобы не зависнуть навсегда при остановке.
+func (v *Vector) Close() {
+	done := make(chan struct{})
+	go func() {
+		v.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Printf("vector: Close timeout, some background tasks may still be running")
+	}
+}
 
 // Init создаёт обе коллекции в Qdrant и при необходимости запускает
 // автоматическую переиндексацию (когда модель эмбеддингов сменилась).

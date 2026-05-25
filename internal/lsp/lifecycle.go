@@ -19,8 +19,106 @@ import (
 // диагностики. См. также `jsonrpc.go` для транспорта и `navigation.go`
 // для запросов навигации.
 
+// startDocker запускает LSP-сервер в Docker-контейнере через docker exec.
+// Контейнер должен быть уже запущен (управляется internal/docker.Runner).
+func startDocker(ctx context.Context, spec ServerSpec, root string) (*Client, error) {
+	// Для Docker-режима используем stdio через docker exec
+	// Все LSP запускаются в едином контейнере ragota-lsp
+	containerName := "ragota-lsp"
+
+	// Команда: docker exec -i -w /workspace <container> <command> <args>
+	args := make([]string, 0, len(spec.Args)+5)
+	args = append(args, "exec", "-i", "-w", "/workspace", containerName)
+	args = append(args, spec.Command)
+	args = append(args, spec.Args...)
+
+	_ = ctx // Не используем ctx для отмены процесса (см. комментарий в Start)
+	cmd := exec.Command("docker", args...)
+	cmd.Dir = root
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start docker exec %s: %w", spec.Language, err)
+	}
+
+	// В docker-режиме корень проекта смонтирован в контейнере по фиксированному
+	// пути (-w /workspace), поэтому LSP-сервер должен видеть rootUri именно
+	// как путь внутри контейнера. Вычисляем относительный путь от spec.LocalRoot
+	// к root и добавляем к remoteRoot — это позволяет запускать отдельные
+	// LSP-инстансы для каждого подпроекта (go.mod, package.json и т.д.).
+	const remoteRoot = "/workspace"
+	hostRoot, absErr := filepath.Abs(root)
+	if absErr != nil {
+		hostRoot = root
+	}
+	localRoot := spec.LocalRoot
+	if localRoot == "" {
+		localRoot = hostRoot
+	}
+	relPath, relErr := filepath.Rel(localRoot, hostRoot)
+	remoteWorkspace := remoteRoot
+	if relErr == nil && relPath != "" && relPath != "." {
+		remoteWorkspace = filepath.Join(remoteRoot, relPath)
+	}
+	rootURI := FileURI(remoteWorkspace)
+
+	c := &Client{
+		Language:         spec.Language,
+		cmd:              cmd,
+		stdin:            stdin,
+		stdout:           stdout,
+		stderr:           stderr,
+		pending:          make(map[int64]chan rpcResponse),
+		rootURI:          rootURI,
+		localRoot:        localRoot,
+		hostRoot:         hostRoot,
+		remoteRoot:       remoteWorkspace, // ВАЖНО: remoteRoot = workspace в контейнере, не /workspace
+		openedFiles:      make(map[string]string),
+		openedVers:       make(map[string]int),
+		diagnosticsReady: make(chan string, 16),
+		processDone:      make(chan struct{}),
+		javaReady:        make(chan struct{}),
+		goplsReady:       make(chan struct{}),
+	}
+	go func() {
+		err := cmd.Wait()
+		c.mu.Lock()
+		c.processErr = err
+		c.mu.Unlock()
+		close(c.processDone)
+		details := c.processSummary()
+		tail := c.stderrSummary()
+		lspDebug("LSP %s (docker): process exited: %s; stderr tail: %s\n",
+			c.Language, details, tail)
+	}()
+	go c.readLoop()
+	go c.consumeStderr(stderr, spec.Language)
+
+	if err := c.initialize(ctx, root); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("initialize %s (docker): %w", spec.Language, err)
+	}
+	return c, nil
+}
+
 // Start запускает процесс LSP-сервера и выполняет initialize/initialized.
 func Start(ctx context.Context, spec ServerSpec, root string) (*Client, error) {
+	// В режиме Docker запускаем сервер через docker exec
+	if spec.IsDocker {
+		return startDocker(ctx, spec, root)
+	}
+
 	// Обрабатываем относительные пути в аргументах (например, -data .ragota/jdtls-data)
 	// так как рабочий каталог процесса совпадает с рабочим каталогом ragota,
 	// а не с root проекта, если они разные.

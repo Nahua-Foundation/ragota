@@ -43,8 +43,9 @@ func (m *Matcher) IsIgnored(rel string, isDir bool) bool {
 		if ok, _ := filepath.Match(p, rel); ok {
 			return true
 		}
-		// поддиректория ignored-каталога
-		if strings.HasPrefix(rel, p+string(filepath.Separator)) {
+		// поддиректория ignored-каталога на любом уровне вложенности
+		// Проверяем, содержится ли паттерн как компонент пути
+		if strings.Contains(string(filepath.Separator)+rel+string(filepath.Separator), string(filepath.Separator)+p+string(filepath.Separator)) {
 			return true
 		}
 	}

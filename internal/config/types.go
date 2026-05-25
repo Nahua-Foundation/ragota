@@ -45,7 +45,8 @@ type Config struct {
 	// Порты MCP-серверов (SSE при run, stdio при serve-*).
 	MCP MCPPorts `yaml:"mcp"`
 
-	// Параметры контейнеров, которые ragota поднимает сам при --start-docker.
+	// Параметры контейнеров, которые ragota поднимает при --env local/docker.
+	// local: только Qdrant, docker: все сервисы (Qdrant, Ollama, LSP).
 	Docker DockerConfig `yaml:"docker"`
 
 	// Настройки производительности индексации.
@@ -130,6 +131,15 @@ type MCPPorts struct {
 type DockerConfig struct {
 	Network string             `yaml:"network"`
 	Qdrant  DockerContainerCfg `yaml:"qdrant"`
+	LSP     LSPDockerCfg       `yaml:"lsp"` // Единый контейнер для всех LSP
+}
+
+// LSPDockerCfg — конфигурация единого LSP-контейнера для всех языков.
+type LSPDockerCfg struct {
+	Image   string   `yaml:"image"`
+	Volumes []string `yaml:"volumes"`
+	Env     []string `yaml:"env"`
+	Network string   `yaml:"network"`
 }
 
 type LSPServerConfig struct {
@@ -151,4 +161,8 @@ type DockerContainerCfg struct {
 	Env []string `yaml:"env"`
 	// Переопределение сети (например, "none" для изоляции).
 	Network string `yaml:"network"`
+	// Проброс GPU для Ollama (nvidia, amd, macos).
+	// Для NVIDIA: "all" (все GPU) или конкретные ID (0,1,2).
+	// Для macOS: "1" для использования Metal.
+	GPU string `yaml:"gpu"`
 }

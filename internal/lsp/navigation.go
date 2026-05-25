@@ -115,10 +115,17 @@ func (c *Client) Implementation(ctx context.Context, path string, line, characte
 	params := c.positionParams(path, line, character)
 	var raw json.RawMessage
 	if err := c.Call(ctx, "textDocument/implementation", params, &raw); err != nil {
-		lspDebug("LSP %s: Implementation ERROR: %v\n", c.Language, err)
+		lspDebug("LSP %s: Implementation ERROR: %v raw=%q\n", c.Language, err, string(raw))
 		return nil, err
 	}
 	locs := c.decodeLocations(raw)
 	lspDebug("LSP %s: Implementation RESULT: locations=%d raw=%q\n", c.Language, len(locs), string(raw))
+	// Для Java: jdtls может не отвечать на implementation для имени интерфейса,
+	// но может ответить для имени метода внутри интерфейса. Если пусто и это Java,
+	// пробуем textDocument/references как фоллбэк — он найдёт implements-классы.
+	if len(locs) == 0 && c.Language == "java" {
+		lspDebug("LSP %s: Implementation empty, trying references as fallback\n", c.Language)
+		return c.References(ctx, path, line, character, false)
+	}
 	return locs, nil
 }

@@ -524,7 +524,11 @@ func (s *SymbolServer) handleGetFileIntent(ctx context.Context, req mcp.CallTool
 	if path == "" {
 		return mcp.NewToolResultError("path is required"), nil
 	}
-	res, err := s.gr.GetFileIntent(ctx, path)
+	abs, err := fileutil.SecureJoin(s.cfg.Root, path)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	res, err := s.gr.GetFileIntent(ctx, abs)
 	if err != nil {
 		return nil, err
 	}

@@ -209,6 +209,15 @@ func (s *SQLite) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_edges_unresolved ON edges(dst_id, dst_name) WHERE dst_id = 0`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name ON edges(dst_name) WHERE dst_id = 0`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_repo_dst_name_kind ON edges(repo, dst_name, kind)`,
+		// Индекс для EdgesByDstNameForLang — покрывает JOIN с ast_units по src_id
+		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name_kind_src ON edges(dst_name, kind, src_id)`,
+		// Индекс для быстрого поиска по dst_name без фильтра dst_id=0 (для FindReferences)
+		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name_full ON edges(dst_name, kind, src_id, repo)`,
+		// Индекс для ResolvePendingEdges — ускоряет JOIN edges → ast_units по src_id
+		`CREATE INDEX IF NOT EXISTS idx_edges_src_id ON edges(src_id)`,
+		// Индекс для ResolvePendingEdges — поиск по dst_name в пределах языка/репы
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_qualified_lang_repo ON ast_units(qualified COLLATE NOCASE, language, repo)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_name_lang_repo ON ast_units(name COLLATE NOCASE, language, repo)`,
 
 		// meta — служебная key/value таблица; используется для
 		// workspace_signature (см. OpenFresh) и подобных флагов.
@@ -250,6 +259,13 @@ func (s *SQLite) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_qualified ON ast_units(repo, qualified)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_name ON ast_units(repo, name)`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_repo_dst_name_kind ON edges(repo, dst_name, kind)`,
+		// Индексы для ускорения FindReferences / EdgesByDstNameForLang
+		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name_kind_src ON edges(dst_name, kind, src_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name_full ON edges(dst_name, kind, src_id, repo)`,
+		// Индексы для ResolvePendingEdges — ускоряют JOIN и поиск по языку/репе
+		`CREATE INDEX IF NOT EXISTS idx_edges_src_id ON edges(src_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_qualified_lang_repo ON ast_units(qualified COLLATE NOCASE, language, repo)`,
+		`CREATE INDEX IF NOT EXISTS idx_ast_units_name_lang_repo ON ast_units(name COLLATE NOCASE, language, repo)`,
 	}
 	for _, q := range postIdx {
 		if _, err := s.db.Exec(q); err != nil {

@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -606,15 +607,20 @@ func (s *Service) GetSymbolSummary(ctx context.Context, symbolID int64) (*Symbol
 	}
 
 	// Semantic part (LLM)
-	prompt := fmt.Sprintf(`Analyze the following code symbol and provide its purpose, role, and importance in the system.
+	sourceCode := s.sourceContent(ctx, *u)
+	callsStr := strings.Join(res.Calls, ", ")
+	callersStr := strings.Join(res.Callers, ", ")
+	prompt := fmt.Sprintf(`You are analyzing a code symbol. The language is %s.
 Name: %s
 Signature: %s
+Source:
+%s
 Calls: %s
 Callers: %s
-Doc: %s
 
-Return ONLY a JSON object with fields: "purpose", "role", "importance".`,
-		u.Name, u.Signature, strings.Join(res.Calls, ", "), strings.Join(res.Callers, ", "), u.Doc)
+Return ONLY a JSON object with fields: "purpose", "role", "importance".
+Do NOT guess the language — it is explicitly provided above.`,
+		u.Language, u.Name, u.Signature, sourceCode, callsStr, callersStr)
 
 	llmRes, err := s.callOllama(ctx, prompt, "phi3:mini")
 	if err == nil {
@@ -623,7 +629,25 @@ Return ONLY a JSON object with fields: "purpose", "role", "importance".`,
 			Role       string `json:"role"`
 			Importance string `json:"importance"`
 		}
-		if err := json.Unmarshal([]byte(llmRes), &sem); err == nil {
+		errParse := json.Unmarshal([]byte(llmRes), &sem)
+		if errParse != nil {
+			extracted := llmRes
+			if start := strings.Index(llmRes, "```"); start >= 0 {
+				rest := llmRes[start+3:]
+				if strings.HasPrefix(rest, "json") || strings.HasPrefix(rest, "JSON") {
+					nl := strings.Index(rest, "\n")
+					if nl >= 0 {
+						rest = rest[nl+1:]
+					}
+				}
+				end := strings.Index(rest, "```")
+				if end > 0 {
+					extracted = strings.TrimSpace(rest[:end])
+				}
+			}
+			errParse = json.Unmarshal([]byte(extracted), &sem)
+		}
+		if errParse == nil {
 			res.Purpose = sem.Purpose
 			res.Role = sem.Role
 			res.Importance = sem.Importance
@@ -640,8 +664,13 @@ func (s *Service) GetFileIntent(ctx context.Context, path string) (*FileIntent, 
 		return nil, err
 	}
 
-	res := &FileIntent{}
+	res := &FileIntent{
+		Symbols:          []string{},
+		Imports:          []string{},
+		Responsibilities: []string{},
+	}
 	importSet := make(map[string]bool)
+	language := ""
 	for _, u := range units {
 		if u.Kind != "file" && u.Kind != "module" && u.Kind != "package" {
 			res.Symbols = append(res.Symbols, u.Name)
@@ -651,18 +680,30 @@ func (s *Service) GetFileIntent(ctx context.Context, path string) (*FileIntent, 
 		for _, e := range edges {
 			importSet[e.DstName] = true
 		}
+		if u.Language != "" {
+			language = u.Language
+		}
 	}
 	for imp := range importSet {
 		res.Imports = append(res.Imports, imp)
 	}
 
-	prompt := fmt.Sprintf(`Analyze the purpose of this source file.
+	srcCode, err := s.sourceContentFile(ctx, path)
+	if err != nil {
+		srcCode = "(source unavailable)"
+	}
+
+	prompt := fmt.Sprintf(`You are analyzing a source file. The language is %s.
 Path: %s
 Symbols: %s
 Imports: %s
 
-Return ONLY a JSON object with fields: "purpose", "layer", "responsibilities" (array of strings).`,
-		path, strings.Join(res.Symbols, ", "), strings.Join(res.Imports, ", "))
+Source:
+%s
+
+Return ONLY a JSON object with fields: "purpose", "layer", "responsibilities" (array of strings).
+Do NOT guess the language — it is explicitly provided above.`,
+		language, path, strings.Join(res.Symbols, ", "), strings.Join(res.Imports, ", "), srcCode)
 
 	llmRes, err := s.callOllama(ctx, prompt, "phi3:mini")
 	if err == nil {
@@ -671,7 +712,28 @@ Return ONLY a JSON object with fields: "purpose", "layer", "responsibilities" (a
 			Layer            string   `json:"layer"`
 			Responsibilities []string `json:"responsibilities"`
 		}
-		if err := json.Unmarshal([]byte(llmRes), &sem); err == nil {
+		// Попробуем прямой парсинг
+		errParse := json.Unmarshal([]byte(llmRes), &sem)
+		if errParse != nil {
+			// phi3 может оборачивать JSON в markdown-блок: ```json\n{...}\n```
+			extracted := llmRes
+			if start := strings.Index(llmRes, "```"); start >= 0 {
+				rest := llmRes[start+3:]
+				// skip "json" or "JSON" prefix
+				if strings.HasPrefix(rest, "json") || strings.HasPrefix(rest, "JSON") {
+					nl := strings.Index(rest, "\n")
+					if nl >= 0 {
+						rest = rest[nl+1:]
+					}
+				}
+				end := strings.Index(rest, "```")
+				if end > 0 {
+					extracted = strings.TrimSpace(rest[:end])
+				}
+			}
+			errParse = json.Unmarshal([]byte(extracted), &sem)
+		}
+		if errParse == nil {
 			res.Purpose = sem.Purpose
 			res.Layer = sem.Layer
 			res.Responsibilities = sem.Responsibilities
@@ -727,7 +789,25 @@ Return ONLY a JSON object with fields: "cluster", "core" (list), "dependencies" 
 			Dependencies []string `json:"dependencies"`
 			Boundary     []string `json:"boundary"`
 		}
-		if err := json.Unmarshal([]byte(llmRes), &sem); err == nil {
+		errParse := json.Unmarshal([]byte(llmRes), &sem)
+		if errParse != nil {
+			extracted := llmRes
+			if start := strings.Index(llmRes, "```"); start >= 0 {
+				rest := llmRes[start+3:]
+				if strings.HasPrefix(rest, "json") || strings.HasPrefix(rest, "JSON") {
+					nl := strings.Index(rest, "\n")
+					if nl >= 0 {
+						rest = rest[nl+1:]
+					}
+				}
+				end := strings.Index(rest, "```")
+				if end > 0 {
+					extracted = strings.TrimSpace(rest[:end])
+				}
+			}
+			errParse = json.Unmarshal([]byte(extracted), &sem)
+		}
+		if errParse == nil {
 			res.Cluster = sem.Cluster
 			res.Core = sem.Core
 			res.Dependencies = sem.Dependencies
@@ -771,4 +851,31 @@ func (s *Service) callOllama(ctx context.Context, prompt, model string) (string,
 		return "", err
 	}
 	return res.Response, nil
+}
+
+// sourceContent возвращает исходный код AST-юнита из файла.
+func (s *Service) sourceContent(ctx context.Context, u store.ASTUnit) string {
+	src, err := os.ReadFile(u.FilePath)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(src), "\n")
+	start := u.StartLine - 1
+	end := u.EndLine
+	if start < 0 {
+		start = 0
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return strings.Join(lines[start:end], "\n")
+}
+
+// sourceContentFile возвращает полный исходный код файла.
+func (s *Service) sourceContentFile(ctx context.Context, path string) (string, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(src), nil
 }

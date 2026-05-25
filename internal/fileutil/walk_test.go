@@ -28,6 +28,13 @@ func TestMatcher_IsIgnored(t *testing.T) {
 		{"api_pb2.py", false, true},
 		{"api_pb2_grpc.py", false, true},
 		{"internal/api/api.pb.go", false, true},
+		// Проверка игнорирования директорий в подпапках
+		{"pkg/vendor", true, true},
+		{"pkg/vendor/pkg", true, true},
+		{"src/node_modules", true, true},
+		{"a/b/c/vendor", true, true},
+		{"a/b/c/vendor/file.go", false, true},
+		{".git/hooks", true, true},
 	}
 
 	for _, tt := range tests {

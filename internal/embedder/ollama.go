@@ -28,7 +28,7 @@ func New(baseURL, model string) *Ollama {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		model:   model,
 		http: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: 60 * time.Second, // уменьшено для более быстрого shutdown
 		},
 	}
 }
@@ -112,11 +112,10 @@ func (o *Ollama) embedModern(ctx context.Context, prompt string) ([]float32, err
 	}
 	defer o.release()
 
+	// Не передаём dimensions — не все модели поддерживают эту опцию.
+	// Обрезка вектора делается после получения ответа.
 	opts := map[string]interface{}{
 		"num_ctx": 8192,
-	}
-	if o.dim > 0 {
-		opts["dimensions"] = o.dim
 	}
 	body, err := json.Marshal(embedRequest{
 		Model:   o.model,
@@ -178,11 +177,9 @@ func (o *Ollama) embedLegacy(ctx context.Context, prompt string) ([]float32, err
 	}
 	defer o.release()
 
+	// Не передаём dimensions — не все модели поддерживают эту опцию.
 	opts := map[string]interface{}{
 		"num_ctx": 8192,
-	}
-	if o.dim > 0 {
-		opts["dimensions"] = o.dim
 	}
 	body, err := json.Marshal(legacyEmbedRequest{
 		Model:   o.model,
@@ -278,11 +275,9 @@ func (o *Ollama) tryEmbedBatch(ctx context.Context, prompts []string) ([][]float
 	}
 	defer o.release()
 
+	// Не передаём dimensions — не все модели поддерживают эту опцию.
 	opts := map[string]interface{}{
 		"num_ctx": 8192,
-	}
-	if o.dim > 0 {
-		opts["dimensions"] = o.dim
 	}
 	body, err := json.Marshal(embedRequest{
 		Model:   o.model,

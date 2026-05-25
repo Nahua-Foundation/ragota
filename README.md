@@ -16,7 +16,7 @@
   - **Java / TypeScript / JavaScript** — tree-sitter (classes, interfaces, methods, functions, calls, imports, `extends`, `implements`).
   - **Python** — AST units (без edges).
 - **LSP MCP (`lsp`)** — проксирует официальные LSP-сервера (`gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls`). Работает с локально установленными серверами.
-- **`ragota watch .`** — поднимает Qdrant в Docker (если указано `--start-docker`), использует Ollama на хосте, запускает индексаторы (vector + BM25 + AST/graph), открывает TUI-дашборд (bubbletea).
+- **`ragota watch .`** — поднимает сервисы в Docker (режим `--env docker`: Qdrant + LSP) или только Qdrant (`--env local`, по умолчанию), использует Ollama на хосте, запускает индексаторы (vector + BM25 + AST/graph), открывает TUI-дашборд (bubbletea).
 
 ### Multi-repo workspace
 
@@ -88,11 +88,16 @@ go build -o ragota ./cmd/ragota
 
 1. **Запустить всё сразу** (LSP + Tree-Sitter + Vector + Symbol MCP + индексация + TUI + Docker для Qdrant):
    ```bash
-   ./ragota run -ltvsw --start-docker .
+   ./ragota run -ltvsw --env local .
    ```
    *Флаги: `-l` (LSP), `-t` (Tree-Sitter), `-v` (Vector), `-s` (Symbol), `-w` (Watch/Индексация).*
 
-2. **Только индексация и TUI**:
+2. **Запустить сервисы в Docker** (LSP и Qdrant в контейнерах, Ollama на хосте):
+   ```bash
+   ./ragota run -ltvsw --env docker .
+   ```
+
+3. **Только индексация и TUI**:
    ```bash
    ./ragota watch .
    ```
@@ -119,7 +124,9 @@ go build -o ragota ./cmd/ragota
 - `-v`, `--vec` — MCP-сервер Vector (hybrid + rerank)
 - `-s`, `--sym` — MCP-сервер Symbol (AST/graph)
 - `-w`, `--watch` — индексация + TUI
-- `--start-docker` — поднять Qdrant из секции `docker:` конфига
+- `--env local|docker` — режим окружения:
+  - `local` (по умолчанию): Qdrant в Docker, LSP/Ollama на хосте
+  - `docker`: все сервисы (LSP, Ollama, Qdrant) в Docker-контейнерах
 - `--no-tui` — не открывать дашборд
 
 ### MCP-серверы по отдельности (stdio)
@@ -182,7 +189,25 @@ ragota serve-lsp        --root /path/to/project
 
 ### Настройка LSP
 
-`ragota` запускает LSP-серверы **локально** (как дочерние процессы через stdio). Docker для LSP больше не используется — это упрощает маппинг путей и убирает оверхед на контейнер. Убедитесь, что нужные серверы установлены и доступны в `PATH`.
+`ragota` запускает LSP-серверы **локально** (как дочерние процессы через stdio) в режиме `--env local`. В режиме `--env docker` LSP-серверы запускаются в Docker-контейнерах (требуется настройка в `docker.lsp` секции конфига).
+
+#### Режимы запуска LSP
+
+**Local (по умолчанию, `--env local`):**
+- LSP-серверы запускаются как локальные процессы
+- Требуется установка серверов в PATH
+- Прямой доступ к файловой системе проекта
+
+**Docker (`--env docker`):**
+- Сервисы (Qdrant, LSP) в изолированных контейнерах. Ollama используется на хосте.
+- Единый LSP-контейнер `ragota-lsp` со всеми серверами:
+  - **Go**: gopls
+  - **TypeScript/JavaScript**: typescript-language-server
+  - **Python**: pyright-langserver
+  - **Java**: jdtls (Eclipse JDT Language Server)
+- Образ `ragota-lsp` автоматически билдится из `internal/docker/Dockerfile.lsp` при первом запуске (~3-5 минут)
+- Все данные сохраняются в `.ragota/` в директории проекта (игнорируется git)
+- Контейнеры именуются: `ragota-qdrant`, `ragota-lsp`
 
 #### Инструкции по установке:
 
@@ -222,6 +247,20 @@ lsp:
   - language: python
     command: pyright-langserver
     args: ["--stdio"]
+```
+
+Пример секции `docker` для режима `--env docker`:
+```yaml
+docker:
+  network: ragota-net
+  qdrant:
+    name: ragota-qdrant
+    image: qdrant/qdrant:latest
+    ports: ["127.0.0.1:6333:6333"]
+    volumes: [".ragota/qdrant_storage:/qdrant/storage"]
+  lsp:
+    image: ragota-lsp:latest
+    volumes: [".:/workspace"]
 ```
 
 #### Возможные ошибки и их исправление
