@@ -16,9 +16,9 @@ import (
 	"sort"
 	"strings"
 
-	"aitools/internal/graph"
-	"aitools/internal/lsp"
-	"aitools/internal/store"
+	"ragota/internal/graph"
+	"ragota/internal/lsp"
+	"ragota/internal/store"
 )
 
 // ErrNotFound — символ не найден.

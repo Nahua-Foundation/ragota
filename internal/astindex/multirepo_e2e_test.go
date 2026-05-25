@@ -16,10 +16,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aitools/internal/astindex"
-	"aitools/internal/config"
-	"aitools/internal/repos"
-	"aitools/internal/store"
+	"ragota/internal/astindex"
+	"ragota/internal/config"
+	"ragota/internal/repos"
+	"ragota/internal/store"
 )
 
 const alphaCallee = `package alpha
@@ -103,7 +103,7 @@ func TestMultiRepoE2E_FullScanIsolatesGraph(t *testing.T) {
 	cfg.Root = tmp
 	cfg.Extensions = []string{".go"}
 
-	dbPath := filepath.Join(tmp, "ai-tools.db")
+	dbPath := filepath.Join(tmp, "ragota.db")
 	st, err := store.OpenFresh(dbPath, repos.Signature(discovered))
 	if err != nil {
 		t.Fatalf("store.OpenFresh: %v", err)

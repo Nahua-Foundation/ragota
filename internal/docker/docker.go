@@ -15,7 +15,7 @@ import (
 	"runtime"
 	"strings"
 
-	"aitools/internal/config"
+	"ragota/internal/config"
 )
 
 // Runner запускает контейнеры через docker CLI.
@@ -66,7 +66,7 @@ func (r *Runner) ensureImage(ctx context.Context, image string) error {
 	hash := fmt.Sprintf("%x", sha256.Sum256(content))
 
 	// Проверяем, есть ли локальный образ, собранный из той же версии embedded Dockerfile.
-	c := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{ index .Config.Labels \"ai-tools.dockerfile-sha256\" }}", image)
+	c := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{ index .Config.Labels \"ragota.dockerfile-sha256\" }}", image)
 	out, err := c.Output()
 	if err == nil && strings.TrimSpace(string(out)) == hash {
 		return nil
@@ -75,7 +75,7 @@ func (r *Runner) ensureImage(ctx context.Context, image string) error {
 	fmt.Fprintf(os.Stderr, "docker: building image %s from embedded Dockerfile...\n", image)
 
 	// Билдим из stdin
-	buildCmd := exec.CommandContext(ctx, "docker", "build", "--label", "ai-tools.dockerfile-sha256="+hash, "-t", image, "-")
+	buildCmd := exec.CommandContext(ctx, "docker", "build", "--label", "ragota.dockerfile-sha256="+hash, "-t", image, "-")
 	buildCmd.Stdin = bytes.NewReader(content)
 	// Перенаправляем вывод в stderr, чтобы пользователь видел прогресс билда
 	buildCmd.Stdout = os.Stderr

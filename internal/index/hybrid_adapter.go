@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"aitools/internal/bm25"
-	"aitools/internal/hybrid"
+	"ragota/internal/bm25"
+	"ragota/internal/hybrid"
 )
 
 // VectorHybridAdapter превращает Vector в hybrid.VectorRetriever.

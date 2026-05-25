@@ -7,7 +7,7 @@ package chunker
 import (
 	"strings"
 
-	"aitools/internal/parser"
+	"ragota/internal/parser"
 )
 
 const (

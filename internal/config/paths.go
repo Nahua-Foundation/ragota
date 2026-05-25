@@ -1,14 +1,14 @@
 package config
 
-// Файл реализует методы Config для получения файловых путей внутри .ai-tools/
+// Файл реализует методы Config для получения файловых путей внутри .ragota/
 // (DataDir/SQLitePath/BM25Path/LogPath/StatsPath) и доступ к спецификациям
 // коллекций с подстановкой дефолтов (CodeCollection/TextCollection/RerankURL).
 
 import "path/filepath"
 
-// DataDir возвращает путь к служебной директории .ai-tools в корне.
+// DataDir возвращает путь к служебной директории .ragota в корне.
 func (c *Config) DataDir() string {
-	return filepath.Join(c.Root, ".ai-tools")
+	return filepath.Join(c.Root, ".ragota")
 }
 
 // SQLitePath — путь к SQLite-базе tree-sitter индекса.
@@ -17,7 +17,7 @@ func (c *Config) SQLitePath() string {
 }
 
 // BM25Path — путь к каталогу Bleve-индекса. Если в конфиге задан явный
-// BM25.Path — используется он, иначе .ai-tools/bm25/.
+// BM25.Path — используется он, иначе .ragota/bm25/.
 func (c *Config) BM25Path() string {
 	if c.BM25.Path != "" {
 		if filepath.IsAbs(c.BM25.Path) {
@@ -35,7 +35,7 @@ func (c *Config) CodeCollection() CollectionSpec {
 	if sp.Name == "" {
 		sp.Name = c.Collection
 		if sp.Name == "" {
-			sp.Name = "ai_tools_code"
+			sp.Name = "ragota_code"
 		}
 	}
 	if sp.EmbedModel == "" {
@@ -51,7 +51,7 @@ func (c *Config) CodeCollection() CollectionSpec {
 func (c *Config) TextCollection() CollectionSpec {
 	sp := c.Collections.Text
 	if sp.Name == "" {
-		sp.Name = "ai_tools_text"
+		sp.Name = "ragota_text"
 	}
 	if sp.EmbedModel == "" {
 		sp.EmbedModel = c.Ollama.EmbedModel

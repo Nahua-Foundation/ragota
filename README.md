@@ -1,4 +1,4 @@
-# ai-tools
+# ragota
 
 Единый бинарь, объединяющий **четыре MCP-сервера**, гибридный (vector + BM25) поиск с реранкером, AST/graph-индекс для symbol-aware навигации, докер-инфраструктуру и live-дашборд для индексации проектов.
 
@@ -16,11 +16,11 @@
   - **Java / TypeScript / JavaScript** — tree-sitter (classes, interfaces, methods, functions, calls, imports, `extends`, `implements`).
   - **Python** — AST units (без edges).
 - **LSP MCP (`lsp`)** — проксирует официальные LSP-сервера (`gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls`). Работает с локально установленными серверами.
-- **`ai-tools watch .`** — поднимает Qdrant в Docker (если указано `--start-docker`), использует Ollama на хосте, запускает индексаторы (vector + BM25 + AST/graph), открывает TUI-дашборд (bubbletea).
+- **`ragota watch .`** — поднимает Qdrant в Docker (если указано `--start-docker`), использует Ollama на хосте, запускает индексаторы (vector + BM25 + AST/graph), открывает TUI-дашборд (bubbletea).
 
 ### Multi-repo workspace
 
-`ai-tools` автоматически определяет, что лежит в указанной корневой директории:
+`ragota` автоматически определяет, что лежит в указанной корневой директории:
 
 - **Single-repo.** Если в самом корне есть `.git`, индексируется одна репа с именем = `basename(root)`.
 - **Multi-repo workspace.** Если в корне нет `.git`, но среди его непосредственных поддиректорий есть директории с `.git` — каждая такая директория считается отдельной репой. Соседние поддиректории на том же верхнем уровне (без `.git`) тоже попадают в индекс как «прицепленные репы». Скрытые директории (`.*`) пропускаются.
@@ -62,7 +62,7 @@
 
 #### Автоматическая установка
 ```bash
-./ai-tools install
+./ragota install
 ```
 Команда проверит наличие Docker, Ollama, всех нужных моделей (`qwen3-embedding`, `nomic-embed-text`, реранкер) и LSP-серверов и предложит установить недостающие. Обязательные модели помечены как required, реранкер — optional.
 
@@ -77,40 +77,40 @@
 
 ### Сборка
 ```
-go build -o ai-tools ./cmd/ai-tools
+go build -o ragota ./cmd/ragota
 ```
 
 ### Запуск
 
-Основная команда — `run`. При первом запуске ищется `.ai-tools/config.yaml` в проекте или `~/.ai-tools/config.yaml`. Если их нет — используются дефолты.
+Основная команда — `run`. При первом запуске ищется `.ragota/config.yaml` в проекте или `~/.ragota/config.yaml`. Если их нет — используются дефолты.
 
 #### Примеры запуска
 
 1. **Запустить всё сразу** (LSP + Tree-Sitter + Vector + Symbol MCP + индексация + TUI + Docker для Qdrant):
    ```bash
-   ./ai-tools run -ltvsw --start-docker .
+   ./ragota run -ltvsw --start-docker .
    ```
    *Флаги: `-l` (LSP), `-t` (Tree-Sitter), `-v` (Vector), `-s` (Symbol), `-w` (Watch/Индексация).*
 
 2. **Только индексация и TUI**:
    ```bash
-   ./ai-tools watch .
+   ./ragota watch .
    ```
-   *(Эквивалентно `./ai-tools run -w .`)*
+   *(Эквивалентно `./ragota run -w .`)*
 
 3. **Все MCP-серверы для Claude Desktop** (без TUI):
    ```bash
-   ./ai-tools run -ltvs --no-tui .
+   ./ragota run -ltvs --no-tui .
    ```
 
 4. **Только symbol-aware навигация**:
    ```bash
-   ./ai-tools run -s .
+   ./ragota run -s .
    ```
 
-- `./ai-tools gen-config` — сгенерировать конфиг (по умолчанию `~/.ai-tools/config.yaml`).
-- `./ai-tools mcp-config` — сгенерировать JSON для Claude Desktop / других MCP-клиентов (включает все 4 сервера).
-- `./ai-tools clean` — очистить локальный индекс (SQLite, Qdrant-коллекции, Bleve).
+- `./ragota gen-config` — сгенерировать конфиг (по умолчанию `~/.ragota/config.yaml`).
+- `./ragota mcp-config` — сгенерировать JSON для Claude Desktop / других MCP-клиентов (включает все 4 сервера).
+- `./ragota clean` — очистить локальный индекс (SQLite, Qdrant-коллекции, Bleve).
 - `q`/`Esc`/`Ctrl+C` — выход из TUI.
 
 #### Флаги `run`
@@ -125,10 +125,10 @@ go build -o ai-tools ./cmd/ai-tools
 ### MCP-серверы по отдельности (stdio)
 
 ```
-ai-tools serve-treesitter --root /path/to/project
-ai-tools serve-vector     --root /path/to/project
-ai-tools serve-symbol     --root /path/to/project
-ai-tools serve-lsp        --root /path/to/project
+ragota serve-treesitter --root /path/to/project
+ragota serve-vector     --root /path/to/project
+ragota serve-symbol     --root /path/to/project
+ragota serve-lsp        --root /path/to/project
 ```
 
 #### Методы MCP
@@ -182,7 +182,7 @@ ai-tools serve-lsp        --root /path/to/project
 
 ### Настройка LSP
 
-`ai-tools` запускает LSP-серверы **локально** (как дочерние процессы через stdio). Docker для LSP больше не используется — это упрощает маппинг путей и убирает оверхед на контейнер. Убедитесь, что нужные серверы установлены и доступны в `PATH`.
+`ragota` запускает LSP-серверы **локально** (как дочерние процессы через stdio). Docker для LSP больше не используется — это упрощает маппинг путей и убирает оверхед на контейнер. Убедитесь, что нужные серверы установлены и доступны в `PATH`.
 
 #### Инструкции по установке:
 
@@ -215,7 +215,7 @@ lsp:
     command: gopls
   - language: java
     command: jdtls
-    args: ["-data", ".ai-tools/jdtls-data"]
+    args: ["-data", ".ragota/jdtls-data"]
   - language: typescript
     command: typescript-language-server
     args: ["--stdio"]
@@ -229,7 +229,7 @@ lsp:
 - **`jdtls` запускается, но `lsp.definition/hover/references` возвращают `null` или пустой результат.**
   - Причина: jdtls долго импортирует Maven/Gradle проект (30–120с на первый запуск) — клиент дожидается уведомления `language/status: ServiceReady`.
   - Что делать: подождать; при больших проектах увеличить таймаут через env `JDTLS_READY_TIMEOUT=240` (секунды).
-  - Лог: `.ai-tools/logs/lsp-debug.log` (в корне проекта; путь можно переопределить env `AI_TOOLS_LSP_LOG`) — ищите `LSP java: ready signal received`. Если вместо него `ready timeout` — сервер не успел проиндексировать.
+  - Лог: `.ragota/logs/lsp-debug.log` (в корне проекта; путь можно переопределить env `AI_TOOLS_LSP_LOG`) — ищите `LSP java: ready signal received`. Если вместо него `ready timeout` — сервер не успел проиндексировать.
 
 - **`References RESULT: locations=0` (пусто), хотя символ заведомо используется.**
   - Причина: файл лежит вне source roots Maven/Gradle (в корне проекта рядом с `pom.xml`, а не в `src/main/java/`). jdtls в режиме Maven индексирует только `src/main/java/**` и `src/test/java/**`.
@@ -249,7 +249,7 @@ lsp:
   - Установлены ли пакеты проекта (`npm install`, `pip install -e .`) — без них типы из зависимостей не разрешаются.
 
 - **`LSP <lang>: client dead, recreating` повторяется на каждом запросе.**
-  - Откройте `.ai-tools/logs/lsp-debug.log` и посмотрите строку `process exited: ...` — там будет `exit_code` и `signal`. `signal=killed` обычно означает OOM; увеличьте `-Xmx` (для Java) или память контейнера. Реальные Exception'ы jdtls видны в `stderr tail`.
+  - Откройте `.ragota/logs/lsp-debug.log` и посмотрите строку `process exited: ...` — там будет `exit_code` и `signal`. `signal=killed` обычно означает OOM; увеличьте `-Xmx` (для Java) или память контейнера. Реальные Exception'ы jdtls видны в `stderr tail`.
 
 ### Настройка Ollama
 
@@ -262,11 +262,11 @@ lsp:
     ollama pull nomic-embed-text             # эмбеддинги markdown/текста (768-dim)
     ollama pull qllama/bge-reranker-v2-m3   # опционально — реранкер
     ```
-3.  **Запуск**: по умолчанию `http://localhost:11434`. Адрес можно поменять в `.ai-tools/config.yaml` (`ollama.url`).
+3.  **Запуск**: по умолчанию `http://localhost:11434`. Адрес можно поменять в `.ragota/config.yaml` (`ollama.url`).
 
 ### Безопасность и приватность
 
-- **Все данные локальны**: SQLite (`.ai-tools/treesitter.db`), Bleve (`.ai-tools/bm25/`), Qdrant (Docker-volume).
+- **Все данные локальны**: SQLite (`.ragota/treesitter.db`), Bleve (`.ragota/bm25/`), Qdrant (Docker-volume).
 - **Локальный LLM**: эмбеддинги и реранкер — Ollama на вашем хосте. Код не отправляется в облачные API.
 - **Безопасные порты**: MCP-серверы при `run` биндятся на `127.0.0.1`.
 - **Никакой телеметрии**.
@@ -295,12 +295,12 @@ internal/
   docker/    — нативный запуск Qdrant
   mcp/       — 4 MCP-сервера (ts/vec/sym/lsp) на github.com/mark3labs/mcp-go
   tui/       — дашборд на bubbletea + lipgloss
-.ai-tools/   — служебные данные: config.yaml, treesitter.db, bm25/, logs/, qdrant_storage
+.ragota/   — служебные данные: config.yaml, treesitter.db, bm25/, logs/, qdrant_storage
 ```
 
 ### Кастомизация
 
-Правьте `.ai-tools/config.yaml`:
+Правьте `.ragota/config.yaml`:
 
 - `ignore`, `extensions` — фильтры обхода.
 - `chunk_lines`, `chunk_overlap` — параметры чанкинга.
@@ -316,9 +316,9 @@ internal/
 
 Если вы обновляетесь с версии без `qwen3-embedding`:
 
-1. `./ai-tools install` — подтянет новые модели.
-2. При первом запуске `./ai-tools run -vw .` старый индекс кода будет автоматически удалён и пересоздан с новой моделью (markdown-индекс при этом сохраняется).
-3. Если хочется начисто — `./ai-tools clean`.
+1. `./ragota install` — подтянет новые модели.
+2. При первом запуске `./ragota run -vw .` старый индекс кода будет автоматически удалён и пересоздан с новой моделью (markdown-индекс при этом сохраняется).
+3. Если хочется начисто — `./ragota clean`.
 
 ### Работа с AI-агентами
 

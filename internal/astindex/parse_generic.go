@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"aitools/internal/store"
+	"ragota/internal/store"
 )
 
 // parseGeneric делегирует tree-sitter (через internal/parser.Parser) и

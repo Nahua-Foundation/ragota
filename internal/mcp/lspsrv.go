@@ -10,11 +10,11 @@ import (
 	"time"
 	"unicode"
 
-	"aitools/internal/config"
-	"aitools/internal/fileutil"
-	"aitools/internal/lsp"
-	"aitools/internal/state"
-	"aitools/internal/store"
+	"ragota/internal/config"
+	"ragota/internal/fileutil"
+	"ragota/internal/lsp"
+	"ragota/internal/state"
+	"ragota/internal/store"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -39,7 +39,7 @@ func NewLSPServer(cfg *config.Config, mgr *lsp.Manager, st *store.SQLite, bus *s
 }
 
 func (s *LSPServer) Build() *server.MCPServer {
-	srv := server.NewMCPServer("ai-tools-lsp", "0.1.0",
+	srv := server.NewMCPServer("ragota-lsp", "0.1.0",
 		server.WithToolCapabilities(false),
 	)
 

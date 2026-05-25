@@ -16,7 +16,7 @@ For optimal analytical performance, agents MUST prioritize the use of these tool
 
 ### 🗂 Multi-repo workspace
 
-`ai-tools` auto-detects whether the working directory contains a single repo (a `.git` at the root) or multiple repos (no root `.git` but `.git` directories one level down). Every indexed entity (AST unit, graph edge, BM25 document, Qdrant point) carries a `repo` field.
+`ragota` auto-detects whether the working directory contains a single repo (a `.git` at the root) or multiple repos (no root `.git` but `.git` directories one level down). Every indexed entity (AST unit, graph edge, BM25 document, Qdrant point) carries a `repo` field.
 
 Rules agents must observe:
 

@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"aitools/internal/bm25"
-	"aitools/internal/config"
-	"aitools/internal/fileutil"
-	"aitools/internal/hybrid"
-	"aitools/internal/index"
-	"aitools/internal/qdrant"
-	"aitools/internal/rerank"
-	"aitools/internal/state"
+	"ragota/internal/bm25"
+	"ragota/internal/config"
+	"ragota/internal/fileutil"
+	"ragota/internal/hybrid"
+	"ragota/internal/index"
+	"ragota/internal/qdrant"
+	"ragota/internal/rerank"
+	"ragota/internal/state"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -42,7 +42,7 @@ func (s *VectorServer) SetReranker(r rerank.Reranker) { s.rer = r }
 
 // Build регистрирует tools.
 func (s *VectorServer) Build() *server.MCPServer {
-	srv := server.NewMCPServer("ai-tools-vector", "0.1.0",
+	srv := server.NewMCPServer("ragota-vector", "0.1.0",
 		server.WithToolCapabilities(false),
 	)
 

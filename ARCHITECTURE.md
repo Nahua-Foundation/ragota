@@ -1,12 +1,12 @@
 # ARCHITECTURE
 
-Этот документ описывает архитектуру проекта `ai-tools` после серии декомпозиций
+Этот документ описывает архитектуру проекта `ragota` после серии декомпозиций
 и реорганизации (см. `CHANGELOG.md`). Он адресован и людям, и AI-агентам,
 которые правят код.
 
 ## TL;DR
 
-`ai-tools` — единый Go-бинарь, который:
+`ragota` — единый Go-бинарь, который:
 
 1. **Индексирует** репозиторий: парсит AST (tree-sitter + go/ast), бьёт код на
    чанки, считает embedding-ы и складывает их в Qdrant + Bleve (BM25) + SQLite
@@ -20,11 +20,11 @@
 ## Сборка и точка входа
 
 ```bash
-go build -o ai-tools ./cmd/ai-tools
+go build -o ragota ./cmd/ragota
 ```
 
 ```
-cmd/ai-tools/                 # пакет main
+cmd/ragota/                 # пакет main
   main.go                     # cobra-роутер подкоманд
   cli_run.go                  # run     — всё-в-одном (watch + MCP + TUI)
   cli_serve.go                # serve-* — отдельный MCP-сервер по stdio
@@ -35,7 +35,7 @@ cmd/ai-tools/                 # пакет main
   cli_mcpconfig.go            # mcp-config — печать JSON для MCP-клиента
 ```
 
-`cmd/ai-tools` — единственный пакет, который знает про cobra, флаги, главный
+`cmd/ragota` — единственный пакет, который знает про cobra, флаги, главный
 жизненный цикл процесса. Никакой бизнес-логики в нём нет — он только
 собирает зависимости из `internal/*` и запускает их.
 
@@ -43,7 +43,7 @@ cmd/ai-tools/                 # пакет main
 
 ```
                       ┌─────────────────────────────────┐
-        TRANSPORT     │  mcp/   tui/   (cmd/ai-tools)   │
+        TRANSPORT     │  mcp/   tui/   (cmd/ragota)     │
                       └───────────────▲─────────────────┘
                                       │
                       ┌───────────────┴─────────────────┐
@@ -66,7 +66,7 @@ cmd/ai-tools/                 # пакет main
 
 | Пакет | Ответственность |
 |---|---|
-| `internal/config` | YAML-конфиг, пути (`~/.ai-tools/...`), дефолты. Декомпозирован на `types.go` / `defaults.go` / `paths.go` / `io.go`. |
+| `internal/config` | YAML-конфиг, пути (`~/.ragota/...`), дефолты. Декомпозирован на `types.go` / `defaults.go` / `paths.go` / `io.go`. |
 | `internal/store` | SQLite-хранилище (`ast_units`, `edges`, `embed_meta`). Без знания о LSP. Декомпозирован на `sqlite.go` / `ast_units.go` / `edges.go` / `neighbors.go` / `embed_meta.go` / `graph.go` (типы). |
 | `internal/parser` | tree-sitter парсер для go/ts/js/py/java → `Symbol` + чанки. Декомпозирован на `parser.go` / `languages.go` / `symbols.go` / `chunks.go` / `imports.go` / `util.go`. |
 | `internal/chunker` | Семантическое + оконное разбиение исходников. |
@@ -96,7 +96,7 @@ cmd/ai-tools/                 # пакет main
 |---|---|
 | `internal/mcp` | MCP-инструменты (`mark3labs/mcp-go`): `vector.go` / `treesitter.go` / `symbol.go` / `lspsrv.go` + `util.go`. |
 | `internal/tui` | bubbletea-TUI. Декомпозирован на `tui.go` / `model.go` / `view.go` / `render.go` / `util.go`. |
-| `cmd/ai-tools` | CLI (cobra). |
+| `cmd/ragota` | CLI (cobra). |
 
 ## Поток данных при индексации (`run`/`watch`)
 

@@ -31,10 +31,10 @@ import (
 	"sync"
 	"time"
 
-	"aitools/internal/config"
-	"aitools/internal/fileutil"
-	"aitools/internal/lsp"
-	"aitools/internal/store"
+	"ragota/internal/config"
+	"ragota/internal/fileutil"
+	"ragota/internal/lsp"
+	"ragota/internal/store"
 )
 
 // EdgeKind — типы рёбер.

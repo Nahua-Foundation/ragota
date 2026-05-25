@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"aitools/internal/parser"
+	"ragota/internal/parser"
 )
 
 // makeLines собирает source из n строк "lineN", разделённых '\n'.

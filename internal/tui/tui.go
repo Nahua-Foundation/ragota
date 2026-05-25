@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"aitools/internal/state"
+	"ragota/internal/state"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -33,7 +33,7 @@ func Run(ctx context.Context, bus *state.Bus) error {
 	lf, lfPath := openLogFile()
 	if lf != nil {
 		defer lf.Close()
-		_, _ = fmt.Fprintf(os.Stderr, "ai-tools TUI: logs are mirrored to %s\n", lfPath)
+		_, _ = fmt.Fprintf(os.Stderr, "ragota TUI: logs are mirrored to %s\n", lfPath)
 	}
 	m := model{bus: bus, logFile: lf, seen: make(map[string]struct{})}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
@@ -41,17 +41,17 @@ func Run(ctx context.Context, bus *state.Bus) error {
 	return err
 }
 
-// openLogFile открывает файл логов TUI в ~/.cache/ai-tools/tui.log
+// openLogFile открывает файл логов TUI в ~/.cache/ragota/tui.log
 // (с фоллбэком в текущую директорию). Если открыть не удалось — возвращает nil.
 func openLogFile() (*os.File, string) {
 	dir := ""
 	if h, err := os.UserCacheDir(); err == nil {
-		dir = filepath.Join(h, "ai-tools")
+		dir = filepath.Join(h, "ragota")
 	} else if h, err := os.UserHomeDir(); err == nil {
-		dir = filepath.Join(h, ".cache", "ai-tools")
+		dir = filepath.Join(h, ".cache", "ragota")
 	}
 	if dir == "" {
-		dir = ".ai-tools"
+		dir = ".ragota"
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, ""
@@ -61,7 +61,7 @@ func openLogFile() (*os.File, string) {
 	if err != nil {
 		return nil, ""
 	}
-	_, _ = fmt.Fprintf(f, "\n=== ai-tools TUI started at %s ===\n", time.Now().Format(time.RFC3339))
+	_, _ = fmt.Fprintf(f, "\n=== ragota TUI started at %s ===\n", time.Now().Format(time.RFC3339))
 	return f, path
 }
 
@@ -69,7 +69,7 @@ func openLogFile() (*os.File, string) {
 // в TUI. Намеренно без полного пути — экономим место в шапке секции.
 func logFilePathHint() string {
 	if h, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(h, "ai-tools", "tui.log")
+		return filepath.Join(h, "ragota", "tui.log")
 	}
-	return "~/.cache/ai-tools/tui.log"
+	return "~/.cache/ragota/tui.log"
 }

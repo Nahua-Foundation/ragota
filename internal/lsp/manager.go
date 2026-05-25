@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"aitools/internal/repos"
+	"ragota/internal/repos"
 )
 
 // clientKey — составной ключ кэша LSP-клиентов. Позволяет держать

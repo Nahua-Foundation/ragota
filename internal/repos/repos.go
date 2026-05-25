@@ -86,7 +86,7 @@ func Discover(root string) ([]Repo, error) {
 			continue
 		}
 		name := e.Name()
-		// Пропускаем скрытые директории (включая .ai-tools, .git, .idea и т.п.).
+		// Пропускаем скрытые директории (включая .ragota, .git, .idea и т.п.).
 		if strings.HasPrefix(name, ".") {
 			continue
 		}

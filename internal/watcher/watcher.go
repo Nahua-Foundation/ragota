@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"aitools/internal/fileutil"
-	"aitools/internal/repos"
+	"ragota/internal/fileutil"
+	"ragota/internal/repos"
 
 	"github.com/fsnotify/fsnotify"
 )

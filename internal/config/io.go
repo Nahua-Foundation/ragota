@@ -3,7 +3,7 @@ package config
 // Файл реализует загрузку и сохранение конфига:
 // ResolveConfigPath/DefaultConfigPath/HomeConfigPath — алгоритм поиска;
 // Load — чтение YAML с дефолтами; WriteDefault — запись дефолтного конфига;
-// EnsureDataDir — создание служебных каталогов .ai-tools/ и logs/.
+// EnsureDataDir — создание служебных каталогов .ragota/ и logs/.
 
 import (
 	"errors"
@@ -14,18 +14,18 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// DefaultConfigPath возвращает локальный путь конфига: .ai-tools/config.yaml в корне.
+// DefaultConfigPath возвращает локальный путь конфига: .ragota/config.yaml в корне.
 func DefaultConfigPath(root string) string {
-	return filepath.Join(root, ".ai-tools", "config.yaml")
+	return filepath.Join(root, ".ragota", "config.yaml")
 }
 
-// HomeConfigPath возвращает глобальный путь конфига: ~/.ai-tools/config.yaml.
+// HomeConfigPath возвращает глобальный путь конфига: ~/.ragota/config.yaml.
 func HomeConfigPath() string {
 	home, _ := os.UserHomeDir()
 	if home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".ai-tools", "config.yaml")
+	return filepath.Join(home, ".ragota", "config.yaml")
 }
 
 // ResolveConfigPath возвращает путь к конфигу, который будет загружен.
@@ -36,12 +36,12 @@ func ResolveConfigPath(root, configPath string) (string, error) {
 	}
 	path := configPath
 	if path == "" {
-		// Сначала ищем локальный (.ai-tools/config.yaml или старый ai-tools/config.yaml)
+		// Сначала ищем локальный (.ragota/config.yaml или старый ai-tools/config.yaml)
 		local := DefaultConfigPath(absRoot)
 		if _, err := os.Stat(local); err == nil {
 			path = local
 		} else {
-			oldLocal := filepath.Join(absRoot, "ai-tools", "config.yaml")
+			oldLocal := filepath.Join(absRoot, "ragota", "config.yaml")
 			if info, err := os.Stat(oldLocal); err == nil && !info.IsDir() {
 				path = oldLocal
 			} else {
@@ -62,8 +62,8 @@ func ResolveConfigPath(root, configPath string) (string, error) {
 }
 
 // Load загружает конфиг. Порядок поиска если configPath пустой:
-// 1. .ai-tools/config.yaml (локальный в корне проекта)
-// 2. ~/.ai-tools/config.yaml (глобальный в HOME)
+// 1. .ragota/config.yaml (локальный в корне проекта)
+// 2. ~/.ragota/config.yaml (глобальный в HOME)
 // Если файла нет нигде — возвращается дефолт.
 func Load(root, configPath string) (*Config, error) {
 	path, err := ResolveConfigPath(root, configPath)
@@ -113,8 +113,8 @@ func WriteDefault(path string, overwrite bool) (string, error) {
 	if err != nil {
 		return path, err
 	}
-	header := []byte("# ai-tools default configuration.\n" +
-		"# Place this file at .ai-tools/config.yaml or pass via --config <path>.\n" +
+	header := []byte("# ragota default configuration.\n" +
+		"# Place this file at .ragota/config.yaml or pass via --config <path>.\n" +
 		"# If you are behind a corporate proxy, add HTTP_PROXY/HTTPS_PROXY to docker envs.\n\n")
 	if err := os.WriteFile(path, append(header, data...), 0o644); err != nil {
 		return path, err
@@ -122,7 +122,7 @@ func WriteDefault(path string, overwrite bool) (string, error) {
 	return path, nil
 }
 
-// EnsureDataDir создаёт .ai-tools/ и .ai-tools/logs/ в корне проекта.
+// EnsureDataDir создаёт .ragota/ и .ragota/logs/ в корне проекта.
 func (c *Config) EnsureDataDir() error {
 	if err := os.MkdirAll(c.DataDir(), 0o755); err != nil {
 		return err

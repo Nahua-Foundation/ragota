@@ -1,4 +1,4 @@
-module aitools
+module ragota
 
 go 1.26
 

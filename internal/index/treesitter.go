@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"aitools/internal/config"
-	"aitools/internal/fileutil"
-	"aitools/internal/parser"
-	"aitools/internal/state"
-	"aitools/internal/store"
-	"aitools/internal/watcher"
+	"ragota/internal/config"
+	"ragota/internal/fileutil"
+	"ragota/internal/parser"
+	"ragota/internal/state"
+	"ragota/internal/store"
+	"ragota/internal/watcher"
 )
 
 // TreeSitter — индексатор, сохраняющий символы файлов в SQLite.

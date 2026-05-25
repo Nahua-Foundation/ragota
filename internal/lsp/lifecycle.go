@@ -21,8 +21,8 @@ import (
 
 // Start запускает процесс LSP-сервера и выполняет initialize/initialized.
 func Start(ctx context.Context, spec ServerSpec, root string) (*Client, error) {
-	// Обрабатываем относительные пути в аргументах (например, -data .ai-tools/jdtls-data)
-	// так как рабочий каталог процесса совпадает с рабочим каталогом AI-tools,
+	// Обрабатываем относительные пути в аргументах (например, -data .ragota/jdtls-data)
+	// так как рабочий каталог процесса совпадает с рабочим каталогом ragota,
 	// а не с root проекта, если они разные.
 	// Мы хотим, чтобы -data создавался внутри проекта:
 	args := make([]string, len(spec.Args))

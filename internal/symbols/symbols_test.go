@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aitools/internal/config"
-	"aitools/internal/graph"
-	"aitools/internal/store"
+	"ragota/internal/config"
+	"ragota/internal/graph"
+	"ragota/internal/store"
 )
 
 func openStore(t *testing.T) *store.SQLite {

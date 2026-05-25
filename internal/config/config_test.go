@@ -38,13 +38,13 @@ func TestDefault_HasSaneValues(t *testing.T) {
 func TestConfigPaths(t *testing.T) {
 	c := Default()
 	c.Root = "/tmp/proj"
-	if got := c.DataDir(); got != "/tmp/proj/.ai-tools" {
+	if got := c.DataDir(); got != "/tmp/proj/.ragota" {
 		t.Errorf("DataDir = %q", got)
 	}
-	if got := c.SQLitePath(); !strings.HasSuffix(got, "/.ai-tools/treesitter.db") {
+	if got := c.SQLitePath(); !strings.HasSuffix(got, "/.ragota/treesitter.db") {
 		t.Errorf("SQLitePath = %q", got)
 	}
-	if got := c.BM25Path(); !strings.HasSuffix(got, "/.ai-tools/bm25") {
+	if got := c.BM25Path(); !strings.HasSuffix(got, "/.ragota/bm25") {
 		t.Errorf("BM25Path (default) = %q", got)
 	}
 	c.BM25.Path = "custom/bm25"
@@ -115,7 +115,7 @@ func TestLoad_ExplicitPathMissingReturnsError(t *testing.T) {
 
 func TestLoad_ParsesYAML(t *testing.T) {
 	root := t.TempDir()
-	cfgPath := filepath.Join(root, ".ai-tools", "config.yaml")
+	cfgPath := filepath.Join(root, ".ragota", "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ ollama:
 
 func TestLoad_BadYAML(t *testing.T) {
 	root := t.TempDir()
-	cfgPath := filepath.Join(root, ".ai-tools", "config.yaml")
+	cfgPath := filepath.Join(root, ".ragota", "config.yaml")
 	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
 	_ = os.WriteFile(cfgPath, []byte("qdrant: [not, a, map\n"), 0o644)
 	if _, err := Load(root, ""); err == nil {
@@ -170,7 +170,7 @@ func TestWriteDefault_AndOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if !strings.Contains(string(data), "ai-tools default configuration") {
+	if !strings.Contains(string(data), "ragota default configuration") {
 		t.Errorf("header missing")
 	}
 	// Без overwrite — повторный вызов должен ругнуться.

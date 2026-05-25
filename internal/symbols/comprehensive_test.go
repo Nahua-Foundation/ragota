@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"aitools/internal/astindex"
-	"aitools/internal/config"
-	"aitools/internal/graph"
-	"aitools/internal/store"
+	"ragota/internal/astindex"
+	"ragota/internal/config"
+	"ragota/internal/graph"
+	"ragota/internal/store"
 )
 
 func TestComprehensiveProjectSupport(t *testing.T) {
@@ -19,7 +19,7 @@ func TestComprehensiveProjectSupport(t *testing.T) {
 	projectRoot := filepath.Join(filepath.Dir(filename), "..", "..")
 	testDataDir := filepath.Join(projectRoot, "tests", "testprojects")
 
-	tmpDir, err := os.MkdirTemp("", "aitools-comprehensive")
+	tmpDir, err := os.MkdirTemp("", "ragota-comprehensive")
 	if err != nil {
 		t.Fatal(err)
 	}

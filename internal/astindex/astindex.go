@@ -34,12 +34,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"aitools/internal/config"
-	"aitools/internal/fileutil"
-	pkgparser "aitools/internal/parser"
-	"aitools/internal/repos"
-	"aitools/internal/state"
-	"aitools/internal/store"
+	"ragota/internal/config"
+	"ragota/internal/fileutil"
+	pkgparser "ragota/internal/parser"
+	"ragota/internal/repos"
+	"ragota/internal/state"
+	"ragota/internal/store"
 )
 
 // Indexer — индексатор AST units и edges.

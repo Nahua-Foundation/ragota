@@ -1,7 +1,7 @@
 package main
 
-import "aitools/tests/testprojects/go/pkg1"
-import "aitools/tests/testprojects/go/pkg2"
+import "ragota/tests/testprojects/go/pkg1"
+import "ragota/tests/testprojects/go/pkg2"
 
 func main() {
 	var e pkg1.Equaler = pkg2.MyInt(1)

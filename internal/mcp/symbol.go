@@ -4,12 +4,12 @@ import (
 	"context"
 	"strings"
 
-	"aitools/internal/config"
-	"aitools/internal/fileutil"
-	"aitools/internal/graph"
-	"aitools/internal/state"
-	"aitools/internal/store"
-	"aitools/internal/symbols"
+	"ragota/internal/config"
+	"ragota/internal/fileutil"
+	"ragota/internal/graph"
+	"ragota/internal/state"
+	"ragota/internal/store"
+	"ragota/internal/symbols"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -33,7 +33,7 @@ func NewSymbolServer(cfg *config.Config, st *store.SQLite, syms *symbols.Service
 
 // Build регистрирует все symbol-aware tools.
 func (s *SymbolServer) Build() *server.MCPServer {
-	srv := server.NewMCPServer("ai-tools-symbol", "0.1.0",
+	srv := server.NewMCPServer("ragota-symbol", "0.1.0",
 		server.WithToolCapabilities(false),
 	)
 

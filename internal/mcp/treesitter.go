@@ -6,11 +6,11 @@ import (
 	"context"
 	"fmt"
 
-	"aitools/internal/config"
-	"aitools/internal/fileutil"
-	"aitools/internal/index"
-	"aitools/internal/state"
-	"aitools/internal/store"
+	"ragota/internal/config"
+	"ragota/internal/fileutil"
+	"ragota/internal/index"
+	"ragota/internal/state"
+	"ragota/internal/store"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -36,7 +36,7 @@ func NewTreeSitterServer(cfg *config.Config, idx *index.TreeSitter, st *store.SQ
 
 // Build регистрирует все tools и возвращает готовый MCP server.
 func (s *TreeSitterServer) Build() *server.MCPServer {
-	srv := server.NewMCPServer("ai-tools-treesitter", "0.1.0",
+	srv := server.NewMCPServer("ragota-treesitter", "0.1.0",
 		server.WithToolCapabilities(false),
 	)
 

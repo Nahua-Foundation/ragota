@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"aitools/internal/state"
+	"ragota/internal/state"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

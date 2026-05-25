@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"aitools/internal/state"
+	"ragota/internal/state"
 )
 
 func dockerLineFmt(d state.DockerStatus, width int) string {

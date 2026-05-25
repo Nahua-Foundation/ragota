@@ -8,9 +8,9 @@ import (
 )
 
 // Файл содержит ленивую инициализацию отладочного лог-файла LSP-клиента.
-// Лог пишется в `.ai-tools/logs/lsp-debug.log` относительно текущего каталога
-// (корня проекта, где запущен ai-tools). Путь можно переопределить переменной
-// окружения AI_TOOLS_LSP_LOG (абсолютный путь к файлу).
+// Лог пишется в `.ragota/logs/lsp-debug.log` относительно текущего каталога
+// (корня проекта, где запущен ragota). Путь можно переопределить переменной
+// окружения RAGOTA_LSP_LOG (абсолютный путь к файлу).
 
 var (
 	lspDebugLog  *os.File
@@ -20,13 +20,13 @@ var (
 // openLspDebugLog лениво открывает файл лога LSP. Папка создаётся при необходимости.
 func openLspDebugLog() {
 	lspDebugOnce.Do(func() {
-		path := os.Getenv("AI_TOOLS_LSP_LOG")
+		path := os.Getenv("RAGOTA_LSP_LOG")
 		if path == "" {
 			cwd, err := os.Getwd()
 			if err != nil {
 				cwd = "."
 			}
-			dir := filepath.Join(cwd, ".ai-tools", "logs")
+			dir := filepath.Join(cwd, ".ragota", "logs")
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return
 			}

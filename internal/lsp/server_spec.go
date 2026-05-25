@@ -40,7 +40,7 @@ func DefaultServers() []ServerSpec {
 			"--jvm-arg", "--add-opens=jdk.compiler/com.sun.tools.javac.jvm=ALL-UNNAMED",
 			"--jvm-arg", "--add-opens=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED",
 			"--jvm-arg", "--add-opens=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED",
-			"-data", ".ai-tools/jdtls-data",
+			"-data", ".ragota/jdtls-data",
 		}},
 	}
 }

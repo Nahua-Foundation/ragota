@@ -18,7 +18,7 @@ import (
 
 func openTestStore(t *testing.T) *SQLite {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "ai-tools.db")
+	path := filepath.Join(t.TempDir(), "ragota.db")
 	st, err := Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)

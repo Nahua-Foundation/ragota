@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"aitools/internal/bm25"
-	"aitools/internal/qdrant"
-	"aitools/internal/state"
-	"aitools/internal/watcher"
+	"ragota/internal/bm25"
+	"ragota/internal/qdrant"
+	"ragota/internal/state"
+	"ragota/internal/watcher"
 )
 
 // IndexFile полностью переиндексирует один файл.

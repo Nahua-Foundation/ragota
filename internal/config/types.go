@@ -1,4 +1,4 @@
-// Package config описывает конфигурацию ai-tools и её загрузку из YAML.
+// Package config описывает конфигурацию ragota и её загрузку из YAML.
 //
 // Реализация декомпозирована по доменам:
 //
@@ -11,14 +11,14 @@
 //     ResolveConfigPath/DefaultConfigPath/HomeConfigPath/EnsureDataDir).
 package config
 
-// Config — главная конфигурация ai-tools.
+// Config — главная конфигурация ragota.
 // Загружается из YAML-файла, путь определяется так:
 //  1. явный --config / -c <path>
-//  2. ai-tools/config.yaml (в корне проекта)
+//  2. ragota/config.yaml (в корне проекта)
 //
 // Если файла нет — используются дефолтные значения.
 type Config struct {
-	// Корневая директория, которую обслуживает ai-tools (где лежит ai-tools/).
+	// Корневая директория, которую обслуживает ragota (где лежит ragota/).
 	// Заполняется CLI на основе аргумента, не из YAML.
 	Root string `yaml:"-"`
 
@@ -45,7 +45,7 @@ type Config struct {
 	// Порты MCP-серверов (SSE при run, stdio при serve-*).
 	MCP MCPPorts `yaml:"mcp"`
 
-	// Параметры контейнеров, которые ai-tools поднимает сам при --start-docker.
+	// Параметры контейнеров, которые ragota поднимает сам при --start-docker.
 	Docker DockerConfig `yaml:"docker"`
 
 	// Настройки производительности индексации.
@@ -79,7 +79,7 @@ type CollectionSpec struct {
 // BM25Config — параметры лексического индекса (Bleve, BM25).
 type BM25Config struct {
 	Enabled bool `yaml:"enabled"`
-	// Путь к каталогу Bleve-индекса (по умолчанию .ai-tools/bm25/).
+	// Путь к каталогу Bleve-индекса (по умолчанию .ragota/bm25/).
 	Path string `yaml:"path"`
 	// Параметры BM25 (если 0 — берутся значения по умолчанию Bleve).
 	K1 float64 `yaml:"k1"`

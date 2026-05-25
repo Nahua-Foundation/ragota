@@ -26,16 +26,16 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"aitools/internal/bm25"
-	"aitools/internal/chunker"
-	"aitools/internal/config"
-	"aitools/internal/embedder"
-	"aitools/internal/fileutil"
-	"aitools/internal/parser"
-	"aitools/internal/qdrant"
-	"aitools/internal/repos"
-	"aitools/internal/state"
-	"aitools/internal/store"
+	"ragota/internal/bm25"
+	"ragota/internal/chunker"
+	"ragota/internal/config"
+	"ragota/internal/embedder"
+	"ragota/internal/fileutil"
+	"ragota/internal/parser"
+	"ragota/internal/qdrant"
+	"ragota/internal/repos"
+	"ragota/internal/state"
+	"ragota/internal/store"
 )
 
 // codeCollectionLanguages — языки, чанки которых пишутся в коллекцию code

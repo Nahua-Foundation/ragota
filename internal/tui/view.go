@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"aitools/internal/state"
+	"ragota/internal/state"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -32,7 +32,7 @@ func (m model) View() string {
 	}
 	s := m.snap
 	uptime := time.Since(s.StartedAt).Truncate(time.Second)
-	header := titleStyle.Render("ai-tools watch") + "  " +
+	header := titleStyle.Render("ragota watch") + "  " +
 		dimStyle.Render(fmt.Sprintf("root=%s  uptime=%s  press q to quit", s.Root, uptime))
 
 	// Docker

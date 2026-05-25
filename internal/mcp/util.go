@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	"aitools/internal/store"
+	"ragota/internal/store"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )

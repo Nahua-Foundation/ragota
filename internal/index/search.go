@@ -11,11 +11,11 @@ import (
 	"log"
 	"os"
 
-	"aitools/internal/chunker"
-	"aitools/internal/config"
-	"aitools/internal/embedder"
-	"aitools/internal/qdrant"
-	"aitools/internal/store"
+	"ragota/internal/chunker"
+	"ragota/internal/config"
+	"ragota/internal/embedder"
+	"ragota/internal/qdrant"
+	"ragota/internal/store"
 )
 
 // Search — семантический поиск top-K. Если в filter указан language —

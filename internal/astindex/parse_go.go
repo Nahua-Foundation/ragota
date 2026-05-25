@@ -13,7 +13,7 @@ import (
 
 	"database/sql"
 
-	"aitools/internal/store"
+	"ragota/internal/store"
 )
 
 // pendingEdge — промежуточное представление ребра до резолва dst_id.

@@ -12,7 +12,7 @@ import (
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 
-	"aitools/internal/store"
+	"ragota/internal/store"
 )
 
 // parseWithTreeSitter — общий driver для Java / TypeScript / JavaScript:

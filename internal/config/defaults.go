@@ -12,8 +12,8 @@ var DefaultIgnore = []string{
 	"target", ".gradle", "out",
 	".cache", "coverage", "tmp",
 	"*.pb.go", "*_grpc.pb.go", "*.gen.go", "*.pb.js", "*.pb.ts", "*_pb2.py", "*_pb2_grpc.py",
-	"ai-tools",
-	".ai-tools",
+	"ragota",
+	".ragota",
 }
 
 // DefaultExtensions — расширения для индексирования по умолчанию.
@@ -84,12 +84,12 @@ func Default() *Config {
 			Symbol:     7774,
 		},
 		Docker: DockerConfig{
-			Network: "ai-tools-net",
+			Network: "ragota-net",
 			Qdrant: DockerContainerCfg{
-				Name:    "ai-tools-qdrant",
+				Name:    "ragota-qdrant",
 				Image:   "qdrant/qdrant:latest",
 				Ports:   []string{"127.0.0.1:6333:6333", "127.0.0.1:6334:6334"},
-				Volumes: []string{".ai-tools/qdrant_storage:/qdrant/storage"},
+				Volumes: []string{".ragota/qdrant_storage:/qdrant/storage"},
 			},
 		},
 		LSP: []LSPServerConfig{
@@ -115,7 +115,7 @@ func Default() *Config {
 			{
 				Language: "java",
 				Command:  "jdtls",
-				Args:     []string{"-data", ".ai-tools/jdtls-data"},
+				Args:     []string{"-data", ".ragota/jdtls-data"},
 			},
 		},
 	}

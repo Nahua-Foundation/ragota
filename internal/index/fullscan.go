@@ -20,13 +20,13 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"aitools/internal/bm25"
-	"aitools/internal/chunker"
-	"aitools/internal/config"
-	"aitools/internal/embedder"
-	"aitools/internal/fileutil"
-	"aitools/internal/qdrant"
-	"aitools/internal/state"
+	"ragota/internal/bm25"
+	"ragota/internal/chunker"
+	"ragota/internal/config"
+	"ragota/internal/embedder"
+	"ragota/internal/fileutil"
+	"ragota/internal/qdrant"
+	"ragota/internal/state"
 )
 
 // FullScan индексирует все подходящие файлы с использованием глобального батчинга чанков.
