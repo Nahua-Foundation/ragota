@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"ragota/internal/config"
+	"ragota/internal/logger"
 	"runtime"
 	"strings"
 )
@@ -45,7 +46,7 @@ func Available(ctx context.Context) error {
 // Если all=true — запускает все сервисы (qdrant, lsp), иначе только qdrant.
 func (r *Runner) Up(ctx context.Context, all bool) error {
 	if r.Cfg.Network != "" {
-		fmt.Fprintf(os.Stderr, "docker: ensuring network %s\n", r.Cfg.Network)
+		logger.Log().Debug().Str("network", r.Cfg.Network).Msg("docker: ensuring network")
 		if err := r.ensureNetwork(ctx, r.Cfg.Network); err != nil {
 			return err
 		}
@@ -56,7 +57,7 @@ func (r *Runner) Up(ctx context.Context, all bool) error {
 	}
 	// Qdrant запускается всегда
 	if r.Cfg.Qdrant.Image != "" {
-		fmt.Fprintf(os.Stderr, "docker: starting qdrant (%s)\n", r.Cfg.Qdrant.Image)
+		logger.Log().Info().Str("image", r.Cfg.Qdrant.Image).Msg("docker: starting qdrant")
 		if err := r.runContainer(ctx, r.Cfg.Qdrant); err != nil {
 			return fmt.Errorf("qdrant: %w", err)
 		}
@@ -65,7 +66,7 @@ func (r *Runner) Up(ctx context.Context, all bool) error {
 	if all {
 		// Запускаем единый LSP-контейнер
 		if r.Cfg.LSP.Image != "" {
-			fmt.Fprintf(os.Stderr, "docker: starting lsp container (%s)\n", r.Cfg.LSP.Image)
+			logger.Log().Info().Str("image", r.Cfg.LSP.Image).Msg("docker: starting lsp container")
 			if err := r.runLSPContainer(ctx, r.Cfg.LSP); err != nil {
 				return fmt.Errorf("lsp: %w", err)
 			}
@@ -103,7 +104,7 @@ func (r *Runner) ensureImage(ctx context.Context, image string) error {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "docker: building image %s from embedded Dockerfile...\n", image)
+	logger.Log().Info().Str("image", image).Msg("docker: building image from embedded Dockerfile")
 
 	// Билдим из stdin
 	buildCmd := exec.CommandContext(ctx, "docker", "build", "--label", "ragota.dockerfile-sha256="+hash, "-t", image, "-")
@@ -159,13 +160,15 @@ func (r *Runner) inspectPs(ctx context.Context, name string) PsService {
 }
 
 type containerState struct {
-	Status    string `json:"Status"`
-	Running   bool   `json:"Running"`
-	OpenStdin bool   `json:"OpenStdin"`
-	Image     string `json:"Image"`
+	Status    string   `json:"Status"`
+	Running   bool     `json:"Running"`
+	OpenStdin bool     `json:"OpenStdin"`
+	Image     string   `json:"Image"`
+	Mounts    []string `json:"Mounts"` // resolved host:container paths
 }
 
 func (r *Runner) inspectState(ctx context.Context, name string) (*containerState, error) {
+	// Сначала базовый inspect
 	format := `{"Status":"{{.State.Status}}","Running":{{.State.Running}},"OpenStdin":{{.Config.OpenStdin}},"Image":"{{.Image}}"}`
 	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format", format, name).Output()
 	if err != nil {
@@ -174,6 +177,19 @@ func (r *Runner) inspectState(ctx context.Context, name string) (*containerState
 	var st containerState
 	if err := json.Unmarshal(bytes.TrimSpace(out), &st); err != nil {
 		return nil, err
+	}
+
+	// Получаем mount points
+	mountFormat := `{{range .Mounts}}{{.Source}}:{{.Destination}}
+{{end}}`
+	mountOut, err := exec.CommandContext(ctx, "docker", "inspect", "--format", mountFormat, name).Output()
+	if err == nil {
+		for _, line := range strings.Split(string(mountOut), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				st.Mounts = append(st.Mounts, line)
+			}
+		}
 	}
 	return &st, nil
 }
@@ -212,13 +228,13 @@ func (r *Runner) runContainer(ctx context.Context, c config.DockerContainerCfg) 
 	// Если уже есть — проверим состояние.
 	if st, err := r.inspectState(ctx, c.Name); err == nil {
 		if id, err := imageID(ctx, c.Image); err == nil && st.Image != "" && st.Image != id {
-			fmt.Fprintf(os.Stderr, "docker: container %s uses outdated image, recreating...\n", c.Name)
+			logger.Log().Warn().Str("container", c.Name).Msg("docker: container uses outdated image, recreating")
 			_ = exec.CommandContext(ctx, "docker", "rm", "-f", c.Name).Run()
-		} else
-		// Если контейнер в статусе restarting или создан без -i (OpenStdin=false),
-		// значит он падает при старте из-за отсутствия stdin. Пересоздаём.
-		if st.Status == "restarting" || (!st.OpenStdin && st.Status != "running") {
-			fmt.Fprintf(os.Stderr, "docker: container %s is in bad state (%s, stdin=%v), recreating...\n", c.Name, st.Status, st.OpenStdin)
+		} else if st.Status == "restarting" || (!st.OpenStdin && st.Status != "running") {
+			logger.Log().Warn().Str("container", c.Name).Str("status", st.Status).Msg("docker: container in bad state, recreating")
+			_ = exec.CommandContext(ctx, "docker", "rm", "-f", c.Name).Run()
+		} else if r.volumesMismatch(st, c.Volumes) {
+			logger.Log().Warn().Str("container", c.Name).Msg("docker: container has stale volume mounts, recreating")
 			_ = exec.CommandContext(ctx, "docker", "rm", "-f", c.Name).Run()
 		} else {
 			if st.Running {
@@ -300,6 +316,24 @@ func (r *Runner) runContainer(ctx context.Context, c config.DockerContainerCfg) 
 	return nil
 }
 
+// volumesMismatch проверяет, отличаются ли resolved volumes от текущих mount'ов контейнера.
+func (r *Runner) volumesMismatch(st *containerState, volumes []string) bool {
+	if len(st.Mounts) == 0 || len(volumes) == 0 {
+		return false
+	}
+	existing := make(map[string]bool)
+	for _, m := range st.Mounts {
+		existing[m] = true
+	}
+	for _, v := range volumes {
+		resolved := r.resolveVolume(v)
+		if !existing[resolved] {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveVolume превращает относительный host-путь в абсолютный (относительно WorkingDir).
 // Поддерживает пути вида ".ragota/...", "./...", а также "~" для домашней директории.
 func (r *Runner) resolveVolume(v string) string {
@@ -329,12 +363,12 @@ func (r *Runner) ensureLSPImage(ctx context.Context, image string) error {
 	// Проверяем, есть ли образ локально
 	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", image)
 	if err := cmd.Run(); err == nil {
-		fmt.Fprintf(os.Stderr, "docker: image %s found locally\n", image)
+		logger.Log().Debug().Str("image", image).Msg("docker: image found locally")
 		return nil
 	}
 
 	// Образа нет — билдим локально из Dockerfile
-	fmt.Fprintf(os.Stderr, "docker: image %s not found, building from Dockerfile...\n", image)
+	logger.Log().Info().Str("image", image).Msg("docker: image not found, building from Dockerfile")
 	return r.buildLSPImage(ctx, image)
 }
 
@@ -349,7 +383,7 @@ func (r *Runner) buildLSPImage(ctx context.Context, image string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker build failed: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "docker: image %s built successfully\n", image)
+	logger.Log().Info().Str("image", image).Msg("docker: image built successfully")
 	return nil
 }
 
@@ -369,10 +403,13 @@ func (r *Runner) runLSPContainer(ctx context.Context, cfg config.LSPDockerCfg) e
 	// Проверяем, есть ли уже контейнер
 	if st, err := r.inspectState(ctx, containerName); err == nil {
 		if id, err := imageID(ctx, cfg.Image); err == nil && st.Image != "" && st.Image != id {
-			fmt.Fprintf(os.Stderr, "docker: container %s uses outdated image, recreating...\n", containerName)
+			logger.Log().Warn().Str("container", containerName).Msg("docker: container uses outdated image, recreating")
 			_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
 		} else if st.Status == "restarting" || (!st.OpenStdin && st.Status != "running") {
-			fmt.Fprintf(os.Stderr, "docker: container %s is in bad state (%s, stdin=%v), recreating...\n", containerName, st.Status, st.OpenStdin)
+			logger.Log().Warn().Str("container", containerName).Str("status", st.Status).Msg("docker: container in bad state, recreating")
+			_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
+		} else if r.volumesMismatch(st, cfg.Volumes) {
+			logger.Log().Warn().Str("container", containerName).Msg("docker: container has stale volume mounts, recreating")
 			_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
 		} else {
 			if st.Running {
@@ -416,6 +453,6 @@ func (r *Runner) runLSPContainer(ctx context.Context, cfg config.LSPDockerCfg) e
 		return fmt.Errorf("docker run %s: %w: %s", containerName, err, string(out))
 	}
 
-	fmt.Fprintf(os.Stderr, "docker: LSP container started successfully\n")
+	logger.Log().Info().Msg("docker: LSP container started successfully")
 	return nil
 }

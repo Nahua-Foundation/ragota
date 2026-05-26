@@ -139,12 +139,13 @@ func (c *Client) DeleteCollection(ctx context.Context, name string) error {
 }
 
 // Upsert загружает точки в коллекцию.
+// wait=false — асинхронная запись для производительности.
 func (c *Client) Upsert(ctx context.Context, collection string, points []Point) error {
 	if len(points) == 0 {
 		return nil
 	}
 	body := map[string]any{"points": points}
-	return c.doPUT(ctx, "/collections/"+collection+"/points?wait=true", body, nil)
+	return c.doPUT(ctx, "/collections/"+collection+"/points?wait=false", body, nil)
 }
 
 // DeleteByFilter удаляет точки, у которых payload-поле key равно value.

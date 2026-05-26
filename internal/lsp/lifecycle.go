@@ -260,7 +260,7 @@ func (c *Client) consumeStderr(stderr interface{ Read([]byte) (int, error) }, la
 		if language == "java" {
 			lspDebug("LSP %s stderr: %s\n", language, line)
 		} else {
-			_, _ = fmt.Fprintf(os.Stderr, "LSP %s stderr: %s\n", language, line)
+			lspDebug("LSP %s stderr: %s", language, line)
 		}
 	}
 }

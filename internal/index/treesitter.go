@@ -46,6 +46,9 @@ func (t *TreeSitter) FullScan(ctx context.Context) error {
 	if t.bus != nil {
 		t.bus.SetIndexer("treesitter", func(i *state.Indexer) {
 			i.Status = "scanning"
+			i.FilesTotal = 0
+			i.FilesIndexed = 0
+			i.Symbols = 0
 			i.LastError = ""
 		})
 	}

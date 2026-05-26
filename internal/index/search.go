@@ -8,12 +8,12 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"os"
 
 	"ragota/internal/chunker"
 	"ragota/internal/config"
 	"ragota/internal/embedder"
+	"ragota/internal/logger"
 	"ragota/internal/qdrant"
 	"ragota/internal/store"
 )
@@ -46,12 +46,12 @@ func (v *Vector) Search(ctx context.Context, query string, limit int, filter map
 		if err != nil {
 			// Embed может фейлиться, если модель не загружена; пропускаем
 			// коллекцию с warning'ом, но не валим весь поиск.
-			log.Printf("vector: embed for %q failed: %v", sp.Name, err)
+			logger.Log().Warn().Err(err).Str("collection", sp.Name).Msg("vector: embed failed")
 			continue
 		}
 		hits, err := v.qd.Search(ctx, sp.Name, vec, limit, f)
 		if err != nil {
-			log.Printf("vector: qdrant search %q: %v", sp.Name, err)
+			logger.Log().Warn().Err(err).Str("collection", sp.Name).Msg("vector: qdrant search failed")
 			continue
 		}
 		all = append(all, hits...)

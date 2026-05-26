@@ -243,6 +243,9 @@ func (i *Indexer) FullScan(ctx context.Context) error {
 	if i.bus != nil {
 		i.bus.SetIndexer("graph", func(st *state.Indexer) {
 			st.Status = "scanning"
+			st.FilesTotal = 0
+			st.FilesIndexed = 0
+			st.Symbols = 0
 			st.LastError = ""
 		})
 	}

@@ -172,8 +172,8 @@ func TestUpsert_SendsPoints(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(mux(
 		route{http.MethodPut, "/collections/c/points", func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.RawQuery != "wait=true" {
-				t.Errorf("expected wait=true, got %q", r.URL.RawQuery)
+			if r.URL.RawQuery != "wait=false" {
+				t.Errorf("expected wait=false, got %q", r.URL.RawQuery)
 			}
 			b, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(b, &got)

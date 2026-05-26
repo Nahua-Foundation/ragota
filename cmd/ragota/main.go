@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 
+	"ragota/internal/logger"
+
 	"github.com/spf13/cobra"
 )
 
@@ -29,6 +31,13 @@ var rootCmd = &cobra.Command{
 }
 
 func main() {
+	// Инициализируем логгер — пишем в .ragota/log/app.log
+	if f, path, err := logger.OpenLogFile("."); err == nil {
+		logger.InitLogger("info", false, f)
+		defer f.Close()
+		logger.Log().Info().Str("log_file", path).Msg("ragota: logging to file")
+	}
+
 	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", "",
 		"path to YAML config (default search: ./.ai-tools/config.yaml or ~/.ai-tools/config.yaml)")
 

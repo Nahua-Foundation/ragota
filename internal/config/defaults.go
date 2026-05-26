@@ -76,8 +76,8 @@ func Default() *Config {
 		},
 		ChunkLines:       60,
 		ChunkOverlap:     10,
-		VectorWorkers:    8,
-		EmbedParallelism: 4,
+		VectorWorkers:    16,
+		EmbedParallelism: 16,
 		MCP: MCPPorts{
 			TreeSitter: 7771,
 			Vector:     7772,

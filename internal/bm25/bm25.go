@@ -64,6 +64,8 @@ type Index interface {
 	IndexDocs(ctx context.Context, docs []Doc) error
 	Delete(ctx context.Context, ids []string) error
 	DeleteByPath(ctx context.Context, path string) error
+	// Clear полностью очищает индекс (для batch-переиндексации).
+	Clear(ctx context.Context) error
 	Search(ctx context.Context, q Query) ([]Hit, error)
 	Count(ctx context.Context) (uint64, error)
 	Close() error
@@ -183,6 +185,26 @@ func (b *bleveIndex) DeleteByPath(ctx context.Context, path string) error {
 	res, err := b.idx.Search(req)
 	if err != nil {
 		return fmt.Errorf("bm25: search-by-path: %w", err)
+	}
+	ids := make([]string, 0, len(res.Hits))
+	for _, h := range res.Hits {
+		ids = append(ids, h.ID)
+	}
+	return b.Delete(ctx, ids)
+}
+
+func (b *bleveIndex) Clear(ctx context.Context) error {
+	if b == nil || b.idx == nil {
+		return ErrClosed
+	}
+	// Удаляем все документы — ищем всё и удаляем батчем.
+	q := bleve.NewMatchAllQuery()
+	req := bleve.NewSearchRequest(q)
+	req.Size = 100000
+	req.Fields = []string{"id"}
+	res, err := b.idx.Search(req)
+	if err != nil {
+		return fmt.Errorf("bm25: clear search: %w", err)
 	}
 	ids := make([]string, 0, len(res.Hits))
 	for _, h := range res.Hits {

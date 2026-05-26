@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -26,6 +25,7 @@ import (
 	"ragota/internal/config"
 	"ragota/internal/embedder"
 	"ragota/internal/fileutil"
+	"ragota/internal/logger"
 	"ragota/internal/qdrant"
 	"ragota/internal/state"
 )
@@ -35,11 +35,16 @@ func (v *Vector) FullScan(ctx context.Context) error {
 	v.wg.Add(1)
 	defer v.wg.Done()
 
+	// Сбрасываем статус перед началом — чтобы TUI не показывал старые данные
+	// от предыдущей директории (Qdrant общий, коллекции не очищаются).
+	v.totalChunks.Store(0)
 	v.totalIndexed.Store(0)
-	v.SyncStats(ctx)
 	if v.bus != nil {
 		v.bus.SetIndexer("vector", func(i *state.Indexer) {
 			i.Status = "scanning"
+			i.FilesTotal = 0
+			i.FilesIndexed = 0
+			i.Chunks = 0
 			i.LastError = ""
 		})
 	}
@@ -58,6 +63,33 @@ func (v *Vector) FullScan(ctx context.Context) error {
 			})
 		}
 		return nil
+	}
+
+	// Detect stale hashes: Qdrant collections empty but SQLite has vec_hashes.
+	// This happens when the container is restarted from a different directory
+	// (new volume mount) while the local DB still has old hashes.
+	if v.qd != nil && v.store != nil {
+		codeSpec := v.cfg.CodeCollection()
+		textSpec := v.cfg.TextCollection()
+		codeCount, _ := v.qd.Count(ctx, codeSpec.Name)
+		textCount, _ := v.qd.Count(ctx, textSpec.Name)
+		if codeCount+textCount == 0 {
+			hasHashes, _ := v.store.HasVecHashes(ctx)
+			if hasHashes {
+				logger.Log().Info().Msg("vector: Qdrant empty but SQLite has vec_hashes — resetting hashes for reindex")
+				if err := v.store.ResetVecHashes(ctx); err != nil {
+					logger.Log().Warn().Err(err).Msg("vector: ResetVecHashes")
+				}
+			}
+		}
+	}
+
+	// BM25: очищаем индекс один раз перед полной переиндексацией,
+	// вместо per-file DeleteByPath — это значительно быстрее.
+	if v.bm25 != nil {
+		if err := v.bm25.Clear(ctx); err != nil {
+			logger.Log().Warn().Err(err).Msg("vector: BM25 Clear")
+		}
 	}
 
 	numWorkers := v.cfg.VectorWorkers
@@ -138,10 +170,15 @@ func (v *Vector) prepareFile(ctx context.Context, abs string) (*preparedFile, er
 	}
 
 	hash := fileutil.HashBytes(src)
+	// Проверяем, индексировался ли файл ранее — результат нужен для isKnown.
+	var isKnown bool
 	if hash != "" && v.store != nil {
 		prev, _ := v.store.GetFile(ctx, abs)
-		if prev != nil && prev.VecHash == hash {
-			return nil, nil
+		if prev != nil {
+			isKnown = prev.VecHash != ""
+			if prev.VecHash == hash {
+				return nil, nil // файл не изменился
+			}
 		}
 	}
 
@@ -184,6 +221,7 @@ func (v *Vector) prepareFile(ctx context.Context, abs string) (*preparedFile, er
 		chunks:   chunks,
 		collSpec: collection,
 		emb:      emb,
+		isKnown:  isKnown,
 	}, nil
 }
 
@@ -235,6 +273,11 @@ loop:
 		return ctxErr
 	}
 
+	// Синхронизируем счётчик чанков с Qdrant — файлы могли быть пропущены
+	// (хеш совпал), но чанки уже есть в индексе. SyncStats читает реальное
+	// количество точек из обеих коллекций.
+	v.SyncStats(ctx)
+
 	if v.bus != nil {
 		v.bus.SetIndexer("vector", func(i *state.Indexer) {
 			err := lastErr.Load()
@@ -274,7 +317,7 @@ func newBatcher(v *Vector, spec config.CollectionSpec, emb *embedder.Ollama, tot
 }
 
 func (b *batcher) run(ctx context.Context) {
-	const maxBatchChunks = 64
+	const maxBatchChunks = 256
 	var currentBatch []*preparedFile
 	var currentChunks int
 
@@ -284,7 +327,7 @@ func (b *batcher) run(ctx context.Context) {
 		}
 		if err := b.v.processBatch(ctx, b.spec, b.emb, currentBatch, b.total); err != nil {
 			if !errors.Is(err, context.Canceled) {
-				log.Printf("vector: batch error: %v", err)
+				logger.Log().Error().Err(err).Int("files", len(currentBatch)).Msg("vector: batch error")
 			}
 		}
 		// Обновляем прогресс для всех файлов в батче в любом случае.
@@ -310,7 +353,7 @@ func (b *batcher) run(ctx context.Context) {
 				flush()
 				if err := b.v.processBatch(ctx, b.spec, b.emb, []*preparedFile{pf}, b.total); err != nil {
 					if !errors.Is(err, context.Canceled) {
-						log.Printf("vector: large file error %s: %v", pf.abs, err)
+						logger.Log().Error().Err(err).Str("file", pf.abs).Msg("vector: large file error")
 					}
 				}
 				b.v.updateProgress(b.total)
@@ -330,19 +373,46 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	// Собираем тексты для эмбеддинга и файлы для удаления — параллельно.
 	var allTexts []string
+	var deletePaths []string // файлы, требующие DeleteByFilter (isKnown=true)
 	for _, f := range files {
 		for _, ch := range f.chunks {
 			allTexts = append(allTexts, combinedText(ch))
 		}
+		if f.isKnown {
+			deletePaths = append(deletePaths, f.abs)
+		}
 	}
 
-	vecs, err := emb.EmbedBatch(ctx, allTexts)
-
-	if err != nil {
-		return err
+	if len(allTexts) == 0 {
+		return nil
 	}
 
+	// EmbedBatch (Ollama) и DeleteByFilter (Qdrant) работают параллельно —
+	// они независимы и обращаются к разным системам.
+	var vecs [][]float32
+	var embedErr error
+	var embedWg sync.WaitGroup
+	embedWg.Add(1)
+	go func() {
+		defer embedWg.Done()
+		vecs, embedErr = emb.EmbedBatch(ctx, allTexts)
+		if embedErr != nil {
+			logger.Log().Error().Err(embedErr).Int("texts", len(allTexts)).Msg("vector: EmbedBatch failed")
+		}
+	}()
+
+	if len(deletePaths) > 0 {
+		for _, path := range deletePaths {
+			_ = v.qd.DeleteByFilter(ctx, spec.Name, "file", path)
+		}
+	}
+
+	embedWg.Wait()
+	if embedErr != nil {
+		return embedErr
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -353,16 +423,6 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 	for _, f := range files {
 		if ctx.Err() != nil {
 			return ctx.Err()
-		}
-		// Старые данные в Qdrant удаляем только для тех коллекций, куда можем писать
-		_ = v.qd.DeleteByFilter(ctx, spec.Name, "file", f.abs)
-		// Если это текст, а мы в коллекции кода (или наоборот), на всякий случай чистим и другую
-		otherColl := v.cfg.TextCollection().Name
-		if spec.Name == v.cfg.TextCollection().Name {
-			otherColl = v.cfg.CodeCollection().Name
-		}
-		if otherColl != spec.Name {
-			_ = v.qd.DeleteByFilter(ctx, otherColl, "file", f.abs)
 		}
 
 		points := make([]qdrant.Point, len(f.chunks))
@@ -400,7 +460,7 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 			_ = v.store.UpsertVectorHash(ctx, f.abs, f.hash, f.lang)
 		}
 		if v.bm25 != nil {
-			_ = v.bm25.DeleteByPath(ctx, f.abs)
+			// BM25 delete не нужен — индекс очищен целиком в начале FullScan.
 			for i, ch := range f.chunks {
 				allDocs = append(allDocs, bm25.Doc{
 					ID:        fmt.Sprintf("%s#%d", f.abs, i),

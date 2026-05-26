@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"ragota/internal/logger"
 	"ragota/internal/state"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,7 +34,7 @@ func Run(ctx context.Context, bus *state.Bus) error {
 	lf, lfPath := openLogFile()
 	if lf != nil {
 		defer lf.Close()
-		_, _ = fmt.Fprintf(os.Stderr, "ragota TUI: logs are mirrored to %s\n", lfPath)
+		logger.Log().Info().Str("log_file", lfPath).Msg("ragota TUI: logs are mirrored")
 	}
 	m := model{bus: bus, logFile: lf, seen: make(map[string]struct{})}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
@@ -41,18 +42,10 @@ func Run(ctx context.Context, bus *state.Bus) error {
 	return err
 }
 
-// openLogFile открывает файл логов TUI в ~/.cache/ragota/tui.log
-// (с фоллбэком в текущую директорию). Если открыть не удалось — возвращает nil.
+// openLogFile открывает файл логов TUI в ./.ragota/logs/tui.log
+// (относительно рабочей директории). Если открыть не удалось — возвращает nil.
 func openLogFile() (*os.File, string) {
-	dir := ""
-	if h, err := os.UserCacheDir(); err == nil {
-		dir = filepath.Join(h, "ragota")
-	} else if h, err := os.UserHomeDir(); err == nil {
-		dir = filepath.Join(h, ".cache", "ragota")
-	}
-	if dir == "" {
-		dir = ".ragota"
-	}
+	dir := filepath.Join(".", ".ragota", "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, ""
 	}
@@ -66,10 +59,7 @@ func openLogFile() (*os.File, string) {
 }
 
 // logFilePathHint возвращает короткий хинт пути файла логов для отображения
-// в TUI. Намеренно без полного пути — экономим место в шапке секции.
+// в TUI.
 func logFilePathHint() string {
-	if h, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(h, "ragota", "tui.log")
-	}
-	return "~/.cache/ragota/tui.log"
+	return ".ragota/logs/tui.log"
 }

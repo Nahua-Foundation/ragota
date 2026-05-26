@@ -22,7 +22,6 @@ package index
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +31,7 @@ import (
 	"ragota/internal/config"
 	"ragota/internal/embedder"
 	"ragota/internal/fileutil"
+	"ragota/internal/logger"
 	"ragota/internal/parser"
 	"ragota/internal/qdrant"
 	"ragota/internal/repos"
@@ -89,6 +89,9 @@ type preparedFile struct {
 	chunks   []chunker.Chunk
 	collSpec config.CollectionSpec
 	emb      *embedder.Ollama
+	// isKnown — файл ранее индексировался (VecHash был непустой).
+	// Если false — файл новый и DeleteByFilter не нужен.
+	isKnown bool
 }
 
 // NewVector создаёт vector-индексатор с двумя коллекциями. emb — legacy
@@ -149,7 +152,7 @@ func (v *Vector) Close() {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		log.Printf("vector: Close timeout, some background tasks may still be running")
+		logger.Log().Warn().Msg("vector: Close timeout, some background tasks may still be running")
 	}
 }
 
@@ -176,9 +179,12 @@ func (v *Vector) ensureCollection(ctx context.Context, sp config.CollectionSpec)
 	if v.store != nil {
 		prev, err := v.store.GetEmbedMeta(ctx, sp.Name)
 		if err == nil && prev != nil && (prev.Model != sp.EmbedModel || uint64(prev.Dim) != sp.EmbedDim) {
-			log.Printf("vector: embed model changed for collection %q: %s/%d -> %s/%d — recreating", sp.Name, prev.Model, prev.Dim, sp.EmbedModel, sp.EmbedDim)
+			logger.Log().Info().Str("collection", sp.Name).
+				Str("old_model", prev.Model).Int("old_dim", prev.Dim).
+				Str("new_model", sp.EmbedModel).Uint64("new_dim", sp.EmbedDim).
+				Msg("vector: embed model changed — recreating collection")
 			if err := v.qd.DeleteCollection(ctx, sp.Name); err != nil {
-				log.Printf("vector: delete %q: %v (continuing)", sp.Name, err)
+				logger.Log().Warn().Err(err).Str("collection", sp.Name).Msg("vector: delete collection failed, continuing")
 			}
 		}
 	}

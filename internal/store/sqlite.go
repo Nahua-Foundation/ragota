@@ -384,6 +384,20 @@ func (s *SQLite) DeleteFile(ctx context.Context, path string) error {
 	return err
 }
 
+// ResetVecHashes сбрасывает все vec_hash в таблице files, чтобы
+// принудительно переиндексировать векторный индекс.
+func (s *SQLite) ResetVecHashes(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE files SET vec_hash = '' WHERE vec_hash != ''`)
+	return err
+}
+
+// HasVecHashes проверяет, есть ли в таблице files записи с vec_hash.
+func (s *SQLite) HasVecHashes(ctx context.Context) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE vec_hash != ''`).Scan(&count)
+	return count > 0, err
+}
+
 // SearchSymbols ищет символы по подстроке имени, опционально фильтруя по kind и языку.
 func (s *SQLite) SearchSymbols(ctx context.Context, query, kind, language string, limit int) ([]SymbolRow, error) {
 	if limit <= 0 {

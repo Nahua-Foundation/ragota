@@ -13,25 +13,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
+
+	"ragota/internal/logger"
 )
 
 type ollamaReranker struct {
 	opts Options
 	http *http.Client
-	log  *log.Logger
 	sem  chan struct{}
 }
 
 func (r *ollamaReranker) warnf(format string, a ...any) {
-	if r.log != nil {
-		r.log.Printf(format, a...)
-		return
-	}
-	log.Printf(format, a...)
+	logger.Log().Warn().Msgf(format, a...)
 }
 
 // Available — пингует /api/tags и проверяет наличие модели в списке.

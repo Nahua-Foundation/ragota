@@ -239,8 +239,8 @@ func (o *Ollama) EmbedBatch(ctx context.Context, prompts []string) ([][]float32,
 	}
 
 	// Оптимальный размер батча для Ollama (обычно 32-64).
-	// Мы используем 32 для большей надежности.
-	const subBatchSize = 32
+	// Мы используем 64 для уменьшения количества сетевых вызовов.
+	const subBatchSize = 64
 	out := make([][]float32, 0, len(prompts))
 
 	for i := 0; i < len(prompts); i += subBatchSize {

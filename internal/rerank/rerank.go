@@ -25,7 +25,6 @@ package rerank
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"time"
 )
@@ -65,8 +64,6 @@ type Options struct {
 	TopN     int
 	// ContentMaxBytes — максимальная длина content в одном prompt'е (truncate).
 	ContentMaxBytes int
-	// Logger опционально подменяет стандартный log.* для предупреждений.
-	Logger *log.Logger
 }
 
 // New создаёт реранкер. Если URL пустой — возвращается noop.
@@ -80,7 +77,6 @@ func New(opts Options) Reranker {
 	return &ollamaReranker{
 		opts: opts,
 		http: &http.Client{Timeout: 120 * time.Second},
-		log:  opts.Logger,
 	}
 }
 
