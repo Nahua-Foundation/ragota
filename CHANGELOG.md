@@ -2,76 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v0.0.5] - UNRELEASED
+## [v0.0.5] - 2026-05-26
 
-### Added
-- **`ragota run` — новая команда «всё-в-одном»**: объединяет `watch` и `serve-*` в одном процессе. Флаги `-l`, `-t`, `-v`, `-s`, `-w` в любом сочетании, слитная запись (`-ltvsw`). Режим `--env local|docker` для выбора окружения.
-- **`--env docker`**: единый LSP-контейнер `ragota-lsp` (auto-build из embedded Dockerfile.lsp). Qdrant + LSP в Docker, Ollama на хосте.
-- **`ragota watch` как отдельная подкоманда**: только индексация + TUI (вынесена из `cli_watch.go` старого `cmd/ai-tools/`).
-- **zerolog логгер (`internal/logger`)**: глобальный логгер с console/JSON форматом, лог в `.ragota/log/app.log`.
-- **LSP: `lsp.implementation`**: новый MCP-инструмент. Fallback на `References()` для Java при пустом результате.
-- **LSP: per-language capabilities**: `implementation` capability для gopls и jdtls; explicit no-capability для pyright.
-- **LSP: `handleImplementation`** с тестами (`comprehensive_test.go` для JS/Python/Go/Java).
-- **Symbols: LSP fallback для `find_implementations`**: запрос `textDocument/implementation` при наличии LSP-менеджера.
-- **Symbols: fallback для методов**: поиск по последнему сегменту имени (`Logger.log` → `log`).
-- **Symbols: `findCallees` fallback**: поиск целей вызовов по имени при неразрешённых `dst_id`.
-- **Symbols: LSP-менеджер подключается** через `SetLSPManager`.
-- **Symbols: `find_references` расширен**: включает `implements`, `extends`, `call` рёбра помимо `reference`.
-- **Tree-sitter: извлечение JSDoc-ссылок**: `extractJSDocRefs` парсит `@param`, `@returns`, `@type` → `reference` edges.
-- **Tree-sitter: namespace/module контейнеры**: `module_declaration`, `internal_module`, `namespace_declaration` → kind `namespace`.
-- **Tree-sitter: `method_signature`**: распознаётся как `method` (TS/JS интерфейсы).
-- **Tree-sitter: `searchHeritage`**: универсальный поиск `extends`/`implements` для всех языков.
-- **Go: методы интерфейсов** как отдельные ASTUnit с `ParentID` на интерфейс.
-- **Go: `NameStartLine`/`NameStartCol`**: точные позиции имён для LSP-навигации.
-- **Go: `ParentID` для методов** — post-process для установки владельца.
-- **Vector: guard against concurrent FullScan** — блокировка параллельного запуска.
-- **Vector: stale hash detection** — авто-detekt рассинхронизации Qdrant/SQLite/BM25, `ResetVecHashes`.
-- **Vector: BM25 smart clear** — не очищает при инкрементальной индексации, только при полном реиндексе.
-- **Store: `UpdateVectorHash` fallback** на INSERT если файл отсутствует.
-- **Store: `GetFileHash`/`UpdateFileHash`/`ResetFileHashes`/`HasFileHashes`** — управление хэшами.
-- **Store: `ResetVecHashes`/`HasVecHashes`** — управление векторными хэшами.
-- **Store: новые индексы** для ускорения `FindReferences`, `ResolvePendingEdges`, `EdgesByDstNameForLang` (idx_edges_dst_name_kind_src, idx_edges_src_id, idx_ast_units_qualified_lang_repo и др.).
-- **Rerank: `IDValue`** — универсальный идентификатор (string или number из JSON).
-- **Docker: embedded Dockerfile.lsp** через `//go:embed`, авто-билд с проверкой hash.
-- **Docker: `ensureVolumes`** — создание директорий для томов перед запуском.
-- **Docker: LSP-контейнер** через `runLSPContainer`.
-- **Test projects**: полные тестовые проекты для Go (с submod), Java (Maven), TS, JS, Python.
-- **Comprehensive E2E тесты**: `internal/symbols/comprehensive_test.go`, `internal/lsp/comprehensive_test.go`.
+### Переименование проекта
+Проект переименован из `aitools` в `ragota`. Новое имя используется повсеместно: Go-модуль, CLI-команды, MCP-серверы, Docker-образы, конфигурационные пути.
 
-### Changed
-- **Переименование проекта**: `aitools` → `ragota` (go module, все импорты, MCP-серверы `ragota-*`).
-- **`cmd/ai-tools/` → `cmd/ragota/`**: перенос CLI в стандартный Go layout.
-- **`ResolvePendingEdges`: 4-проходный алгоритм**: qualified → локальный name (по файлу) → относительные пути (JS/TS) → глобальный name. Временная таблица `tmp_resolved`.
-- **`FindASTUnits`: двухфазный поиск**: точное совпадение (с индексами) → LIKE для добора.
-- **`FindDefinition`: приоритет не-модулей** — если есть точное совпадение, возвращает только его.
-- **LSP: обработка уведомлений** в отдельной горутине — не блокирует `readLoop`.
-- **LSP: таймаут Call** уменьшен с 120s до 30s.
-- **LSP: `hoverString`** — улучшен парсинг `MarkupContent` и `MarkedString`.
-- **LSP: `uri.ToPath`** — улучшена обработка file:// URI.
-- **LSP: `EnsureOpen` с retry** — повторная попытка при dead-клиенте.
-- **LSP: document sync** — `DidOpen` + `DidChange` для всех языков.
-- **Graph: кэш `int` вместо `int64`** — консистентность с `ASTUnit.ID`.
-- **Graph: `cacheMaxSize = 1000`** — cap для предотвращения бесконечного роста.
-- **SQLite: `MaxOpenConns` 1 → 4** — WAL поддерживает параллельное чтение.
-- **SQLite: `busy_timeout(5000)`** — retry при блокировке.
-- **SQLite: COLLATE NOCASE** на всех текстовых индексах (name, qualified).
-- **TUI: лог перенесён** из `~/.cache/ai-tools/` в `.ragota/logs/tui.log`.
-- **TUI: zerolog вместо fmt.Fprintf**.
-- **MCP: `req.GetFloat` → `req.GetInt`** для `line`/`character` параметров.
-- **MCP: улучшенные описания** параметров vector/symbol/tree-sitter инструментов.
-- **Rerank: удалён `Logger` из Options** — используется глобальный `logger.Log()`.
-- **Embedder: fallback на legacy `/api/embeddings`** убран, используется `/api/embed`.
-- **BM25: `Close()` метод** для корректного закрытия индекса.
-- **FullScan: статус сбрасывается перед началом** — TUI не показывает старые данные.
-- **Documentation**: README полностью переписан — quick-start фокус, детали вынесены в docs/.
+### Новая CLI-архитектура
+- Команда «всё-в-одном» объединяет индексацию, MCP-серверы и TUI в едином процессе с гибкой комбинацией режимов через флаги.
+- Индексация выделена в отдельную подкоманду для изолированного запуска.
+- Добавлен выбор окружения: нативный запуск LSP-серверов на хосте или изолированный запуск в Docker-контейнере.
 
-### Fixed
-- **LSP: `$/.progress` токен** — обработка `number` и `string` токенов (gopls/pyright).
-- **LSP: гонка при обработке уведомлений** — уведомления в отдельной горутине.
-- **LSP: `process exited: signal: killed`** — починена отмена RPC-контекста (SIGKILL).
-- **LSP: jdtls stability** — `language/status: ServiceReady`, JVM 4G, `JDTLS_READY_TIMEOUT`.
-- **Graph: BFS дедупликация** — дедупликация рёбер по `Edge.ID`.
-- **Null-safety**: гарантированный возврат `[]` вместо `null`.
+### Docker-окружение для LSP
+LSP-серверы теперь могут работать внутри единого контейнера с автоматической сборкой образа. Dockerfile встроен в бинарь — контейнер собирается при первом запуске и кешируется. Qdrant и LSP работают в контейнере, Ollama остаётся на хосте.
+
+### Улучшения символьного графа
+- Добавлен новый тип навигации — переход к реализациям интерфейсов с LSP-fallback для языков, где статический анализ не даёт полного результата.
+- Резолвинг связей между символами переписан на многоступенчатый алгоритм: от точных квалифицированных имён к постепенно более мягким стратегиям, что значительно повышает полноту графа.
+- Расширено извлечение связей: ссылки из doc-комментариев, namespace/module-контейнеры, сигнатуры методов в интерфейсах.
+- Поиск определений и ссылок стал точнее благодаря двухфазному поиску и приоритизации конкретных сущностей над модулями.
+- Граф кэшируется с ограничением размера для предотвращения бесконечного роста.
+
+### Оптимизация векторной индексации
+- Полная переработка пайплайна полного реиндекса: параллельная подготовка файлов, увеличенный батчинг эмбеддингов, асинхронная запись в векторную БД.
+- Обнаружение рассинхронизации между хранилищами (векторная БД, метаданные, BM25) с автоматическим сбросом.
+- BM25-индекс очищается однократно при полном реиндексе вместо пофайлового удаления.
+- Защита от параллельного запуска полного реиндекса.
+
+### Стабильность и производительность LSP
+- Обработка уведомлений вынесена в отдельную горутину — основной цикл чтения больше не блокируется.
+- Добавлены retry-механизмы при обрыве соединений, сокращены таймауты, улучшена обработка жизненного цикла клиентов.
+- Улучшена стабильность Java LSP: контроль готовности, увеличенный лимит памяти JVM.
+
+### Производительность хранилища
+- Переход на параллельные соединения с SQLite (WAL-режим поддерживает конкурентное чтение).
+- Добавлены retry при блокировках, регистронезависимые индексы, новые индексы для ускорения поиска ссылок и рёбер.
+
+### Логирование и UX
+- Внедрён структурированный логгер с поддержкой console/JSON формата, централизованное логирование в проектную директорию.
+- Улучшения TUI-интерфейса.
+- Полная синхронизация документов с LSP-серверами для всех поддерживаемых языков.
+
+### Тестирование и документация
+- Добавлены комплексные E2E-тесты для символьного графа и LSP-навигации.
+- Созданы полноценные тестовые проекты для всех поддерживаемых языков (Go, Java, TypeScript, JavaScript, Python).
+- README полностью переписан с фокусом на quick-start, детальная документация вынесена в отдельную директорию.
 
 ---
 
