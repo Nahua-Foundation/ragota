@@ -122,8 +122,8 @@ func (s *LSPServer) handleDefinition(ctx context.Context, req mcp.CallToolReques
 	}
 	lang := fileutil.LanguageByExt(filepath.Ext(abs))
 
-	line := int(req.GetFloat("line", 0))
-	char := int(req.GetFloat("character", 0))
+	line := req.GetInt("line", 0)
+	char := req.GetInt("character", 0)
 
 	// Используем background context с таймаутом для LSP операций,
 	// чтобы LSP процесс не закрывался после завершения MCP запроса.
@@ -186,8 +186,8 @@ func (s *LSPServer) handleReferences(ctx context.Context, req mcp.CallToolReques
 	}
 	lang := fileutil.LanguageByExt(filepath.Ext(abs))
 
-	line := int(req.GetFloat("line", 0))
-	char := int(req.GetFloat("character", 0))
+	line := req.GetInt("line", 0)
+	char := req.GetInt("character", 0)
 	includeDecl := req.GetBool("include_declaration", true)
 
 	// Используем background context с таймаутом для LSP операций,
@@ -250,8 +250,8 @@ func (s *LSPServer) handleHover(ctx context.Context, req mcp.CallToolRequest) (*
 	}
 	lang := fileutil.LanguageByExt(filepath.Ext(abs))
 
-	line := int(req.GetFloat("line", 0))
-	char := int(req.GetFloat("character", 0))
+	line := req.GetInt("line", 0)
+	char := req.GetInt("character", 0)
 
 	// Используем background context с таймаутом для LSP операций,
 	// чтобы LSP процесс не закрывался после завершения MCP запроса.
@@ -311,8 +311,8 @@ func (s *LSPServer) handleImplementation(ctx context.Context, req mcp.CallToolRe
 	}
 	lang := fileutil.LanguageByExt(filepath.Ext(abs))
 
-	line := int(req.GetFloat("line", 0))
-	char := int(req.GetFloat("character", 0))
+	line := req.GetInt("line", 0)
+	char := req.GetInt("character", 0)
 
 	lspCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

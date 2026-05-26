@@ -24,7 +24,9 @@ package rerank
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -32,9 +34,36 @@ import (
 // ErrUnavailable — модель/сервер реранкера недоступны.
 var ErrUnavailable = errors.New("rerank: model unavailable")
 
+// IDValue — универсальный идентификатор кандидата: принимает и строку,
+// и число из JSON, нормализуя оба варианта в строковое представление.
+type IDValue string
+
+func (id *IDValue) UnmarshalJSON(data []byte) error {
+	// Строка: "c1" → "c1"
+	if len(data) >= 2 && data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		*id = IDValue(s)
+		return nil
+	}
+	// Число: 1 → "1"
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err != nil {
+		return fmt.Errorf("invalid id: %s", string(data))
+	}
+	*id = IDValue(n.String())
+	return nil
+}
+
+func (id IDValue) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(id))
+}
+
 // Candidate — кандидат для реранкинга.
 type Candidate struct {
-	ID       string  `json:"id"`
+	ID       IDValue `json:"id"`
 	Path     string  `json:"path"`
 	Language string  `json:"language"`
 	Kind     string  `json:"kind"`

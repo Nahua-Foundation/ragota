@@ -26,12 +26,15 @@ func (c *Client) Definition(ctx context.Context, path string, line, character in
 		return locs, nil
 	}
 
-	// Пробуем declaration и typeDefinition как фоллбэк
+	// fallback calls с fresh context (remaining deadline)
 	for _, method := range []string{"textDocument/declaration", "textDocument/typeDefinition"} {
+		fallbackCtx, cancel := context.WithCancel(ctx)
 		var r json.RawMessage
-		if err := c.Call(ctx, method, params, &r); err != nil {
+		if err := c.Call(fallbackCtx, method, params, &r); err != nil {
+			cancel()
 			continue
 		}
+		cancel()
 		if locs := c.decodeLocations(r); len(locs) > 0 {
 			lspDebug("LSP %s: %s RESULT: locations=%d\n", c.Language, method, len(locs))
 			return locs, nil

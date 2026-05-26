@@ -117,10 +117,11 @@ func (e *Engine) Search(ctx context.Context, query string, candidatesPerSource, 
 	return merged, nil
 }
 
-// Merge сливает две выдачи. Если веса заданы — weighted sum (требует
-// нормализации скор), иначе — RRF.
+// Merge сливает две выдачи. Если оба веса заданы (> 0) — weighted sum
+// (требует нормализации скор), иначе — RRF.
+// require BOTH weights > 0 to avoid silently dropping one source.
 func Merge(vec, lex []Candidate, opts Options) []Result {
-	useWeights := opts.VectorWeight > 0 || opts.BM25Weight > 0
+	useWeights := opts.VectorWeight > 0 && opts.BM25Weight > 0
 
 	type acc struct {
 		cand  Candidate

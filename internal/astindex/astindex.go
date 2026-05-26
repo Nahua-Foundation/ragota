@@ -81,8 +81,19 @@ func (i *Indexer) SetBus(bus *state.Bus) {
 // IndexFile парсит файл, извлекает AST units + edges и сохраняет в SQLite.
 // path должен быть абсолютным. Сразу резолвит отложенные dst_id у edges —
 // предназначен для инкрементальной переиндексации (watcher / явный reindex).
+//
+// Если хэш файла не изменился с предыдущей индексации, файл пропускается.
 func (i *Indexer) IndexFile(ctx context.Context, path string) error {
-	return i.indexFile(ctx, path, true)
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	hash := fileutil.HashBytes(src)
+	prevHash, _ := i.st.GetFileHash(ctx, path)
+	if prevHash != "" && prevHash == hash {
+		return nil // файл не изменился
+	}
+	return i.indexFileWithHash(ctx, path, src, hash, true)
 }
 
 // indexFile — внутренняя реализация. resolveEdges=false используется в FullScan,
@@ -169,7 +180,7 @@ func (i *Indexer) indexFile(ctx context.Context, path string, resolveEdges bool)
 		// Соберём апдейты parent_id одной транзакцией: проще выгрузить
 		// заново. Здесь — fallback на чистый exec из store, через простой
 		// проход (доп. метод в store: UpdateASTParents).
-		updates := make(map[int64]int64, len(idxToParent))
+		updates := make(map[int]int, len(idxToParent))
 		for idx, parentIdx := range idxToParent {
 			if parentIdx < 0 || parentIdx >= len(persisted) {
 				continue
@@ -235,10 +246,136 @@ func (i *Indexer) indexFile(ctx context.Context, path string, resolveEdges bool)
 	return nil
 }
 
+// indexFileWithHash — вариант indexFile, который принимает уже прочитанный
+// src и hash файла. Используется в FullScan для избежания повторного чтения
+// файла при проверке хеша. После успешной записи обновляет files.hash.
+func (i *Indexer) indexFileWithHash(ctx context.Context, path string, src []byte, hash string, resolveEdges bool) error {
+	if i == nil || i.st == nil {
+		return nil
+	}
+	start := time.Now()
+	lang := detectLang(path)
+
+	var (
+		units []store.ASTUnit
+		edges []pendingEdge
+		err   error
+	)
+	switch lang {
+	case "go":
+		units, edges, err = i.parseGo(path, src)
+	case "java", "typescript", "javascript":
+		units, edges, err = i.parseWithTreeSitter(ctx, lang, path, src)
+		for k := range units {
+			if units[k].FilePath == "" {
+				units[k].FilePath = path
+			}
+		}
+	default:
+		units, err = i.parseGeneric(ctx, lang, path, src)
+	}
+	if err != nil {
+		return err
+	}
+
+	var repo string
+	if i.resolv != nil {
+		repo = i.resolv.For(path)
+	}
+	for k := range units {
+		units[k].Repo = repo
+	}
+
+	idxToParent := make(map[int]int, len(units))
+	for i, u := range units {
+		if u.ParentID.Valid {
+			idxToParent[i] = int(u.ParentID.Int64)
+			units[i].ParentID = sql.NullInt64{}
+		}
+	}
+
+	if err := i.st.EnsureFile(ctx, path, lang); err != nil {
+		return fmt.Errorf("astindex: ensure file: %w", err)
+	}
+
+	idMap, err := i.st.ReplaceASTUnits(ctx, path, units)
+	if err != nil {
+		return fmt.Errorf("astindex: replace units: %w", err)
+	}
+
+	persisted, err := i.st.ListASTUnitsByFile(ctx, path)
+	if err != nil {
+		return err
+	}
+	if len(persisted) == len(units) {
+		updates := make(map[int]int, len(idxToParent))
+		for idx, parentIdx := range idxToParent {
+			if parentIdx < 0 || parentIdx >= len(persisted) {
+				continue
+			}
+			updates[persisted[idx].ID] = persisted[parentIdx].ID
+		}
+		if err := i.st.UpdateASTParents(ctx, updates); err != nil {
+			return err
+		}
+	}
+
+	resolvedEdges := make([]store.Edge, 0, len(edges))
+	for _, e := range edges {
+		if e.srcIdx < 0 || e.srcIdx >= len(persisted) {
+			continue
+		}
+		ed := store.Edge{
+			Repo:     repo,
+			SrcID:    persisted[e.srcIdx].ID,
+			Kind:     e.kind,
+			DstName:  e.dstName,
+			FilePath: path,
+			Line:     e.line,
+		}
+		if e.dstIdx >= 0 && e.dstIdx < len(persisted) {
+			ed.DstID = persisted[e.dstIdx].ID
+		} else if e.dstName != "" {
+			if id, ok := idMap[e.dstName]; ok {
+				ed.DstID = id
+			}
+		}
+		resolvedEdges = append(resolvedEdges, ed)
+	}
+	if err := i.st.ReplaceEdges(ctx, path, resolvedEdges); err != nil {
+		return fmt.Errorf("astindex: replace edges: %w", err)
+	}
+
+	// Обновляем хэш файла после успешной записи.
+	if err := i.st.UpdateFileHash(ctx, path, hash); err != nil {
+		return fmt.Errorf("astindex: update file hash: %w", err)
+	}
+
+	if resolveEdges {
+		if _, err := i.st.ResolvePendingEdges(ctx); err != nil {
+			return fmt.Errorf("astindex: resolve pending edges: %w", err)
+		}
+	}
+
+	if i.bus != nil {
+		i.bus.AddRecent(state.FileEntry{
+			Path:       path,
+			Kind:       "graph",
+			Symbols:    len(units),
+			DurationMs: time.Since(start).Milliseconds(),
+		})
+	}
+
+	return nil
+}
+
 // FullScan индексирует все подходящие файлы под cfg.Root и затем разрешает
 // отложенные dst_id у edges одним финальным вызовом ResolvePendingEdges.
 // Per-file резолв отключён для производительности — на крупных проектах это
 // убирает N лишних запросов к SQLite.
+//
+// Инкрементальность: если хэш файла не изменился с предыдущей индексации,
+// файл пропускается (аналогично vector.FullScan).
 func (i *Indexer) FullScan(ctx context.Context) error {
 	if i.bus != nil {
 		i.bus.SetIndexer("graph", func(st *state.Indexer) {
@@ -250,6 +387,21 @@ func (i *Indexer) FullScan(ctx context.Context) error {
 		})
 	}
 
+	// Detect stale hashes: SQLite has file hashes but graph tables are empty.
+	// This happens when the container is restarted from a different directory
+	// or the database was corrupted.
+	if i.st != nil {
+		stats, _ := i.st.GraphStats(ctx)
+		if stats.Units == 0 {
+			hasHashes, _ := i.st.HasFileHashes(ctx)
+			if hasHashes {
+				if err := i.st.ResetFileHashes(ctx); err != nil {
+					// Не критично — просто логируем и продолжаем.
+				}
+			}
+		}
+	}
+
 	var allFiles []string
 	_ = fileutil.WalkFiles(i.cfg.Root, i.matcher, i.cfg.Extensions, func(abs, rel string, _ os.FileInfo) error {
 		allFiles = append(allFiles, abs)
@@ -258,12 +410,16 @@ func (i *Indexer) FullScan(ctx context.Context) error {
 
 	total := len(allFiles)
 	var indexed int
+	var skipped int
 	var lastErr error
 
 	// Страховка на случай раннего выхода (ctx cancel / panic recover в
 	// вызывающем коде): разрешаем накопленные pending edges, чтобы граф
 	// не остался полу-связным. Безопасно вызывать многократно.
 	defer func() {
+		if indexed == 0 {
+			return // нечего резолвить
+		}
 		// Используем context.Background, т.к. ctx может быть уже отменён.
 		if _, err := i.st.ResolvePendingEdges(context.Background()); err != nil && lastErr == nil {
 			lastErr = err
@@ -276,7 +432,29 @@ func (i *Indexer) FullScan(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
-		if err := i.indexFile(ctx, abs, false); err == nil {
+
+		// Проверяем, изменился ли файл с последней индексации.
+		src, err := os.ReadFile(abs)
+		if err != nil {
+			lastErr = err
+			skipped++
+			continue
+		}
+		hash := fileutil.HashBytes(src)
+		prevHash, _ := i.st.GetFileHash(ctx, abs)
+		if prevHash != "" && prevHash == hash {
+			skipped++
+			if i.bus != nil {
+				i.bus.SetIndexer("graph", func(st *state.Indexer) {
+					st.FilesTotal = total
+					st.FilesIndexed = idx + 1
+					st.Status = "indexing"
+				})
+			}
+			continue
+		}
+
+		if err := i.indexFileWithHash(ctx, abs, src, hash, false); err == nil {
 			indexed++
 		} else {
 			lastErr = err
@@ -294,13 +472,23 @@ func (i *Indexer) FullScan(ctx context.Context) error {
 		}
 	}
 
-	if i.bus != nil {
-		i.bus.SetIndexer("graph", func(st *state.Indexer) {
-			st.Status = "resolving"
-		})
-	}
-	if _, err := i.st.ResolvePendingEdges(ctx); err != nil {
-		lastErr = err
+	if indexed > 0 {
+		// Только если появились новые/изменённые файлы — иначе нечего резолвить.
+		if i.bus != nil {
+			i.bus.SetIndexer("graph", func(st *state.Indexer) {
+				st.Status = "resolving"
+			})
+		}
+		if _, err := i.st.ResolvePendingEdges(ctx); err != nil {
+			lastErr = err
+		}
+	} else {
+		// Все файлы пропущены — граф не изменился.
+		if i.bus != nil {
+			i.bus.SetIndexer("graph", func(st *state.Indexer) {
+				st.Status = "idle"
+			})
+		}
 	}
 
 	if i.bus != nil {
@@ -317,7 +505,7 @@ func (i *Indexer) FullScan(ctx context.Context) error {
 		if gs, err := i.st.GraphStats(ctx); err == nil {
 			i.bus.SetIndexer("graph", func(st *state.Indexer) {
 				st.Symbols = gs.Units
-				st.Chunks = gs.Edges // Используем Chunks для Edges
+				st.Chunks = gs.Edges
 			})
 		}
 	}

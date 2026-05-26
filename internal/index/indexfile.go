@@ -56,8 +56,8 @@ func (v *Vector) IndexFile(ctx context.Context, abs string) error {
 	for _, name := range []string{v.cfg.CodeCollection().Name, v.cfg.TextCollection().Name} {
 		_ = v.qd.DeleteByFilter(ctx, name, "file", abs)
 	}
-	if v.bm25 != nil {
-		_ = v.bm25.DeleteByPath(ctx, abs)
+	if v.bm25Index() != nil {
+		_ = v.bm25Index().DeleteByPath(ctx, abs)
 	}
 
 	points := make([]qdrant.Point, len(pf.chunks))
@@ -85,7 +85,7 @@ func (v *Vector) IndexFile(ctx context.Context, abs string) error {
 	}
 
 	var allDocs []bm25.Doc
-	if v.bm25 != nil {
+	if v.bm25Index() != nil {
 		allDocs = make([]bm25.Doc, len(pf.chunks))
 		for i, ch := range pf.chunks {
 			allDocs[i] = bm25.Doc{
@@ -119,11 +119,11 @@ func (v *Vector) IndexFile(ctx context.Context, abs string) error {
 		setErr(v.qd.Upsert(ctx, pf.collSpec.Name, points))
 	}()
 
-	if v.bm25 != nil && len(allDocs) > 0 {
+	if v.bm25Index() != nil && len(allDocs) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			setErr(v.bm25.IndexDocs(ctx, allDocs))
+			setErr(v.bm25Index().IndexDocs(ctx, allDocs))
 		}()
 	}
 
@@ -164,8 +164,8 @@ func (v *Vector) RemoveFile(ctx context.Context, abs string) error {
 	for _, name := range []string{v.cfg.CodeCollection().Name, v.cfg.TextCollection().Name} {
 		_ = v.qd.DeleteByFilter(ctx, name, "file", abs)
 	}
-	if v.bm25 != nil {
-		_ = v.bm25.DeleteByPath(ctx, abs)
+	if v.bm25Index() != nil {
+		_ = v.bm25Index().DeleteByPath(ctx, abs)
 	}
 	return nil
 }

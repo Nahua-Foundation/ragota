@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ragota/internal/fileutil"
+	"ragota/internal/logger"
 	"ragota/internal/repos"
 
 	"github.com/fsnotify/fsnotify"
@@ -67,6 +68,10 @@ type Watcher struct {
 	resolver *repos.Resolver
 
 	out chan Event
+
+	// goroutine lifecycle
+	wg     sync.WaitGroup
+	doneCh chan struct{} // закрывается когда loop() завершается
 }
 
 // SetRepoResolver настраивает резолвер репо для multi-repo workspace.
@@ -94,6 +99,7 @@ func New(root string, matcher *fileutil.Matcher, extensions []string, debounce t
 		fs:         fw,
 		pending:    make(map[string]Event),
 		out:        make(chan Event, 256),
+		doneCh:     make(chan struct{}),
 	}, nil
 }
 
@@ -105,13 +111,19 @@ func (w *Watcher) Start(ctx context.Context) error {
 	if err := w.addDirRecursively(w.root); err != nil {
 		return err
 	}
-	go w.loop(ctx)
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		w.loop(ctx)
+	}()
 	return nil
 }
 
-// Close — освобождает ресурсы.
+// Close — освобождает ресурсы и ждёт завершения loop goroutine.
 func (w *Watcher) Close() error {
-	return w.fs.Close()
+	err := w.fs.Close()
+	w.wg.Wait()
+	return err
 }
 
 func (w *Watcher) addDirRecursively(root string) error {
@@ -157,6 +169,7 @@ func (w *Watcher) shouldAccept(path string) bool {
 
 func (w *Watcher) loop(ctx context.Context) {
 	defer close(w.out)
+	defer close(w.doneCh)
 	for {
 		select {
 		case <-ctx.Done():
@@ -166,11 +179,12 @@ func (w *Watcher) loop(ctx context.Context) {
 				return
 			}
 			w.handle(ev)
-		case _, ok := <-w.fs.Errors:
+		case err, ok := <-w.fs.Errors:
 			if !ok {
 				return
 			}
-			// игнорируем — не критично для индексации
+			// логируем fsnotify errors — "too many open files" и др. критичны
+			logger.Log().Warn().Err(err).Msg("watcher: fsnotify error")
 		}
 	}
 }
@@ -178,10 +192,16 @@ func (w *Watcher) loop(ctx context.Context) {
 func (w *Watcher) handle(ev fsnotify.Event) {
 	// если создана новая директория — подписываемся рекурсивно
 	if ev.Op&fsnotify.Create != 0 {
-		if info, err := fileInfo(ev.Name); err == nil && info != nil && info.IsDir() {
-			rel, _ := filepath.Rel(w.root, ev.Name)
-			if w.matcher == nil || !w.matcher.IsIgnored(rel, true) {
-				_ = w.addDirRecursively(ev.Name)
+		if info, err := fileInfo(ev.Name); err == nil && info != nil {
+			// skip symlinks — не следить через symlink'и
+			if info.Mode()&fs.ModeSymlink != 0 {
+				return
+			}
+			if info.IsDir() {
+				rel, _ := filepath.Rel(w.root, ev.Name)
+				if w.matcher == nil || !w.matcher.IsIgnored(rel, true) {
+					_ = w.addDirRecursively(ev.Name)
+				}
 			}
 			return
 		}
@@ -210,6 +230,9 @@ func (w *Watcher) handle(ev fsnotify.Event) {
 	default:
 		return
 	}
+	// на Linux rename = Remove(old) + Create(new).
+	// Потребитель должен обрабатывать это как пару событий.
+	// На macOS — одно Rename-событие.
 	w.enqueue(Event{Kind: kind, AbsPath: ev.Name, RelPath: rel, Repo: repoName, Time: time.Now()})
 }
 
@@ -235,7 +258,8 @@ func (w *Watcher) flush() {
 		select {
 		case w.out <- e:
 		default:
-			// канал переполнен — дропаем самые старые
+			// логируем drop events — признак backpressure
+			logger.Log().Warn().Str("path", e.AbsPath).Msg("watcher: dropping event (channel full)")
 		}
 	}
 }

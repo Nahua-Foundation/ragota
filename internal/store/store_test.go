@@ -29,7 +29,7 @@ func openTestStore(t *testing.T) *SQLite {
 
 // seedFile создаёт минимальный «файл с двумя AST units» (function f → g)
 // и возвращает их id. Удобно для большинства тестов.
-func seedFile(t *testing.T, st *SQLite, path string) (idF, idG int64) {
+func seedFile(t *testing.T, st *SQLite, path string) (idF, idG int) {
 	t.Helper()
 	ctx := context.Background()
 	if err := st.EnsureFile(ctx, path, "go"); err != nil {
@@ -120,7 +120,7 @@ func TestUpdateASTParents_AndChildrenOf(t *testing.T) {
 	ctx := context.Background()
 	idF, idG := seedFile(t, st, "/tmp/a.go")
 
-	if err := st.UpdateASTParents(ctx, map[int64]int64{idG: idF}); err != nil {
+	if err := st.UpdateASTParents(ctx, map[int]int{idG: idF}); err != nil {
 		t.Fatalf("UpdateASTParents: %v", err)
 	}
 	kids, err := st.ChildrenOf(ctx, idF)
@@ -132,11 +132,11 @@ func TestUpdateASTParents_AndChildrenOf(t *testing.T) {
 	}
 
 	// Самоссылка должна игнорироваться.
-	if err := st.UpdateASTParents(ctx, map[int64]int64{idF: idF}); err != nil {
+	if err := st.UpdateASTParents(ctx, map[int]int{idF: idF}); err != nil {
 		t.Fatalf("UpdateASTParents self: %v", err)
 	}
 	u, _ := st.GetASTUnit(ctx, idF)
-	if u == nil || (u.ParentID.Valid && u.ParentID.Int64 == idF) {
+	if u == nil || (u.ParentID.Valid && int(u.ParentID.Int64) == idF) {
 		t.Errorf("self parent should be ignored: %+v", u)
 	}
 
@@ -271,7 +271,7 @@ func TestExpandNeighbors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandNeighbors depth=1: %v", err)
 	}
-	ids := map[int64]bool{}
+	ids := map[int]bool{}
 	for _, n := range nodes {
 		ids[n.ID] = true
 	}
@@ -287,7 +287,7 @@ func TestExpandNeighbors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandNeighbors depth=2: %v", err)
 	}
-	ids2 := map[int64]bool{}
+	ids2 := map[int]bool{}
 	for _, n := range nodes2 {
 		ids2[n.ID] = true
 	}

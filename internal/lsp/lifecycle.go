@@ -374,7 +374,10 @@ func (c *Client) initialize(ctx context.Context, root string) error {
 			return fmt.Errorf("jdtls process exited before becoming ready: %v",
 				c.processErr)
 		case <-ctx.Done():
-			return ctx.Err()
+			// caller ctx может иметь deadline < 120s (например 60s из lspsrv).
+			// Для Java используем detached context — jdtls инициализация фоновая.
+			lspDebug("LSP java: caller context cancelled, continuing background init\n")
+			// Не возвращаем ошибку — jdtls продолжает инициализироваться в фоне.
 		case <-time.After(readyTimeout):
 			lspDebug("LSP java: ready timeout after %s, continuing anyway\n",
 				readyTimeout)

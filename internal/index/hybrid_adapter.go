@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"ragota/internal/bm25"
 	"ragota/internal/hybrid"
@@ -21,6 +22,10 @@ func (a *VectorHybridAdapter) HybridCandidates(ctx context.Context, query string
 	if err != nil {
 		return nil, err
 	}
+	// явная сортировка по score перед присвоением Rank
+	sort.Slice(hits, func(i, j int) bool {
+		return hits[i].Score > hits[j].Score
+	})
 	out := make([]hybrid.Candidate, 0, len(hits))
 	for i, h := range hits {
 		path, _ := h.Payload["file"].(string)
@@ -60,6 +65,10 @@ func (a *BM25HybridAdapter) HybridCandidates(ctx context.Context, query string, 
 	if err != nil {
 		return nil, err
 	}
+	// явная сортировка по score перед присвоением Rank
+	sort.Slice(hits, func(i, j int) bool {
+		return hits[i].Score > hits[j].Score
+	})
 	out := make([]hybrid.Candidate, 0, len(hits))
 	for i, h := range hits {
 		out = append(out, hybrid.Candidate{

@@ -34,7 +34,7 @@ const astUnitColumns = `id, repo, file_path, language, kind, name, qualified, pa
 // либо пересохранять рёбра contains после реальной вставки. Здесь мы
 // сохраняем как есть и предполагаем, что вызывающий уже корректно
 // проставил parent_id (или nil) — что делает индексатор поверх параса.
-func (s *SQLite) ReplaceASTUnits(ctx context.Context, filePath string, units []ASTUnit) (map[string]int64, error) {
+func (s *SQLite) ReplaceASTUnits(ctx context.Context, filePath string, units []ASTUnit) (map[string]int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -52,7 +52,7 @@ func (s *SQLite) ReplaceASTUnits(ctx context.Context, filePath string, units []A
 	}
 	defer stmt.Close()
 
-	ids := make(map[string]int64, len(units))
+	ids := make(map[string]int, len(units))
 	for _, u := range units {
 		res, err := stmt.ExecContext(ctx,
 			u.Repo, filePath, u.Language, u.Kind, u.Name, u.Qualified, u.ParentID,
@@ -62,10 +62,11 @@ func (s *SQLite) ReplaceASTUnits(ctx context.Context, filePath string, units []A
 		if err != nil {
 			return nil, err
 		}
-		id, err := res.LastInsertId()
+		id64, err := res.LastInsertId()
 		if err != nil {
 			return nil, err
 		}
+		id := int(id64)
 		// Сохраняем последний id для каждого имени (используется в edges-resolver).
 		key := u.Qualified
 		if key == "" {
@@ -101,7 +102,7 @@ func (s *SQLite) ListASTUnitsByFile(ctx context.Context, filePath string) ([]AST
 }
 
 // GetASTUnit возвращает unit по id (nil если не найден).
-func (s *SQLite) GetASTUnit(ctx context.Context, id int64) (*ASTUnit, error) {
+func (s *SQLite) GetASTUnit(ctx context.Context, id int) (*ASTUnit, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT `+astUnitColumns+` FROM ast_units WHERE id = ?`, id)
 	u, err := scanASTUnit(row)
@@ -209,7 +210,7 @@ func (s *SQLite) FindASTUnits(ctx context.Context, query, kind, language, repo s
 
 // UpdateASTParents массово проставляет parent_id (map childID -> parentID).
 // Используется во второй фазе индексации, когда реальные id уже известны.
-func (s *SQLite) UpdateASTParents(ctx context.Context, updates map[int64]int64) error {
+func (s *SQLite) UpdateASTParents(ctx context.Context, updates map[int]int) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -235,7 +236,7 @@ func (s *SQLite) UpdateASTParents(ctx context.Context, updates map[int64]int64) 
 }
 
 // ChildrenOf возвращает прямых детей AST unit.
-func (s *SQLite) ChildrenOf(ctx context.Context, id int64) ([]ASTUnit, error) {
+func (s *SQLite) ChildrenOf(ctx context.Context, id int) ([]ASTUnit, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+astUnitColumns+` FROM ast_units WHERE parent_id = ? ORDER BY start_byte`, id)
 	if err != nil {

@@ -38,9 +38,10 @@ func Default() *Config {
 			Port: 6333,
 		},
 		Ollama: OllamaConfig{
-			URL:        "http://localhost:11434",
-			EmbedModel: "nomic-embed-text",
-			EmbedDim:   768,
+			URL:         "http://localhost:11434",
+			EmbedModel:  "nomic-embed-text",
+			EmbedDim:    768,
+			SymbolModel: "qwen2.5-coder:3b",
 		},
 		Collection: "ai_tools_code",
 		Collections: CollectionsConfig{

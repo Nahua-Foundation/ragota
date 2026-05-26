@@ -114,9 +114,10 @@ type QdrantConfig struct {
 }
 
 type OllamaConfig struct {
-	URL        string `yaml:"url"`
-	EmbedModel string `yaml:"embed_model"`
-	EmbedDim   uint64 `yaml:"embed_dim"`
+	URL         string `yaml:"url"`
+	EmbedModel  string `yaml:"embed_model"`
+	EmbedDim    uint64 `yaml:"embed_dim"`
+	SymbolModel string `yaml:"symbol_model"` // модель для LLM-анализа символов (get_symbol_summary, get_file_intent)
 }
 
 type MCPPorts struct {

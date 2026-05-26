@@ -32,6 +32,15 @@ import (
 
 // FullScan индексирует все подходящие файлы с использованием глобального батчинга чанков.
 func (v *Vector) FullScan(ctx context.Context) error {
+	// guard against concurrent FullScan
+	v.scanMu.Lock()
+	if v.scanning {
+		v.scanMu.Unlock()
+		return fmt.Errorf("vector: FullScan already in progress")
+	}
+	v.scanning = true
+	defer func() { v.scanMu.Unlock(); v.scanning = false }()
+
 	v.wg.Add(1)
 	defer v.wg.Done()
 
@@ -68,6 +77,7 @@ func (v *Vector) FullScan(ctx context.Context) error {
 	// Detect stale hashes: Qdrant collections empty but SQLite has vec_hashes.
 	// This happens when the container is restarted from a different directory
 	// (new volume mount) while the local DB still has old hashes.
+	needFullBM25Reindex := false
 	if v.qd != nil && v.store != nil {
 		codeSpec := v.cfg.CodeCollection()
 		textSpec := v.cfg.TextCollection()
@@ -81,13 +91,26 @@ func (v *Vector) FullScan(ctx context.Context) error {
 					logger.Log().Warn().Err(err).Msg("vector: ResetVecHashes")
 				}
 			}
+			// Qdrant пуст — значит BM25 тоже нужно перестроить с нуля.
+			needFullBM25Reindex = true
+		} else if v.bm25Index() != nil {
+			// Qdrant содержит данные, но BM25 мог быть потерян (удалён с диска,
+			// новая папка и т.д.). Проверим рассинхронизацию.
+			bm25Count, _ := v.bm25Index().Count(ctx)
+			if bm25Count == 0 {
+				logger.Log().Info().Msg("vector: Qdrant has data but BM25 is empty — scheduling full BM25 reindex")
+				needFullBM25Reindex = true
+			}
 		}
 	}
 
-	// BM25: очищаем индекс один раз перед полной переиндексацией,
-	// вместо per-file DeleteByPath — это значительно быстрее.
-	if v.bm25 != nil {
-		if err := v.bm25.Clear(ctx); err != nil {
+	// BM25: очищаем индекс только при полном реиндексе (Qdrant пуст или
+	// рассинхронизация Qdrant/BM25). Если Qdrant уже содержит данные и BM25
+	// персистентен (Bleve на диске), файлы с совпавшим хешем уже есть в BM25 —
+	// Clear() их уничтожит. Для изменённых файлов используется DeleteByPath
+	// + IndexDocs в processBatch.
+	if v.bm25Index() != nil && needFullBM25Reindex {
+		if err := v.bm25Index().Clear(ctx); err != nil {
 			logger.Log().Warn().Err(err).Msg("vector: BM25 Clear")
 		}
 	}
@@ -397,6 +420,11 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 	embedWg.Add(1)
 	go func() {
 		defer embedWg.Done()
+		// check context before starting expensive embed operation
+		if ctx.Err() != nil {
+			embedErr = ctx.Err()
+			return
+		}
 		vecs, embedErr = emb.EmbedBatch(ctx, allTexts)
 		if embedErr != nil {
 			logger.Log().Error().Err(embedErr).Int("texts", len(allTexts)).Msg("vector: EmbedBatch failed")
@@ -459,7 +487,7 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 		if v.store != nil && f.hash != "" {
 			_ = v.store.UpsertVectorHash(ctx, f.abs, f.hash, f.lang)
 		}
-		if v.bm25 != nil {
+		if v.bm25Index() != nil {
 			// BM25 delete не нужен — индекс очищен целиком в начале FullScan.
 			for i, ch := range f.chunks {
 				allDocs = append(allDocs, bm25.Doc{
@@ -498,14 +526,14 @@ func (v *Vector) processBatch(ctx context.Context, spec config.CollectionSpec, e
 		setErr(v.qd.Upsert(ctx, spec.Name, allPoints))
 	}()
 
-	if v.bm25 != nil && len(allDocs) > 0 {
+	if v.bm25Index() != nil && len(allDocs) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if ctx.Err() != nil {
 				return
 			}
-			setErr(v.bm25.IndexDocs(ctx, allDocs))
+			setErr(v.bm25Index().IndexDocs(ctx, allDocs))
 		}()
 	}
 

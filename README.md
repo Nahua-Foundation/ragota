@@ -1,364 +1,99 @@
 # ragota
 
-Единый бинарь, объединяющий **четыре MCP-сервера**, гибридный (vector + BM25) поиск с реранкером, AST/graph-индекс для symbol-aware навигации, докер-инфраструктуру и live-дашборд для индексации проектов.
+Единый бинарь: **4 MCP-сервера**, гибридный поиск (vector + BM25 + reranker), AST/graph-навигация и TUI-дашборд для индексации проектов.
 
-### Возможности
+## Быстрый старт
 
-- **tree-sitter MCP (`ts`)** — разбирает код на символы (function/method/class/interface/type/enum/var/const) для Go, TypeScript/TSX, JavaScript/JSX, Python, Java; хранит их в SQLite; следит за изменениями в директории.
-- **vector MCP (`vec`)** — гибридный (vector + BM25) поиск с опциональным реранкингом:
-  - Чанкинг через tree-sitter (Go/TS/JS/Python/Java) либо построчное окно для остальных.
-  - **Две раздельные коллекции в Qdrant**: код (`qwen3-embedding`, 1024-dim) и текст/markdown (`nomic-embed-text`, 768-dim).
-  - **BM25** — локальный лексический индекс на [Bleve](https://github.com/blevesearch/bleve), pure-Go.
-  - **Reranker** — Ollama `qllama/bge-reranker-v2-m3` с graceful fallback (если модель не подгружена — реранкинг пропускается, в логе warning).
-  - **Авто-reindex** при смене embed-модели: метаданные хранятся в SQLite (`embed_meta`), коллекция кода автоматически пересоздаётся, markdown-индекс не трогается.
-- **symbol MCP (`sym`)** — symbol-aware навигация поверх AST units + code graph (`ast_units`, `edges` в SQLite). Извлечение:
-  - **Go** — `go/parser` + `go/ast` (точно: functions, methods, types, imports, calls, embedded types).
-  - **Java / TypeScript / JavaScript** — tree-sitter (classes, interfaces, methods, functions, calls, imports, `extends`, `implements`).
-  - **Python** — AST units (без edges).
-- **LSP MCP (`lsp`)** — проксирует официальные LSP-сервера (`gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls`). Работает с локально установленными серверами.
-- **`ragota watch .`** — поднимает сервисы в Docker (режим `--env docker`: Qdrant + LSP) или только Qdrant (`--env local`, по умолчанию), использует Ollama на хосте, запускает индексаторы (vector + BM25 + AST/graph), открывает TUI-дашборд (bubbletea).
+### 1. Установка
 
-### Multi-repo workspace
-
-`ragota` автоматически определяет, что лежит в указанной корневой директории:
-
-- **Single-repo.** Если в самом корне есть `.git`, индексируется одна репа с именем = `basename(root)`.
-- **Multi-repo workspace.** Если в корне нет `.git`, но среди его непосредственных поддиректорий есть директории с `.git` — каждая такая директория считается отдельной репой. Соседние поддиректории на том же верхнем уровне (без `.git`) тоже попадают в индекс как «прицепленные репы». Скрытые директории (`.*`) пропускаются.
-
-Правила, которым подчиняется индекс:
-
-- Индекс — **единый на весь workspace** (одна Qdrant-коллекция, один SQLite, один BM25), но у каждого AST-юнита, ребра графа, BM25-документа и Qdrant-точки есть поле `repo` с именем репы.
-- **`vec.*` поиски по умолчанию — глобальные** (по всем репам сразу). Чтобы заскоупить — передайте параметр `repo`:
-  - `repo: "alpha"` — только репа alpha;
-  - `repo: "[\"alpha\",\"beta\"]"` — JSON-массив имён;
-  - `repo: "*"` или отсутствие параметра — все репы.
-  Каждый результат содержит `repo`, чтобы агент видел, откуда он взят.
-- **Граф строится строго в пределах одной репы.** Резолв `dst_id` в `ResolvePendingEdges` фильтрует кандидатов по `dst.repo = src.repo`. Это значит, что одноимённые функции в разных репах (например, `Save` в alpha и `Save` в beta) не смешиваются.
-- **`sym.*` инструменты с параметром `repo`** (синтаксис тот же, что у `vec.*`: имя | JSON-массив | CSV | `"*"`/пусто):
-  - `sym.find_references(symbol, repo?)`
-  - `sym.find_implementations(interface, repo?)`
-  - `sym.find_callers(function, repo?)`
-  - `sym.find_callees(function, repo?)`
-  - `sym.expand_neighbors(node_id, depth?, kinds?, repo?)` — по умолчанию = репа `node_id`; передайте `repo="*"` для всех реп.
-  - `sym.get_call_graph(function|symbol_id, depth?, repo?)` — по умолчанию = репа стартового узла (или единственная репа найденных определений при поиске по `function`).
-  - `ts.search_symbols(query, kind?, language?, limit?, repo?)` — глобален по умолчанию, как `vec.*`.
-- **`sym.*` без `repo`** (работают по конкретному id/path и не нуждаются в фильтре): `sym.find_definition`, `sym.get_symbol`, `sym.get_parent`, `sym.get_children`, `sym.get_file_symbols`, `sym.get_dependency_graph`, `sym.traverse_graph`, `sym.get_surrounding_context`, `sym.get_related_files`, `sym.get_similar_code`, `sym.get_execution_context`, `sym.get_symbol_summary`, `sym.get_file_intent`, `sym.get_semantic_neighborhood`.
-- **Правило для агентов:** `vec.*` и `ts.search_symbols` — глобальны по умолчанию, скоупьте их через `repo`. `sym.*` граф-инструменты — per-repo по умолчанию, расширяйте до `repo="*"` (или списка) только при осознанной необходимости. Всегда смотрите поле `repo` в результатах при сравнении/слиянии сущностей из разных реп.
-- При коллизии имён репо к дубликату добавляется короткий hash-суффикс (например, `myrepo-9f3a1c8e`).
-- При смене состава репо/корня старый SQLite сносится автоматически (workspace-signature). Bleve-индекс и Qdrant — при необходимости пересоздаются обычным путём (`vec.reindex` или удаление коллекции).
-
-### Требования
-
-- Go 1.26+
-- macOS/Linux с Xcode CLI tools (CGO для tree-sitter)
-- Docker (для Qdrant)
-- Ollama на хосте с моделями:
-  - `qwen3-embedding` — эмбеддинги кода (обязательно)
-  - `nomic-embed-text` — эмбеддинги markdown/текста (обязательно)
-  - `qllama/bge-reranker-v2-m3` — реранкер (опционально; при отсутствии — fallback)
-- В PATH для LSP MCP: `gopls`, `typescript-language-server`, `pyright-langserver`, `jdtls` (опционально, любой набор). Либо настроенные Docker-контейнеры в конфиге.
-
-### Установка зависимостей
-
-#### Автоматическая установка
 ```bash
+# Сборка
+go build -o ragota ./cmd/ragota
+
+# Автоустановка зависимостей (Docker, Ollama, модели, LSP-серверы)
 ./ragota install
 ```
-Команда проверит наличие Docker, Ollama, всех нужных моделей (`qwen3-embedding`, `nomic-embed-text`, реранкер) и LSP-серверов и предложит установить недостающие. Обязательные модели помечены как required, реранкер — optional.
 
-#### Ручная установка
-- **Docker**: [инструкция](https://docs.docker.com/get-docker/).
-- **Ollama**: см. раздел [Настройка Ollama](#настройка-ollama).
-- **LSP-серверы**:
-    - **Go**: `go install golang.org/x/tools/gopls@latest`
-    - **TypeScript/JavaScript**: `npm install -g typescript-language-server typescript`
-    - **Python**: `npm install -g pyright`
-    - **Java**: установите [jdtls](https://github.com/eclipse-jdtls/eclipse.jdt.ls) и убедитесь, что бинарник `jdtls` доступен в PATH.
+**Требования:** Go 1.26+, Docker, Ollama, macOS/Linux с Xcode CLI (CGO для tree-sitter).
 
-### Сборка
-```
-go build -o ragota ./cmd/ragota
-```
+### 2. Запуск
 
-### Запуск
+```bash
+# Всё сразу: LSP + Tree-Sitter + Vector + Symbol + индексация + TUI
+./ragota run -ltvsw --env local /path/to/project
 
-Основная команда — `run`. При первом запуске ищется `.ragota/config.yaml` в проекте или `~/.ragota/config.yaml`. Если их нет — используются дефолты.
+# Только индексация и TUI
+./ragota watch /path/to/project
 
-#### Примеры запуска
-
-1. **Запустить всё сразу** (LSP + Tree-Sitter + Vector + Symbol MCP + индексация + TUI + Docker для Qdrant):
-   ```bash
-   ./ragota run -ltvsw --env local .
-   ```
-   *Флаги: `-l` (LSP), `-t` (Tree-Sitter), `-v` (Vector), `-s` (Symbol), `-w` (Watch/Индексация).*
-
-2. **Запустить сервисы в Docker** (LSP и Qdrant в контейнерах, Ollama на хосте):
-   ```bash
-   ./ragota run -ltvsw --env docker .
-   ```
-
-3. **Только индексация и TUI**:
-   ```bash
-   ./ragota watch .
-   ```
-   *(Эквивалентно `./ragota run -w .`)*
-
-3. **Все MCP-серверы для Claude Desktop** (без TUI):
-   ```bash
-   ./ragota run -ltvs --no-tui .
-   ```
-
-4. **Только symbol-aware навигация**:
-   ```bash
-   ./ragota run -s .
-   ```
-
-- `./ragota gen-config` — сгенерировать конфиг (по умолчанию `~/.ragota/config.yaml`).
-- `./ragota mcp-config` — сгенерировать JSON для Claude Desktop / других MCP-клиентов (включает все 4 сервера).
-- `./ragota clean` — очистить локальный индекс (SQLite, Qdrant-коллекции, Bleve).
-- `q`/`Esc`/`Ctrl+C` — выход из TUI.
-
-#### Флаги `run`
-- `-l`, `--lsp` — MCP-сервер LSP
-- `-t`, `--ts`  — MCP-сервер Tree-Sitter
-- `-v`, `--vec` — MCP-сервер Vector (hybrid + rerank)
-- `-s`, `--sym` — MCP-сервер Symbol (AST/graph)
-- `-w`, `--watch` — индексация + TUI
-- `--env local|docker` — режим окружения:
-  - `local` (по умолчанию): Qdrant в Docker, LSP/Ollama на хосте
-  - `docker`: все сервисы (LSP, Ollama, Qdrant) в Docker-контейнерах
-- `--no-tui` — не открывать дашборд
-
-### MCP-серверы по отдельности (stdio)
-
-```
-ragota serve-treesitter --root /path/to/project
-ragota serve-vector     --root /path/to/project
-ragota serve-symbol     --root /path/to/project
-ragota serve-lsp        --root /path/to/project
+# Конфиг для Claude Desktop
+./ragota mcp-config
 ```
 
-#### Методы MCP
+### 3. Полезные команды
 
-**ts (Tree-Sitter)** — структурный поиск символов
-- `ts.search_symbols(query, kind?, language?, limit?, repo?)` — поиск по имени. **Go-specific**: `kind="function"` finds only functions (e.g., `func foo()`), `kind="method"` finds only methods (e.g., `func (r Receiver) foo()`). `repo` (опц.): имя | JSON-массив | CSV | `"*"`/пусто (по умолчанию — все репы).
-- `ts.list_symbols(file)` — дерево символов файла.
-- `ts.reindex(path?)` — переиндексация.
-- `ts.stats()` — статистика индекса.
+| Команда | Описание |
+|---|---|
+| `./ragota run -ltvsw .` | Запустить всё |
+| `./ragota watch .` | Только индексация + TUI |
+| `./ragota gen-config` | Сгенерировать `~/.ragota/config.yaml` |
+| `./ragota mcp-config` | JSON для MCP-клиентов |
+| `./ragota clean` | Очистить индексы |
+| `./ragota install` | Установить зависимости |
 
-**vec (Vector)** — гибридный семантический + лексический поиск
-- `vec.search_semantic(query, top_k?, language?)` — только vector (Qdrant).
-- `vec.search_keyword(query, top_k?, language?)` — только BM25 (Bleve).
-- `vec.search_hybrid(query, top_k?, language?)` — слияние vector + BM25 (RRF или weighted-sum, см. `hybrid.*` в конфиге).
-- `vec.rerank(query, candidates, top_n?)` — реранк списка кандидатов через BGE-Reranker.
-- `vec.search(query, limit?, language?)` — alias к `search_hybrid` (backward-compatible).
-- `vec.reindex(path?)` — обновление vector + BM25 индексов.
-- `vec.count()` — число чанков.
+## Что внутри
 
-**sym (Symbol)** — symbol-aware навигация (AST units + code graph)
-- Symbol lookup:
-  - `sym.find_definition(symbol)`
-  - `sym.find_references(symbol, repo?)` — `repo`: имя | JSON-массив | CSV | `"*"`/пусто (все репы).
-  - `sym.find_implementations(interface, repo?)` — те же `repo`-семантики.
-  - `sym.find_callers(function, repo?)` — те же `repo`-семантики.
-  - `sym.find_callees(function, repo?)` — те же `repo`-семантики.
-- AST / structure:
-  - `sym.get_file_symbols(path)`
-  - `sym.get_symbol(symbol_id)`
-  - `sym.get_execution_context(symbol_id)` — возвращает полный контекст исполнения (definition, callers, callees, references, related_types, imports, important_files).
-  - `sym.get_symbol_summary(symbol_id)` — семантическое резюме символа (цель, роль, важность) через LLM.
-  - `sym.get_file_intent(path)` — анализ назначения и ответственности исходного файла через LLM.
-  - `sym.get_semantic_neighborhood(symbol_id)` — кластеризованное представление окрестности символа (граф + LLM). **Требуется ID символа (класс, метод и т.д.), а не файла.**
-  - `sym.traverse_graph(symbol_id, edge_types, depth)` — семантическая навигация по графу (хождение по связям).
-  - `sym.get_parent(symbol_id)`
-  - `sym.get_children(symbol_id)`
-- Graph:
-  - `sym.expand_neighbors(node_id, depth?, kinds?, repo?)` — BFS по edges. `repo` по умолчанию = репа `node_id`; `"*"` — все репы.
-  - `sym.get_dependency_graph(module, depth?)` — граф import-связей (репа выводится из `module`). **Для Go требуется полный или относительный путь (названия файла недостаточно).**
-  - `sym.get_call_graph(function|symbol_id, depth?, repo?)` — граф вызовов. `repo` по умолчанию = репа стартового узла (или единственная репа найденных определений); `"*"` — все репы.
-- Context:
-  - `sym.get_surrounding_context(symbol_id)`
-  - `sym.get_related_files(symbol_id)`
-  - `sym.get_similar_code(symbol_id)` — семантически близкие фрагменты через vector.
+| Сервер | Назначение |
+|---|---|
+| **ts** (Tree-Sitter) | Структурный поиск символов: функции, методы, классы, интерфейсы |
+| **vec** (Vector) | Гибридный поиск: семантический (Qdrant) + лексический (BM25) + реранкер |
+| **sym** (Symbol) | Навигация по коду: callers/callees, references, implementors, call graph |
+| **lsp** (LSP) | Прокси к `gopls`, `typescript-language-server`, `pyright`, `jdtls` |
 
-**lsp (Language Server Protocol)** — навигация через родные LSP
-- `lsp.definition(file, line, character)`
-- `lsp.references(file, line, character, include_declaration?)`
-- `lsp.hover(file, line, character)`
-- `lsp.languages()`
+Поддерживаемые языки: **Go, TypeScript/TSX, JavaScript/JSX, Python, Java**.
 
-### Настройка LSP
+## Режимы запуска
 
-`ragota` запускает LSP-серверы **локально** (как дочерние процессы через stdio) в режиме `--env local`. В режиме `--env docker` LSP-серверы запускаются в Docker-контейнерах (требуется настройка в `docker.lsp` секции конфига).
+| Режим | Qdrant | LSP | Ollama |
+|---|---|---|---|
+| `--env local` (default) | Docker | Хост (PATH) | Хост |
+| `--env docker` | Docker | Docker-контейнер | Хост |
 
-#### Режимы запуска LSP
+Флаги `run`: `-l` (LSP), `-t` (Tree-Sitter), `-v` (Vector), `-s` (Symbol), `-w` (Watch/TUI).
 
-**Local (по умолчанию, `--env local`):**
-- LSP-серверы запускаются как локальные процессы
-- Требуется установка серверов в PATH
-- Прямой доступ к файловой системе проекта
+## Документация
 
-**Docker (`--env docker`):**
-- Сервисы (Qdrant, LSP) в изолированных контейнерах. Ollama используется на хосте.
-- Единый LSP-контейнер `ragota-lsp` со всеми серверами:
-  - **Go**: gopls
-  - **TypeScript/JavaScript**: typescript-language-server
-  - **Python**: pyright-langserver
-  - **Java**: jdtls (Eclipse JDT Language Server)
-- Образ `ragota-lsp` автоматически билдится из `internal/docker/Dockerfile.lsp` при первом запуске (~3-5 минут)
-- Все данные сохраняются в `.ragota/` в директории проекта (игнорируется git)
-- Контейнеры именуются: `ragota-qdrant`, `ragota-lsp`
+| Документ | Содержание |
+|---|---|
+| [docs/mcp-servers.md](docs/mcp-servers.md) | Все MCP-серверы и их методы |
+| [docs/multi-repo.md](docs/multi-repo.md) | Multi-repo workspace, скоупирование поиска |
+| [docs/lsp-setup.md](docs/lsp-setup.md) | Настройка LSP-серверов и troubleshooting |
+| [docs/configuration.md](docs/configuration.md) | Конфигурация config.yaml |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Архитектура проекта для контрибьюторов |
+| [docs/AGENTS.md](docs/AGENTS.md) | Гайд для AI-агентов (на английском) |
 
-#### Инструкции по установке:
+## Безопасность
 
-- **Go (gopls)**:
-  ```bash
-  go install golang.org/x/tools/gopls@latest
-  ```
-- **TypeScript/JavaScript (typescript-language-server)**:
-  ```bash
-  npm install -g typescript typescript-language-server
-  ```
-- **Python (pyright)**:
-  ```bash
-  npm install -g pyright
-  ```
-- **phi3:mini (via Ollama)**:
-  ```bash
-  ollama run phi3:mini
-  ```
-  Используется для семантического анализа в `sym.get_symbol_summary`, `sym.get_file_intent` и `sym.get_semantic_neighborhood`.
-- **Java (jdtls)**:
-  - macOS: `brew install jdtls`
-  - Linux / вручную: скачайте [Eclipse JDT.LS](https://github.com/eclipse-jdtls/eclipse.jdt.ls) и положите `jdtls` в `PATH`.
-  - Требуется **JDK 21+** (`java -version`). На JDK <17 jdtls не стартует, на JDK 24+ возможны WARNING о deprecated reflection — они безопасны.
+- Все данные локальны: SQLite, Bleve, Qdrant (Docker-volume)
+- Эмбеддинги и реранкер — Ollama на хосте, код не отправляется в облако
+- MCP-серверы биндятся на `127.0.0.1`
+- Никакой телеметрии
 
-Пример секции `lsp` в `config.yaml`:
-```yaml
-lsp:
-  - language: go
-    command: gopls
-  - language: java
-    command: jdtls
-    args: ["-data", ".ragota/jdtls-data"]
-  - language: typescript
-    command: typescript-language-server
-    args: ["--stdio"]
-  - language: python
-    command: pyright-langserver
-    args: ["--stdio"]
+## Структура проекта
+
 ```
-
-Пример секции `docker` для режима `--env docker`:
-```yaml
-docker:
-  network: ragota-net
-  qdrant:
-    name: ragota-qdrant
-    image: qdrant/qdrant:latest
-    ports: ["127.0.0.1:6333:6333"]
-    volumes: [".ragota/qdrant_storage:/qdrant/storage"]
-  lsp:
-    image: ragota-lsp:latest
-    volumes: [".:/workspace"]
-```
-
-#### Возможные ошибки и их исправление
-
-- **`jdtls` запускается, но `lsp.definition/hover/references` возвращают `null` или пустой результат.**
-  - Причина: jdtls долго импортирует Maven/Gradle проект (30–120с на первый запуск) — клиент дожидается уведомления `language/status: ServiceReady`.
-  - Что делать: подождать; при больших проектах увеличить таймаут через env `JDTLS_READY_TIMEOUT=240` (секунды).
-  - Лог: `.ragota/logs/lsp-debug.log` (в корне проекта; путь можно переопределить env `AI_TOOLS_LSP_LOG`) — ищите `LSP java: ready signal received`. Если вместо него `ready timeout` — сервер не успел проиндексировать.
-
-- **`References RESULT: locations=0` (пусто), хотя символ заведомо используется.**
-  - Причина: файл лежит вне source roots Maven/Gradle (в корне проекта рядом с `pom.xml`, а не в `src/main/java/`). jdtls в режиме Maven индексирует только `src/main/java/**` и `src/test/java/**`.
-  - Что делать: переместить файл в `src/main/java/`, либо удалить `pom.xml`/`build.gradle` (jdtls перейдёт в invisible-project режим и проиндексирует всё).
-
-- **`process exited: signal: killed` сразу после успешного ответа.**
-  - Причина: была починена — ранее процесс получал SIGKILL по отмене RPC-контекста. Если симптом вернулся: проверьте, что JDK даёт jdtls достаточно памяти (по умолчанию `-Xmx4G`); на маленькой машине поднимите/опустите явно.
-
-- **`WARNING: sun.misc.Unsafe...`, `Using incubator modules`, `Final field mutation` в stderr.**
-  - Это шум JVM (JDK 24+) от внутренних библиотек jdtls (Guice/Plexus/Sisu). Не влияет на работу, отфильтровывается из логов.
-
-- **`jdtls --version` пишет `Could not load Gradle version information`.**
-  - Безвреден: значит Gradle wrapper отсутствует или не в PATH. Для Maven-проектов не нужен.
-
-- **`pyright` / `typescript-language-server` не находит определения.**
-  - Убедитесь, что в корне проекта есть `pyrightconfig.json`/`pyproject.toml` (для Python) или `tsconfig.json`/`package.json` (для TS). Без них серверы работают в режиме single-file.
-  - Установлены ли пакеты проекта (`npm install`, `pip install -e .`) — без них типы из зависимостей не разрешаются.
-
-- **`LSP <lang>: client dead, recreating` повторяется на каждом запросе.**
-  - Откройте `.ragota/logs/lsp-debug.log` и посмотрите строку `process exited: ...` — там будет `exit_code` и `signal`. `signal=killed` обычно означает OOM; увеличьте `-Xmx` (для Java) или память контейнера. Реальные Exception'ы jdtls видны в `stderr tail`.
-
-### Настройка Ollama
-
-1.  **Установка**:
-    - macOS/Windows: [ollama.com](https://ollama.com).
-    - Linux: `curl -fsSL https://ollama.com/install.sh | sh`
-2.  **Модели**:
-    ```bash
-    ollama pull qwen3-embedding:0.6b              # эмбеддинги кода (1024-dim)
-    ollama pull nomic-embed-text             # эмбеддинги markdown/текста (768-dim)
-    ollama pull qllama/bge-reranker-v2-m3   # опционально — реранкер
-    ```
-3.  **Запуск**: по умолчанию `http://localhost:11434`. Адрес можно поменять в `.ragota/config.yaml` (`ollama.url`).
-
-### Безопасность и приватность
-
-- **Все данные локальны**: SQLite (`.ragota/treesitter.db`), Bleve (`.ragota/bm25/`), Qdrant (Docker-volume).
-- **Локальный LLM**: эмбеддинги и реранкер — Ollama на вашем хосте. Код не отправляется в облачные API.
-- **Безопасные порты**: MCP-серверы при `run` биндятся на `127.0.0.1`.
-- **Никакой телеметрии**.
-
-### Структура проекта
-```
-main.go, cli_*.go          — cobra CLI
+cmd/ragota/        — CLI (cobra)
 internal/
-  config/    — конфиг (collections, bm25, rerank, hybrid)
-  fileutil/  — обход + ignore-фильтр
-  watcher/   — рекурсивный fsnotify + debounce
-  state/     — потокобезопасный bus статистики
-  embedder/  — клиент Ollama /api/embeddings
-  qdrant/    — REST-клиент Qdrant
-  store/     — SQLite (modernc.org/sqlite, pure-Go): symbols, ast_units, edges, embed_meta
-  parser/    — tree-sitter биндинги и AST-чанкинг
-  chunker/   — окно + AST-чанки
-  astindex/  — извлечение AST units + edges (Go: go/ast; Java/TS/JS: tree-sitter)
-  bm25/      — Bleve-индекс (pure-Go BM25)
-  rerank/    — HTTP-клиент к Ollama-реранкеру (BGE) + graceful fallback
-  hybrid/    — RRF / weighted-sum слияние vector + BM25
-  graph/     — сервис над edges: callers/callees/imports/implementations + BFS
-  symbols/   — symbol-aware retrieval (find_*, get_*, context, similar)
-  index/     — TreeSitter + Vector индексаторы (full scan + watch, auto-reindex)
-  lsp/       — JSON-RPC LSP-клиент и менеджер серверов
-  docker/    — нативный запуск Qdrant
-  mcp/       — 4 MCP-сервера (ts/vec/sym/lsp) на github.com/mark3labs/mcp-go
-  tui/       — дашборд на bubbletea + lipgloss
-.ragota/   — служебные данные: config.yaml, treesitter.db, bm25/, logs/, qdrant_storage
+  mcp/             — 4 MCP-сервера (ts/vec/sym/lsp)
+  index/           — Vector + BM25 индексаторы
+  astindex/        — AST units + edges извлечение
+  graph/           — Callers/callees/implementations/BFS
+  symbols/         — Symbol-aware retrieval
+  lsp/             — JSON-RPC LSP-клиент
+  rerank/          — Ollama reranker + fallback
+  hybrid/          — RRF / weighted-sum fusion
+  store/           — SQLite (ast_units, edges, embed_meta)
+  tui/             — bubbletea дашборд
+  docker/          — Docker-управление
+  watcher/         — fsnotify + debounce
+.ragota/           — Служебные данные (config, БД, индексы, логи)
 ```
-
-### Кастомизация
-
-Правьте `.ragota/config.yaml`:
-
-- `ignore`, `extensions` — фильтры обхода.
-- `chunk_lines`, `chunk_overlap` — параметры чанкинга.
-- `collections.code` / `collections.text` — имя коллекции, embed-модель и размерность для кода и текста раздельно. **При смене модели индекс кода будет автоматически пересоздан** (через `embed_meta`).
-- `ollama.url` — адрес Ollama (legacy `ollama.embed_model` / `ollama.embed_dim` используются для текста, если `collections` не задан).
-- `qdrant.host`, `qdrant.port` (REST по умолчанию 6333).
-- `bm25.enabled`, `bm25.path`, `bm25.k1`, `bm25.b` — лексический индекс.
-- `rerank.enabled`, `rerank.model`, `rerank.url`, `rerank.required`, `rerank.top_n` — реранкер. `required: false` → graceful fallback при недоступности модели.
-- `hybrid.vector_weight`, `hybrid.bm25_weight`, `hybrid.rrf_k`, `hybrid.candidates_per_source` — параметры слияния. Если оба веса = 0 → используется RRF.
-- `mcp.tree_sitter` (7771), `mcp.vector` (7772), `mcp.lsp` (7773), `mcp.symbol` (7774) — порты MCP-серверов.
-
-### Миграция со старого индекса
-
-Если вы обновляетесь с версии без `qwen3-embedding`:
-
-1. `./ragota install` — подтянет новые модели.
-2. При первом запуске `./ragota run -vw .` старый индекс кода будет автоматически удалён и пересоздан с новой моделью (markdown-индекс при этом сохраняется).
-3. Если хочется начисто — `./ragota clean`.
-
-### Работа с AI-агентами
-
-Для AI-агентов (Claude, Junie и др.) подготовлен технический гайд на английском: [AGENTS.md](docs/AGENTS.md). Он описывает hybrid-first policy, reranker fallback, symbol/graph сценарии и семантику авто-reindex при смене embed-модели.

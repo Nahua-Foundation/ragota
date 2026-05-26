@@ -8,7 +8,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Файл содержит реализацию транспорта JSON-RPC 2.0 поверх stdio для LSP-клиента:
@@ -90,11 +89,6 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 			return json.Unmarshal(resp.Result, result)
 		}
 		return nil
-	case <-time.After(30 * time.Second):
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
-		return fmt.Errorf("lsp %s timeout", method)
 	}
 }
 
@@ -128,6 +122,12 @@ func (c *Client) write(req rpcRequest) error {
 func (c *Client) readLoop() {
 	defer c.failPending(fmt.Errorf("lsp %s process stopped before responding", c.Language))
 	defer c.dead.Store(true)
+	// notify Manager о смерти клиента для cleanup
+	defer func() {
+		if c.onDead != nil {
+			c.onDead()
+		}
+	}()
 	br := bufio.NewReader(c.stdout)
 	for {
 		length := -1
@@ -157,6 +157,8 @@ func (c *Client) readLoop() {
 		}
 		var msg rpcIncoming
 		if err := json.Unmarshal(buf, &msg); err != nil {
+			// логируем malformed JSON вместо silent discard
+			lspDebug("LSP %s: malformed JSON response: %v\n", c.Language, err)
 			continue
 		}
 		// Случай 1: серверный request (method != "" && id != nil) — обязаны ответить.

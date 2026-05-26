@@ -24,7 +24,7 @@ import (
 //
 // и одно неразрешённое ребро caller --call--> Save (dst_id=0,
 // dst_name="Save"). Возвращает (callerID, saveID).
-func seedRepo(t *testing.T, st *SQLite, repo, root string) (callerID, saveID int64) {
+func seedRepo(t *testing.T, st *SQLite, repo, root string) (callerID, saveID int) {
 	t.Helper()
 	ctx := context.Background()
 	callsite := root + "/callsite.go"
@@ -105,7 +105,7 @@ func TestMultiRepoResolvePendingDoesNotCrossRepos(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("ожидалось 1 ребро из alpha, получили %d: %+v", len(got), got)
 	}
-	if got[0].dst != saveA {
+	if got[0].dst != int64(saveA) {
 		t.Errorf("caller alpha должен указывать на Save alpha (id=%d), а получил dst_id=%d (Save beta id=%d)",
 			saveA, got[0].dst, saveB)
 	}

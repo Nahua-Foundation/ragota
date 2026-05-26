@@ -80,6 +80,8 @@ func (m *Manager) GetWithRoot(ctx context.Context, language, workspaceRoot strin
 // workspace root. Ключ кэша — тройка (repo, language, workspaceRoot); это
 // позволяет держать одновременно несколько LSP одного языка для разных
 // репо или подпроектов (каждый go.mod/package.json — свой процесс).
+// after storing, checks IsAlive and retries once if dead.
+// sets onDead callback for automatic cleanup.
 func (m *Manager) GetForRepo(ctx context.Context, repo, language, workspaceRoot string) (*Client, error) {
 	key := clientKey{repo: repo, lang: language, wsRoot: workspaceRoot}
 	m.mu.Lock()
@@ -109,9 +111,47 @@ func (m *Manager) GetForRepo(ctx context.Context, repo, language, workspaceRoot 
 	if err != nil {
 		return nil, err
 	}
+
+	// устанавливаем callback для автоматического cleanup при readLoop exit.
+	c.SetOnDead(func() {
+		m.mu.Lock()
+		if cur, ok := m.clients[key]; ok && cur == c {
+			delete(m.clients, key)
+			lspDebug("LSP %s/%s: auto-removed dead client from cache\n", repo, language)
+		}
+		m.mu.Unlock()
+	})
+
 	m.mu.Lock()
 	m.clients[key] = c
 	m.mu.Unlock()
+
+	// защита от race — процесс мог умереть сразу после Start но до возврата.
+	if !c.IsAlive() {
+		lspDebug("LSP %s/%s: client died immediately after start, retrying once\n", repo, language)
+		_ = c.Close()
+		m.mu.Lock()
+		delete(m.clients, key)
+		m.mu.Unlock()
+
+		c2, err2 := Start(ctx, spec, root)
+		if err2 != nil {
+			return nil, err2
+		}
+		c2.SetOnDead(func() {
+			m.mu.Lock()
+			if cur, ok := m.clients[key]; ok && cur == c2 {
+				delete(m.clients, key)
+				lspDebug("LSP %s/%s: auto-removed dead client from cache\n", repo, language)
+			}
+			m.mu.Unlock()
+		})
+		m.mu.Lock()
+		m.clients[key] = c2
+		m.mu.Unlock()
+		c = c2
+	}
+
 	lspDebug("LSP %s/%s: client started\n", repo, language)
 	return c, nil
 }
@@ -227,7 +267,7 @@ func (m *Manager) EnsureOpen(ctx context.Context, language, path string) (*Clien
 		}
 	}
 
-	if err := c.DidOpen(relPath, language, string(data)); err != nil {
+	if err := c.DidOpen(ctx, relPath, language, string(data)); err != nil {
 		return nil, err
 	}
 	return c, nil

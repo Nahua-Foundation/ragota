@@ -27,7 +27,7 @@ func openStore(t *testing.T) *store.SQLite {
 }
 
 // seedTwoFunctions: file with `f` (parent) and `g` (child of f).
-func seedTwoFunctions(t *testing.T, st *store.SQLite, path string) (idF, idG int64) {
+func seedTwoFunctions(t *testing.T, st *store.SQLite, path string) (idF, idG int) {
 	t.Helper()
 	ctx := context.Background()
 	if err := st.EnsureFile(ctx, path, "go"); err != nil {
@@ -49,7 +49,7 @@ func seedTwoFunctions(t *testing.T, st *store.SQLite, path string) (idF, idG int
 		t.Fatalf("missing ids: %+v", ids)
 	}
 	// Set g.parent_id = f.id
-	if err := st.UpdateASTParents(ctx, map[int64]int64{idG: idF}); err != nil {
+	if err := st.UpdateASTParents(ctx, map[int]int{idG: idF}); err != nil {
 		t.Fatalf("UpdateASTParents: %v", err)
 	}
 	return idF, idG

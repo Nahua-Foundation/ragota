@@ -56,11 +56,11 @@ func (s *Service) FileSymbols(ctx context.Context, path string) ([]store.ASTUnit
 	return s.st.ListASTUnitsByFile(ctx, path)
 }
 
-func (s *Service) Get(ctx context.Context, id int64) (*store.ASTUnit, error) {
+func (s *Service) Get(ctx context.Context, id int) (*store.ASTUnit, error) {
 	return s.st.GetASTUnit(ctx, id)
 }
 
-func (s *Service) Parent(ctx context.Context, id int64) (*store.ASTUnit, error) {
+func (s *Service) Parent(ctx context.Context, id int) (*store.ASTUnit, error) {
 	u, err := s.st.GetASTUnit(ctx, id)
 	if err != nil || u == nil {
 		return nil, err
@@ -68,10 +68,10 @@ func (s *Service) Parent(ctx context.Context, id int64) (*store.ASTUnit, error) 
 	if !u.ParentID.Valid {
 		return nil, nil
 	}
-	return s.st.GetASTUnit(ctx, u.ParentID.Int64)
+	return s.st.GetASTUnit(ctx, int(u.ParentID.Int64))
 }
 
-func (s *Service) Children(ctx context.Context, id int64) ([]store.ASTUnit, error) {
+func (s *Service) Children(ctx context.Context, id int) ([]store.ASTUnit, error) {
 	return s.st.ChildrenOf(ctx, id)
 }
 
@@ -119,7 +119,7 @@ func (s *Service) FindReferences(ctx context.Context, symbol string) ([]store.Ed
 	if err != nil {
 		return nil, err
 	}
-	seen := map[int64]bool{}
+	seen := map[int]bool{}
 	var out []store.Edge = []store.Edge{}
 
 	// 2. Для каждого определения ищем разрешённые ссылки (dst_id).
@@ -220,7 +220,7 @@ func (s *Service) FindImplementations(ctx context.Context, iface string) ([]stor
 		return nil, nil
 	}
 	out := []store.ASTUnit{}
-	seen := map[int64]bool{}
+	seen := map[int]bool{}
 
 	// 0. Попытка использовать LSP для точного поиска реализаций (если доступен)
 	if s.mgr != nil {
@@ -295,7 +295,7 @@ func (s *Service) FindImplementations(ctx context.Context, iface string) ([]stor
 						}
 						for _, cand := range candidates {
 							if cand.ParentID.Valid {
-								owner, err := s.st.GetASTUnit(ctx, cand.ParentID.Int64)
+								owner, err := s.st.GetASTUnit(ctx, int(cand.ParentID.Int64))
 								if err == nil && owner != nil {
 									// Для Go: struct или type. Для TS: class или interface.
 									isPotentialOwner := false
@@ -388,7 +388,7 @@ func (s *Service) FindCallers(ctx context.Context, function string) ([]store.AST
 	if err != nil {
 		return nil, err
 	}
-	seen := map[int64]bool{}
+	seen := map[int]bool{}
 	out := []store.ASTUnit{}
 
 	// 1. По ID определений
@@ -464,7 +464,7 @@ func (s *Service) FindCallees(ctx context.Context, function string) ([]store.AST
 	if err != nil {
 		return nil, err
 	}
-	seen := map[int64]bool{}
+	seen := map[int]bool{}
 	out := []store.ASTUnit{}
 	for _, d := range defs {
 		cs, err := s.g.Callees(ctx, d.ID)
@@ -524,7 +524,7 @@ func (s *Service) findCallable(ctx context.Context, name string) ([]store.ASTUni
 
 // SurroundingContext возвращает текст вокруг unit: его собственный body
 // плюс beforeLines/afterLines дополнительных строк за пределами.
-func (s *Service) SurroundingContext(ctx context.Context, id int64, beforeLines, afterLines int) (string, error) {
+func (s *Service) SurroundingContext(ctx context.Context, id int, beforeLines, afterLines int) (string, error) {
 	u, err := s.st.GetASTUnit(ctx, id)
 	if err != nil {
 		return "", err
@@ -552,7 +552,7 @@ func (s *Service) SurroundingContext(ctx context.Context, id int64, beforeLines,
 }
 
 // RelatedFiles — файлы, связанные с символом через import/call/reference.
-func (s *Service) RelatedFiles(ctx context.Context, id int64) ([]string, error) {
+func (s *Service) RelatedFiles(ctx context.Context, id int) ([]string, error) {
 	// 1. Симметричное окружение глубины 1 по основным рёбрам.
 	nb, err := s.g.ExpandNeighbors(ctx, id, 1, []string{graph.EdgeCall, graph.EdgeImport, graph.EdgeReference, graph.EdgeImplements, graph.EdgeExtends})
 	if err != nil {
@@ -579,7 +579,7 @@ func (s *Service) RelatedFiles(ctx context.Context, id int64) ([]string, error) 
 }
 
 // SimilarCode — делегирует SimilarSearcher (vector), если он подключён.
-func (s *Service) SimilarCode(ctx context.Context, id int64, limit int) ([]store.ASTUnit, error) {
+func (s *Service) SimilarCode(ctx context.Context, id int, limit int) ([]store.ASTUnit, error) {
 	if s.sim == nil {
 		return []store.ASTUnit{}, nil
 	}

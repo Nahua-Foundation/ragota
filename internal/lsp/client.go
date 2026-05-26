@@ -86,4 +86,13 @@ type Client struct {
 	// Флаги завершения.
 	closed atomic.Bool
 	dead   atomic.Bool
+
+	// callback для cleanup из Manager при readLoop exit.
+	// Устанавливается один раз через SetOnDead, вызывается из readLoop.
+	onDead func()
 }
+
+// SetOnDead устанавливает callback, который вызывается при обнаружении
+// смерти LSP-процесса (readLoop exit). используется Manager для
+// автоматического cleanup мёртвого клиента из кэша.
+func (c *Client) SetOnDead(fn func()) { c.onDead = fn }

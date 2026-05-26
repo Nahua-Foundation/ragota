@@ -62,7 +62,7 @@ type Vector struct {
 	code *embedder.Ollama // эмбеддер для коллекции кода (qwen3-embedding)
 	text *embedder.Ollama // эмбеддер для коллекции markdown/текста (nomic-embed-text)
 
-	bm25    bm25.Index // опционально; если nil — BM25 не пишется
+	bm25    atomic.Pointer[bm25.Index] // atomic для безопасного concurrent read/write
 	parser  *parser.Parser
 	chunker *chunker.Chunker
 	bus     *state.Bus
@@ -76,6 +76,8 @@ type Vector struct {
 	totalChunks  atomic.Int64
 	totalIndexed atomic.Int32
 	sem          chan struct{}
+	scanMu       sync.Mutex // guard against concurrent FullScan
+	scanning     bool
 }
 
 // preparedFile — промежуточное представление файла между сканером и
@@ -135,7 +137,16 @@ func (v *Vector) GetSemaphore() chan struct{} {
 
 // SetBM25 подключает Bleve-индекс к индексатору; если bm25 == nil —
 // лексический индекс не используется.
-func (v *Vector) SetBM25(idx bm25.Index) { v.bm25 = idx }
+func (v *Vector) SetBM25(idx bm25.Index) { v.bm25.Store(&idx) }
+
+// bm25Index возвращает текущий BM25 индекс (или nil).
+func (v *Vector) bm25Index() bm25.Index {
+	p := v.bm25.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
+}
 
 // SetRepoResolver подключает резолвер репозиториев для multi-repo
 // workspace. Если не вызван — поле `repo` в payload остаётся пустым.

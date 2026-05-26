@@ -38,123 +38,183 @@ func (s *SymbolServer) Build() *server.MCPServer {
 	)
 
 	// --- Symbol-aware ---
-	srv.AddTool(mcp.NewTool("sym.find_definition",
-		mcp.WithDescription("Find AST units that define the given symbol (by name or qualified name)."),
-		mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name, e.g. 'Foo.bar' or 'bar'.")),
-	), s.wrap("sym.find_definition", s.handleFindDefinition))
+	srv.AddTool(
+		mcp.NewTool("sym.find_definition",
+			mcp.WithDescription("Find AST units that define the given symbol (by name or qualified name)."),
+			mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name, e.g. 'Foo.bar' or 'bar'.")),
+		),
+		s.wrap("sym.find_definition", s.handleFindDefinition),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.find_references",
-		mcp.WithDescription("Find all references (edges) to the given symbol across the project."),
-		mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name.")),
-		mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
-	), s.wrap("sym.find_references", s.handleFindReferences))
+	srv.AddTool(
+		mcp.NewTool("sym.find_references",
+			mcp.WithDescription("Find all references (edges) to the given symbol across the project."),
+			mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name.")),
+			mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
+		),
+		s.wrap("sym.find_references", s.handleFindReferences),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.find_implementations",
-		mcp.WithDescription("Find concrete implementations of the given interface."),
-		mcp.WithString("interface", mcp.Required(), mcp.Description("Interface name or qualified name.")),
-		mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
-	), s.wrap("sym.find_implementations", s.handleFindImplementations))
+	srv.AddTool(
+		mcp.NewTool("sym.find_implementations",
+			mcp.WithDescription("Find concrete implementations of the given interface."),
+			mcp.WithString("interface", mcp.Required(), mcp.Description("Interface name or qualified name.")),
+			mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
+		),
+		s.wrap("sym.find_implementations", s.handleFindImplementations),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.find_callers",
-		mcp.WithDescription("Find functions/methods that call the given function."),
-		mcp.WithString("function", mcp.Required(), mcp.Description("Function name.")),
-		mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
-	), s.wrap("sym.find_callers", s.handleFindCallers))
+	srv.AddTool(
+		mcp.NewTool("sym.find_callers",
+			mcp.WithDescription("Find functions/methods that call the given function."),
+			mcp.WithString("function", mcp.Required(), mcp.Description("Function name.")),
+			mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
+		),
+		s.wrap("sym.find_callers", s.handleFindCallers),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.find_callees",
-		mcp.WithDescription("Find functions/methods called by the given function."),
-		mcp.WithString("function", mcp.Required(), mcp.Description("Function name.")),
-		mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
-	), s.wrap("sym.find_callees", s.handleFindCallees))
+	srv.AddTool(
+		mcp.NewTool("sym.find_callees",
+			mcp.WithDescription("Find functions/methods called by the given function."),
+			mcp.WithString("function", mcp.Required(), mcp.Description("Function name.")),
+			mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
+		),
+		s.wrap("sym.find_callees", s.handleFindCallees),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_execution_context",
-		mcp.WithDescription("Get a comprehensive execution context for a symbol (definition, callers, callees, references, related types, imports, important files)."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
-	), s.wrap("sym.get_execution_context", s.handleGetExecutionContext))
+	srv.AddTool(
+		mcp.NewTool("sym.get_execution_context",
+			mcp.WithDescription("Get a comprehensive execution context for a symbol (definition, callers, callees, references, related types, imports, important files)."),
+			mcp.WithNumber("symbol_id", mcp.Required(), mcp.Description("Symbol ID.")),
+		),
+		s.wrap("sym.get_execution_context", s.handleGetExecutionContext),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_symbol_summary",
-		mcp.WithDescription("Get a semantic summary of a symbol (purpose, role, importance) enriched by LLM."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
-	), s.wrap("sym.get_symbol_summary", s.handleGetSymbolSummary))
+	srv.AddTool(
+		mcp.NewTool("sym.get_symbol_summary",
+			mcp.WithDescription("Get a semantic summary of a symbol (purpose, role, importance) enriched by LLM."),
+			mcp.WithNumber("symbol_id", mcp.Required(), mcp.Description("Symbol ID.")),
+		),
+		s.wrap("sym.get_symbol_summary", s.handleGetSymbolSummary),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_file_intent",
-		mcp.WithDescription("Analyze the purpose and responsibilities of a source file."),
-		mcp.WithString("path", mcp.Required()),
-	), s.wrap("sym.get_file_intent", s.handleGetFileIntent))
+	srv.AddTool(
+		mcp.NewTool("sym.get_file_intent",
+			mcp.WithDescription("Analyze the purpose and responsibilities of a source file."),
+			mcp.WithString("path", mcp.Required(), mcp.Description("File path.")),
+		),
+		s.wrap("sym.get_file_intent", s.handleGetFileIntent),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_semantic_neighborhood",
-		mcp.WithDescription("Get a clustered view of a symbol's neighborhood (deterministic + LLM clustering). Requires a valid symbol_id (class, interface, method, function), not a module/file ID."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
-	), s.wrap("sym.get_semantic_neighborhood", s.handleGetSemanticNeighborhood))
+	srv.AddTool(
+		mcp.NewTool("sym.get_semantic_neighborhood",
+			mcp.WithDescription("Get a clustered view of a symbol's neighborhood (deterministic + LLM clustering). Requires a valid symbol_id (class, interface, method, function), not a module/file ID."),
+			mcp.WithNumber("symbol_id", mcp.Required(), mcp.Description("Symbol ID.")),
+		),
+		s.wrap("sym.get_semantic_neighborhood", s.handleGetSemanticNeighborhood),
+	)
 
 	// --- AST / structure retrieval ---
-	srv.AddTool(mcp.NewTool("sym.get_file_symbols",
-		mcp.WithDescription("List all AST units in a file, with parent_id for parent-child navigation."),
-		mcp.WithString("path", mcp.Required()),
-	), s.wrap("sym.get_file_symbols", s.handleGetFileSymbols))
+	srv.AddTool(
+		mcp.NewTool("sym.get_file_symbols",
+			mcp.WithDescription("List all AST units in a file, with parent_id for parent-child navigation."),
+			mcp.WithString("path", mcp.Required(), mcp.Description("File path.")),
+		),
+		s.wrap("sym.get_file_symbols", s.handleGetFileSymbols),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_symbol",
-		mcp.WithDescription("Get a single AST unit by its id."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
-	), s.wrap("sym.get_symbol", s.handleGetSymbol))
+	srv.AddTool(
+		mcp.NewTool("sym.get_symbol",
+			mcp.WithDescription("Get a single AST unit by its id."),
+			mcp.WithNumber("symbol_id", mcp.Required(), mcp.Description("Symbol ID.")),
+		),
+		s.wrap("sym.get_symbol", s.handleGetSymbol),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_parent",
-		mcp.WithDescription("Get the parent AST unit of the given symbol id."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
-	), s.wrap("sym.get_parent", s.handleGetParent))
+	srv.AddTool(
+		mcp.NewTool("sym.get_parent",
+			mcp.WithDescription("Get the parent AST unit of the given symbol id."),
+			mcp.WithNumber("symbol_id", mcp.Required(), mcp.Description("Symbol ID.")),
+		),
+		s.wrap("sym.get_parent", s.handleGetParent),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_children",
-		mcp.WithDescription("Get direct children AST units of the given symbol id."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
-	), s.wrap("sym.get_children", s.handleGetChildren))
+	srv.AddTool(
+		mcp.NewTool("sym.get_children",
+			mcp.WithDescription("Get direct children AST units of the given symbol id."),
+			mcp.WithNumber("symbol_id", mcp.Required(), mcp.Description("Symbol ID.")),
+		),
+		s.wrap("sym.get_children", s.handleGetChildren),
+	)
 
 	// --- Graph retrieval ---
-	srv.AddTool(mcp.NewTool("sym.expand_neighbors",
-		mcp.WithDescription("Expand the code graph around node_id up to the given depth."),
-		mcp.WithNumber("node_id", mcp.Required()),
-		mcp.WithNumber("depth", mcp.DefaultNumber(1)),
-		mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty. By default = repo of node_id.")),
-		mcp.WithString("kinds", mcp.Description("Comma-separated edge kinds: call,import,implements,extends,reference. Empty = all.")),
-	), s.wrap("sym.expand_neighbors", s.handleExpandNeighbors))
+	srv.AddTool(
+		mcp.NewTool("sym.expand_neighbors",
+			mcp.WithDescription("Expand the code graph around node_id up to the given depth."),
+			mcp.WithNumber("node_id", mcp.Required(), mcp.Description("Node ID.")),
+			mcp.WithNumber("depth", mcp.Description("Depth (default 1).")),
+			mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty. By default = repo of node_id.")),
+			mcp.WithString("kinds", mcp.Description("Comma-separated edge kinds: call,import,implements,extends,reference. Empty = all.")),
+		),
+		s.wrap("sym.expand_neighbors", s.handleExpandNeighbors),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_dependency_graph",
-		mcp.WithDescription("Get the import-dependency graph around a module/file. For Go, a full or relative path is required (filenames are not enough)."),
-		mcp.WithString("module", mcp.Required()),
-		mcp.WithNumber("depth", mcp.DefaultNumber(2)),
-	), s.wrap("sym.get_dependency_graph", s.handleDependencyGraph))
+	srv.AddTool(
+		mcp.NewTool("sym.get_dependency_graph",
+			mcp.WithDescription("Get the import-dependency graph around a module/file. For Go, a full or relative path is required (filenames are not enough)."),
+			mcp.WithString("module", mcp.Required(), mcp.Description("Module path.")),
+			mcp.WithNumber("depth", mcp.Description("Depth (default 2).")),
+		),
+		s.wrap("sym.get_dependency_graph", s.handleDependencyGraph),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_call_graph",
-		mcp.WithDescription("Get the call graph around a function/method. Accepts either `function` (name) or `symbol_id`."),
-		mcp.WithString("function", mcp.Description("Function/method name (e.g. 'Foo.bar' or 'bar').")),
-		mcp.WithNumber("symbol_id", mcp.Description("Symbol ID of the function/method (alternative to `function`).")),
-		mcp.WithNumber("depth", mcp.DefaultNumber(2)),
-	), s.wrap("sym.get_call_graph", s.handleCallGraph))
+	srv.AddTool(
+		mcp.NewTool("sym.get_call_graph",
+			mcp.WithDescription("Get the call graph around a function/method. Accepts either `function` (name) or `symbol_id`."),
+			mcp.WithString("function", mcp.Description("Function/method name (e.g. 'Foo.bar' or 'bar').")),
+			mcp.WithNumber("symbol_id", mcp.Description("Symbol ID of the function/method (alternative to `function`).")),
+			mcp.WithNumber("depth", mcp.Description("Depth (default 2).")),
+		),
+		s.wrap("sym.get_call_graph", s.handleCallGraph),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.traverse_graph",
-		mcp.WithDescription("Perform semantic navigation by walking edges from a starting symbol."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
-		mcp.WithString("edge_types", mcp.Description("Comma-separated edge kinds: call,import,implements,extends,reference. Empty = all.")),
-		mcp.WithNumber("depth", mcp.DefaultNumber(1)),
-	), s.wrap("sym.traverse_graph", s.handleTraverseGraph))
+	srv.AddTool(
+		mcp.NewTool("sym.traverse_graph",
+			mcp.WithDescription("Perform semantic navigation by walking edges from a starting symbol."),
+			mcp.WithNumber("symbol_id", mcp.Required(), mcp.Description("Symbol ID.")),
+			mcp.WithString("edge_types", mcp.Description("Comma-separated edge kinds: call,import,implements,extends,reference. Empty = all.")),
+			mcp.WithNumber("depth", mcp.Description("Depth (default 1).")),
+		),
+		s.wrap("sym.traverse_graph", s.handleTraverseGraph),
+	)
 
 	// --- Context retrieval ---
-	srv.AddTool(mcp.NewTool("sym.get_surrounding_context",
-		mcp.WithDescription("Return source-code context around a symbol (its parent body + adjacent units)."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
-		mcp.WithNumber("before_lines", mcp.DefaultNumber(0)),
-		mcp.WithNumber("after_lines", mcp.DefaultNumber(0)),
-	), s.wrap("sym.get_surrounding_context", s.handleSurroundingContext))
+	srv.AddTool(
+		mcp.NewTool("sym.get_surrounding_context",
+			mcp.WithDescription("Return source-code context around a symbol (its parent body + adjacent units)."),
+			mcp.WithNumber("symbol_id", mcp.Required(), mcp.Description("Symbol ID.")),
+			mcp.WithNumber("before_lines", mcp.Description("Lines before (default 0).")),
+			mcp.WithNumber("after_lines", mcp.Description("Lines after (default 0).")),
+		),
+		s.wrap("sym.get_surrounding_context", s.handleSurroundingContext),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_related_files",
-		mcp.WithDescription("Return files related to the symbol via import/call/reference edges."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
-	), s.wrap("sym.get_related_files", s.handleRelatedFiles))
+	srv.AddTool(
+		mcp.NewTool("sym.get_related_files",
+			mcp.WithDescription("Return files related to the symbol via import/call/reference edges."),
+			mcp.WithNumber("symbol_id", mcp.Required(), mcp.Description("Symbol ID.")),
+		),
+		s.wrap("sym.get_related_files", s.handleRelatedFiles),
+	)
 
-	srv.AddTool(mcp.NewTool("sym.get_similar_code",
-		mcp.WithDescription("Return AST units with embeddings similar to the given symbol."),
-		mcp.WithNumber("symbol_id", mcp.Required()),
-		mcp.WithNumber("limit", mcp.DefaultNumber(10)),
-	), s.wrap("sym.get_similar_code", s.handleSimilarCode))
+	srv.AddTool(
+		mcp.NewTool("sym.get_similar_code",
+			mcp.WithDescription("Return AST units with embeddings similar to the given symbol."),
+			mcp.WithNumber("symbol_id", mcp.Required(), mcp.Description("Symbol ID.")),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 10).")),
+		),
+		s.wrap("sym.get_similar_code", s.handleSimilarCode),
+	)
 
 	return srv
 }
@@ -261,7 +321,7 @@ func (s *SymbolServer) handleGetFileSymbols(ctx context.Context, req mcp.CallToo
 }
 
 func (s *SymbolServer) handleGetSymbol(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("symbol_id", 0))
+	id := req.GetInt("symbol_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}
@@ -273,7 +333,7 @@ func (s *SymbolServer) handleGetSymbol(ctx context.Context, req mcp.CallToolRequ
 }
 
 func (s *SymbolServer) handleGetParent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("symbol_id", 0))
+	id := req.GetInt("symbol_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}
@@ -285,7 +345,7 @@ func (s *SymbolServer) handleGetParent(ctx context.Context, req mcp.CallToolRequ
 }
 
 func (s *SymbolServer) handleGetChildren(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("symbol_id", 0))
+	id := req.GetInt("symbol_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}
@@ -297,11 +357,11 @@ func (s *SymbolServer) handleGetChildren(ctx context.Context, req mcp.CallToolRe
 }
 
 func (s *SymbolServer) handleExpandNeighbors(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("node_id", 0))
+	id := req.GetInt("node_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("node_id is required"), nil
 	}
-	depth := int(req.GetFloat("depth", 1))
+	depth := req.GetInt("depth", 1)
 	kindsStr := req.GetString("kinds", "")
 	var kinds []string
 	if kindsStr != "" {
@@ -339,7 +399,7 @@ func (s *SymbolServer) handleDependencyGraph(ctx context.Context, req mcp.CallTo
 	if module == "" {
 		return mcp.NewToolResultError("module is required"), nil
 	}
-	depth := int(req.GetFloat("depth", 2))
+	depth := req.GetInt("depth", 2)
 	n, err := s.gr.DependencyGraph(ctx, module, depth)
 	if err != nil {
 		return nil, err
@@ -348,7 +408,7 @@ func (s *SymbolServer) handleDependencyGraph(ctx context.Context, req mcp.CallTo
 }
 
 func (s *SymbolServer) handleCallGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	depth := int(req.GetFloat("depth", 2))
+	depth := req.GetInt("depth", 2)
 
 	// Repo-фильтр: явный параметр в приоритете, иначе вычисляется из репы стартового узла.
 	repoRaw := req.GetString("repo", "")
@@ -356,7 +416,7 @@ func (s *SymbolServer) handleCallGraph(ctx context.Context, req mcp.CallToolRequ
 	repoFilter := parseRepoParam(repoRaw)
 
 	// Вариант 1: явный symbol_id.
-	if id := int64(req.GetFloat("symbol_id", 0)); id > 0 {
+	if id := req.GetInt("symbol_id", 0); id > 0 {
 		n, err := s.gr.CallGraph(ctx, id, depth)
 		if err != nil {
 			return nil, err
@@ -398,8 +458,8 @@ func (s *SymbolServer) handleCallGraph(ctx context.Context, req mcp.CallToolRequ
 		}
 	}
 	// Отфильтруем callable (function/method) и объединим окрестности.
-	seenNodes := map[int64]bool{}
-	seenEdges := map[int64]bool{}
+	seenNodes := map[int]bool{}
+	seenEdges := map[int]bool{}
 	merged := &graph.Neighborhood{}
 	for _, d := range defs {
 		if d.Kind != "function" && d.Kind != "method" {
@@ -431,11 +491,11 @@ func (s *SymbolServer) handleCallGraph(ctx context.Context, req mcp.CallToolRequ
 }
 
 func (s *SymbolServer) handleTraverseGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("symbol_id", 0))
+	id := req.GetInt("symbol_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}
-	depth := int(req.GetFloat("depth", 1))
+	depth := req.GetInt("depth", 1)
 	kindsStr := req.GetString("edge_types", "")
 	var kinds []string
 	if kindsStr != "" {
@@ -454,12 +514,12 @@ func (s *SymbolServer) handleTraverseGraph(ctx context.Context, req mcp.CallTool
 }
 
 func (s *SymbolServer) handleSurroundingContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("symbol_id", 0))
+	id := req.GetInt("symbol_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}
-	before := int(req.GetFloat("before_lines", 0))
-	after := int(req.GetFloat("after_lines", 0))
+	before := req.GetInt("before_lines", 0)
+	after := req.GetInt("after_lines", 0)
 	txt, err := s.syms.SurroundingContext(ctx, id, before, after)
 	if err != nil {
 		return nil, err
@@ -468,7 +528,7 @@ func (s *SymbolServer) handleSurroundingContext(ctx context.Context, req mcp.Cal
 }
 
 func (s *SymbolServer) handleRelatedFiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("symbol_id", 0))
+	id := req.GetInt("symbol_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}
@@ -480,11 +540,11 @@ func (s *SymbolServer) handleRelatedFiles(ctx context.Context, req mcp.CallToolR
 }
 
 func (s *SymbolServer) handleSimilarCode(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("symbol_id", 0))
+	id := req.GetInt("symbol_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}
-	limit := int(req.GetFloat("limit", 10))
+	limit := req.GetInt("limit", 10)
 	us, err := s.syms.SimilarCode(ctx, id, limit)
 	if err != nil {
 		return nil, err
@@ -496,7 +556,7 @@ func (s *SymbolServer) handleSimilarCode(ctx context.Context, req mcp.CallToolRe
 }
 
 func (s *SymbolServer) handleGetExecutionContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("symbol_id", 0))
+	id := req.GetInt("symbol_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}
@@ -508,7 +568,7 @@ func (s *SymbolServer) handleGetExecutionContext(ctx context.Context, req mcp.Ca
 }
 
 func (s *SymbolServer) handleGetSymbolSummary(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("symbol_id", 0))
+	id := req.GetInt("symbol_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}
@@ -536,7 +596,7 @@ func (s *SymbolServer) handleGetFileIntent(ctx context.Context, req mcp.CallTool
 }
 
 func (s *SymbolServer) handleGetSemanticNeighborhood(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id := int64(req.GetFloat("symbol_id", 0))
+	id := req.GetInt("symbol_id", 0)
 	if id <= 0 {
 		return mcp.NewToolResultError("symbol_id is required"), nil
 	}

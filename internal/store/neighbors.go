@@ -9,13 +9,13 @@ import "context"
 // ExpandNeighbors — BFS вокруг nodeID с глубиной depth. kinds — фильтр
 // рёбер; пусто = все. Возвращает множества узлов и рёбер, без дубликатов.
 // Обход и по исходящим, и по входящим рёбрам — для симметричного «contextual neighbourhood».
-func (s *SQLite) ExpandNeighbors(ctx context.Context, nodeID int64, depth int, kinds []string) ([]ASTUnit, []Edge, error) {
+func (s *SQLite) ExpandNeighbors(ctx context.Context, nodeID int, depth int, kinds []string) ([]ASTUnit, []Edge, error) {
 	if depth <= 0 {
 		depth = 1
 	}
-	visited := map[int64]bool{nodeID: true}
-	seenEdges := map[int64]bool{}
-	frontier := []int64{nodeID}
+	visited := map[int]bool{nodeID: true}
+	seenEdges := map[int]bool{}
+	frontier := []int{nodeID}
 	allNodes := []ASTUnit{}
 	allEdges := []Edge{}
 
@@ -28,7 +28,7 @@ func (s *SQLite) ExpandNeighbors(ctx context.Context, nodeID int64, depth int, k
 	}
 
 	for d := 0; d < depth && len(frontier) > 0; d++ {
-		var next []int64
+		var next []int
 		for _, id := range frontier {
 			outE, err := s.edgesAround(ctx, id, kinds)
 			if err != nil {
@@ -42,7 +42,7 @@ func (s *SQLite) ExpandNeighbors(ctx context.Context, nodeID int64, depth int, k
 					seenEdges[e.ID] = true
 				}
 				allEdges = append(allEdges, e)
-				var other int64
+				var other int
 				if e.SrcID == id {
 					other = e.DstID
 				} else {
@@ -68,13 +68,13 @@ func (s *SQLite) ExpandNeighbors(ctx context.Context, nodeID int64, depth int, k
 }
 
 // TraverseGraph — направленный обход от startID по исходящим рёбрам.
-func (s *SQLite) TraverseGraph(ctx context.Context, startID int64, depth int, kinds []string) ([]ASTUnit, []Edge, error) {
+func (s *SQLite) TraverseGraph(ctx context.Context, startID int, depth int, kinds []string) ([]ASTUnit, []Edge, error) {
 	if depth <= 0 {
 		depth = 1
 	}
-	visited := map[int64]bool{startID: true}
-	seenEdges := map[int64]bool{}
-	frontier := []int64{startID}
+	visited := map[int]bool{startID: true}
+	seenEdges := map[int]bool{}
+	frontier := []int{startID}
 	allNodes := []ASTUnit{}
 	allEdges := []Edge{}
 
@@ -87,7 +87,7 @@ func (s *SQLite) TraverseGraph(ctx context.Context, startID int64, depth int, ki
 	}
 
 	for d := 0; d < depth && len(frontier) > 0; d++ {
-		var next []int64
+		var next []int
 		for _, id := range frontier {
 			// Только исходящие ребра
 			es, err := s.EdgesFrom(ctx, id, "")
@@ -137,7 +137,7 @@ func (s *SQLite) TraverseGraph(ctx context.Context, startID int64, depth int, ki
 	return allNodes, allEdges, nil
 }
 
-func (s *SQLite) edgesAround(ctx context.Context, id int64, kinds []string) ([]Edge, error) {
+func (s *SQLite) edgesAround(ctx context.Context, id int, kinds []string) ([]Edge, error) {
 	q := `SELECT ` + edgeColumns + ` FROM edges WHERE (src_id = ? OR dst_id = ?)`
 	args := []any{id, id}
 	if len(kinds) > 0 {

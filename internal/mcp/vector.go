@@ -46,54 +46,75 @@ func (s *VectorServer) Build() *server.MCPServer {
 		server.WithToolCapabilities(false),
 	)
 
-	srv.AddTool(mcp.NewTool("vec.search",
-		mcp.WithDescription("Hybrid search over project code (alias for vec.search_hybrid). repo: '*' or omitted = all repos; pass a name or JSON array of names to scope."),
-		mcp.WithString("query", mcp.Required()),
-		mcp.WithNumber("limit", mcp.DefaultNumber(10)),
-		mcp.WithString("language"),
-		mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
-	), s.wrap("vec.search", s.handleSearchHybrid))
+	srv.AddTool(
+		mcp.NewTool("vec.search",
+			mcp.WithDescription("Hybrid search over project code (alias for vec.search_hybrid). repo: '*' or omitted = all repos; pass a name or JSON array of names to scope."),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Search query.")),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 10).")),
+			mcp.WithString("language", mcp.Description("Language filter.")),
+			mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
+		),
+		s.wrap("vec.search", s.handleSearchHybrid),
+	)
 
-	srv.AddTool(mcp.NewTool("vec.search_semantic",
-		mcp.WithDescription("Vector-only semantic search (qwen3-embedding for code, nomic-embed-text for markdown). Multi-repo: default scope = all repos."),
-		mcp.WithString("query", mcp.Required()),
-		mcp.WithNumber("top_k", mcp.DefaultNumber(10)),
-		mcp.WithString("language"),
-		mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
-	), s.wrap("vec.search_semantic", s.handleSearch))
+	srv.AddTool(
+		mcp.NewTool("vec.search_semantic",
+			mcp.WithDescription("Vector-only semantic search (qwen3-embedding for code, nomic-embed-text for markdown). Multi-repo: default scope = all repos."),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Search query.")),
+			mcp.WithNumber("top_k", mcp.Description("Max results (default 10).")),
+			mcp.WithString("language", mcp.Description("Language filter.")),
+			mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
+		),
+		s.wrap("vec.search_semantic", s.handleSearch),
+	)
 
-	srv.AddTool(mcp.NewTool("vec.search_keyword",
-		mcp.WithDescription("BM25 lexical search (Bleve). Multi-repo: default scope = all repos."),
-		mcp.WithString("query", mcp.Required()),
-		mcp.WithNumber("top_k", mcp.DefaultNumber(10)),
-		mcp.WithString("language"),
-		mcp.WithString("kind", mcp.Description("Optional AST kind filter: function/class/...")),
-		mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
-	), s.wrap("vec.search_keyword", s.handleSearchKeyword))
+	srv.AddTool(
+		mcp.NewTool("vec.search_keyword",
+			mcp.WithDescription("BM25 lexical search (Bleve). Multi-repo: default scope = all repos."),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Search query.")),
+			mcp.WithNumber("top_k", mcp.Description("Max results (default 10).")),
+			mcp.WithString("language", mcp.Description("Language filter.")),
+			mcp.WithString("kind", mcp.Description("Optional AST kind filter: function/class/...")),
+			mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
+		),
+		s.wrap("vec.search_keyword", s.handleSearchKeyword),
+	)
 
-	srv.AddTool(mcp.NewTool("vec.search_hybrid",
-		mcp.WithDescription("Hybrid retrieval: vector + BM25 merged via RRF (or weighted sum). Multi-repo: default scope = all repos."),
-		mcp.WithString("query", mcp.Required()),
-		mcp.WithNumber("top_k", mcp.DefaultNumber(10)),
-		mcp.WithString("language"),
-		mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
-	), s.wrap("vec.search_hybrid", s.handleSearchHybrid))
+	srv.AddTool(
+		mcp.NewTool("vec.search_hybrid",
+			mcp.WithDescription("Hybrid retrieval: vector + BM25 merged via RRF (or weighted sum). Multi-repo: default scope = all repos."),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Search query.")),
+			mcp.WithNumber("top_k", mcp.Description("Max results (default 10).")),
+			mcp.WithString("language", mcp.Description("Language filter.")),
+			mcp.WithString("repo", mcp.Description("Repo scope: empty/'*' = all; 'name' or JSON array ['a','b'].")),
+		),
+		s.wrap("vec.search_hybrid", s.handleSearchHybrid),
+	)
 
-	srv.AddTool(mcp.NewTool("vec.rerank",
-		mcp.WithDescription("Rerank candidates using BGE Reranker (Ollama). Falls back to identity ordering on unavailability."),
-		mcp.WithString("query", mcp.Required()),
-		mcp.WithString("candidates", mcp.Required(), mcp.Description("JSON array of candidates: [{id, content, score?, path?, language?, kind?, symbol?}]")),
-		mcp.WithNumber("top_n", mcp.DefaultNumber(20)),
-	), s.wrap("vec.rerank", s.handleRerank))
+	srv.AddTool(
+		mcp.NewTool("vec.rerank",
+			mcp.WithDescription("Rerank candidates using BGE Reranker (Ollama). Falls back to identity ordering on unavailability."),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Search query.")),
+			mcp.WithString("candidates", mcp.Required(), mcp.Description("JSON array of candidates: [{id, content, score?, path?, language?, kind?, symbol?}]")),
+			mcp.WithNumber("top_n", mcp.Description("Max results (default 20).")),
+		),
+		s.wrap("vec.rerank", s.handleRerank),
+	)
 
-	srv.AddTool(mcp.NewTool("vec.reindex",
-		mcp.WithDescription("Re-index a file (or full scan when path is empty)."),
-		mcp.WithString("path"),
-	), s.wrap("vec.reindex", s.handleReindex))
+	srv.AddTool(
+		mcp.NewTool("vec.reindex",
+			mcp.WithDescription("Re-index a file (or full scan when path is empty)."),
+			mcp.WithString("path", mcp.Description("Path to file. Empty = full scan.")),
+		),
+		s.wrap("vec.reindex", s.handleReindex),
+	)
 
-	srv.AddTool(mcp.NewTool("vec.count",
-		mcp.WithDescription("Return number of indexed chunks in Qdrant + BM25."),
-	), s.wrap("vec.count", s.handleCount))
+	srv.AddTool(
+		mcp.NewTool("vec.count",
+			mcp.WithDescription("Return number of indexed chunks in Qdrant + BM25."),
+		),
+		s.wrap("vec.count", s.handleCount),
+	)
 
 	return srv
 }
@@ -116,9 +137,9 @@ func (s *VectorServer) handleSearch(ctx context.Context, req mcp.CallToolRequest
 	if query == "" {
 		return mcp.NewToolResultError("query is required"), nil
 	}
-	limit := int(req.GetFloat("limit", 0))
+	limit := req.GetInt("limit", 0)
 	if limit <= 0 {
-		limit = int(req.GetFloat("top_k", 10))
+		limit = req.GetInt("top_k", 10)
 	}
 	if limit <= 0 {
 		limit = 10
@@ -145,7 +166,7 @@ func (s *VectorServer) handleSearchKeyword(ctx context.Context, req mcp.CallTool
 	if s.bm25 == nil {
 		return mcp.NewToolResultError("bm25 index is not configured"), nil
 	}
-	limit := int(req.GetFloat("top_k", 10))
+	limit := req.GetInt("top_k", 10)
 	hits, err := s.bm25.Search(ctx, bm25.Query{
 		Text:     query,
 		Language: req.GetString("language", ""),
@@ -164,9 +185,9 @@ func (s *VectorServer) handleSearchHybrid(ctx context.Context, req mcp.CallToolR
 	if query == "" {
 		return mcp.NewToolResultError("query is required"), nil
 	}
-	limit := int(req.GetFloat("top_k", 0))
+	limit := req.GetInt("top_k", 0)
 	if limit <= 0 {
-		limit = int(req.GetFloat("limit", 10))
+		limit = req.GetInt("limit", 10)
 	}
 	filter := map[string]any{}
 	if lang := req.GetString("language", ""); lang != "" {
@@ -211,7 +232,7 @@ func (s *VectorServer) handleRerank(ctx context.Context, req mcp.CallToolRequest
 	if err := json.Unmarshal([]byte(raw), &input); err != nil {
 		return mcp.NewToolResultError("invalid candidates JSON: " + err.Error()), nil
 	}
-	topN := int(req.GetFloat("top_n", float64(s.cfg.Rerank.TopN)))
+	topN := req.GetInt("top_n", s.cfg.Rerank.TopN)
 	if s.rer == nil {
 		// Без подключённого реранкера ведём себя как graceful identity.
 		out := make([]rerank.Scored, 0, len(input))

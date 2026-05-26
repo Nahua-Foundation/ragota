@@ -57,6 +57,17 @@ func (v *Vector) Search(ctx context.Context, query string, limit int, filter map
 		all = append(all, hits...)
 	}
 
+	// dedup по ID — один и тот же chunk мог попасть из обеих коллекций
+	seenIDs := make(map[string]struct{}, len(all))
+	deduped := make([]qdrant.SearchHit, 0, len(all))
+	for _, h := range all {
+		if _, ok := seenIDs[h.ID]; !ok {
+			seenIDs[h.ID] = struct{}{}
+			deduped = append(deduped, h)
+		}
+	}
+	all = deduped
+
 	// Сортируем по score (Qdrant отдаёт по убыванию для cosine — это уже так).
 	// Стабильно объединяем и обрезаем.
 	if len(all) > limit {
@@ -115,7 +126,7 @@ func repoMatchCondition(val any) map[string]any {
 		names := make([]string, 0, len(v))
 		for _, s := range v {
 			if s == "" || s == "*" {
-				return nil
+				continue // skip "*" вместо abort всего фильтра
 			}
 			names = append(names, s)
 		}
@@ -131,7 +142,7 @@ func repoMatchCondition(val any) map[string]any {
 		for _, x := range v {
 			s, _ := x.(string)
 			if s == "" || s == "*" {
-				return nil
+				continue // skip "*" вместо abort всего фильтра
 			}
 			names = append(names, s)
 		}
@@ -182,7 +193,7 @@ func (v *Vector) SimilarToUnit(ctx context.Context, u store.ASTUnit, limit int) 
 		return nil, err
 	}
 	out := make([]store.ASTUnit, 0, limit)
-	seen := map[int64]bool{u.ID: true}
+	seen := map[int]struct{}{u.ID: {}}
 	for _, h := range hits {
 		path, _ := h.Payload["file"].(string)
 		if path == "" {
@@ -199,7 +210,10 @@ func (v *Vector) SimilarToUnit(ctx context.Context, u store.ASTUnit, limit int) 
 		var best *store.ASTUnit
 		for i := range units {
 			cu := units[i]
-			if cu.Kind == "module" || seen[cu.ID] {
+			if cu.Kind == "module" {
+				continue
+			}
+			if _, ok := seen[cu.ID]; ok {
 				continue
 			}
 			// Берём unit, чей диапазон строк пересекается с чанком.
@@ -214,7 +228,7 @@ func (v *Vector) SimilarToUnit(ctx context.Context, u store.ASTUnit, limit int) 
 			}
 		}
 		if best != nil {
-			seen[best.ID] = true
+			seen[best.ID] = struct{}{}
 			out = append(out, *best)
 			if len(out) >= limit {
 				break

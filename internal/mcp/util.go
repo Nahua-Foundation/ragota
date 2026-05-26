@@ -11,7 +11,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// parseRepoParam парсит MCP-параметр `repo` и возвращает значение,
+// parseRepoParam парсит MCP-параметр `repo` и возвращает значение, и возвращает значение,
 // пригодное для index.buildFilter:
 //
 //   - "" или "*"            — nil (фильтр не применяется);

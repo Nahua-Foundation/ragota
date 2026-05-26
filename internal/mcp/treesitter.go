@@ -47,7 +47,7 @@ func (s *TreeSitterServer) Build() *server.MCPServer {
 			mcp.WithString("kind", mcp.Description("Filter by kind: function, method, class, interface, type, enum, var, const. Go-specific: 'function' finds only functions, 'method' finds only methods.")),
 			mcp.WithString("language", mcp.Description("Filter by language: go, typescript, javascript, python, java.")),
 			mcp.WithString("repo", mcp.Description("Repo filter: name | JSON-array | CSV | '*'/empty (all repos).")),
-			mcp.WithNumber("limit", mcp.Description("Max results (default 50)."), mcp.DefaultNumber(50)),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 50).")),
 		),
 		s.toolWrap("ts.search_symbols", s.handleSearch),
 	)
@@ -100,7 +100,7 @@ func (s *TreeSitterServer) handleSearch(ctx context.Context, req mcp.CallToolReq
 	kind := req.GetString("kind", "")
 	language := req.GetString("language", "")
 	repo := req.GetString("repo", "")
-	limit := int(req.GetFloat("limit", 50))
+	limit := req.GetInt("limit", 50)
 
 	syms, err := s.st.FindASTUnits(ctx, query, kind, language, repo, limit)
 	if err != nil {

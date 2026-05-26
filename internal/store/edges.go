@@ -188,7 +188,7 @@ func scanEdges(rows *sql.Rows) ([]Edge, error) {
 const edgeColumns = `id, repo, src_id, dst_id, kind, dst_name, file_path, line`
 
 // EdgesFrom возвращает все исходящие рёбра из srcID. kind="" — без фильтра.
-func (s *SQLite) EdgesFrom(ctx context.Context, srcID int64, kind string) ([]Edge, error) {
+func (s *SQLite) EdgesFrom(ctx context.Context, srcID int, kind string) ([]Edge, error) {
 	var (
 		rows *sql.Rows
 		err  error
@@ -205,7 +205,7 @@ func (s *SQLite) EdgesFrom(ctx context.Context, srcID int64, kind string) ([]Edg
 }
 
 // EdgesTo возвращает все входящие рёбра в dstID. kind="" — без фильтра.
-func (s *SQLite) EdgesTo(ctx context.Context, dstID int64, kind string) ([]Edge, error) {
+func (s *SQLite) EdgesTo(ctx context.Context, dstID int, kind string) ([]Edge, error) {
 	var (
 		rows *sql.Rows
 		err  error

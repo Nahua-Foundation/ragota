@@ -38,12 +38,12 @@ func TestImplementation_JS(t *testing.T) {
 	derivedFile := filepath.Join(testProjectRoot, "lib/derived.js")
 
 	contentBase, _ := os.ReadFile(baseFile)
-	if err := client.DidOpen(baseFile, "javascript", string(contentBase)); err != nil {
+	if err := client.DidOpen(context.Background(), baseFile, "javascript", string(contentBase)); err != nil {
 		t.Fatalf("DidOpen base: %v", err)
 	}
 
 	contentDerived, _ := os.ReadFile(derivedFile)
-	if err := client.DidOpen(derivedFile, "javascript", string(contentDerived)); err != nil {
+	if err := client.DidOpen(context.Background(), derivedFile, "javascript", string(contentDerived)); err != nil {
 		t.Fatalf("DidOpen derived: %v", err)
 	}
 
@@ -100,7 +100,7 @@ class Derived(Base):
 	}
 	defer client.Close()
 
-	if err := client.DidOpen(pyFile, "python", content); err != nil {
+	if err := client.DidOpen(context.Background(), pyFile, "python", content); err != nil {
 		t.Fatalf("DidOpen: %v", err)
 	}
 
@@ -144,7 +144,7 @@ func TestLSP_Go(t *testing.T) {
 
 	mainFile := filepath.Join(testProjectRoot, "main.go")
 	content, _ := os.ReadFile(mainFile)
-	if err := client.DidOpen(mainFile, "go", string(content)); err != nil {
+	if err := client.DidOpen(context.Background(), mainFile, "go", string(content)); err != nil {
 		t.Fatalf("DidOpen: %v", err)
 	}
 
@@ -195,7 +195,7 @@ func TestLSP_Java(t *testing.T) {
 
 	mainFile := filepath.Join(testProjectRoot, "Main.java")
 	content, _ := os.ReadFile(mainFile)
-	if err := client.DidOpen(mainFile, "java", string(content)); err != nil {
+	if err := client.DidOpen(context.Background(), mainFile, "java", string(content)); err != nil {
 		t.Fatalf("DidOpen: %v", err)
 	}
 

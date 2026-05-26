@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +13,9 @@ import (
 // как сигнал готовности первичного анализа файла LSP-сервером.
 
 // DidOpen уведомляет LSP-сервер о содержимом файла.
-// Отправляет didOpen только если файл ещё не открыт; если уже открыт и
-// содержимое отличается — отправляет didChange (full-sync, упрощённо).
-func (c *Client) DidOpen(path, languageID, text string) error {
+// принимает context для отмены ожидания diagnostics.
+// при ошибке или отмене cleaned up openedFiles entry.
+func (c *Client) DidOpen(ctx context.Context, path, languageID, text string) error {
 	c.mu.Lock()
 	old, exists := c.openedFiles[path]
 	if exists && old == text {
@@ -57,6 +58,11 @@ func (c *Client) DidOpen(path, languageID, text string) error {
 	}
 
 	if err := c.Notify(method, params); err != nil {
+		// cleanup openedFiles on failure
+		c.mu.Lock()
+		delete(c.openedFiles, path)
+		delete(c.openedVers, path)
+		c.mu.Unlock()
 		return err
 	}
 	// Уведомляем LSP сервер о новом файле в workspace — это заставляет gopls/jdtls
@@ -86,7 +92,15 @@ func (c *Client) DidOpen(path, languageID, text string) error {
 		case "go":
 			timeout = 5 * time.Second // gopls нужно время на анализ workspace
 		}
-		c.waitForDiagnostics(path, timeout)
+		// используем context для отмены
+		if !c.waitForDiagnosticsCtx(ctx, path, timeout) {
+			// context cancelled — cleanup
+			c.mu.Lock()
+			delete(c.openedFiles, path)
+			delete(c.openedVers, path)
+			c.mu.Unlock()
+			return ctx.Err()
+		}
 	}
 	return nil
 }
@@ -119,6 +133,41 @@ func (c *Client) waitForDiagnostics(path string, timeout time.Duration) {
 			lspDebug("LSP %s: waitForDiagnostics TIMEOUT: path=%q after %v (no publishDiagnostics received)\n",
 				c.Language, path, elapsed)
 			return
+		}
+	}
+}
+
+// waitForDiagnosticsCtx — как waitForDiagnostics, но также реагирует на
+// отмену context. возвращает true при успехе, false при cancel/timeout.
+func (c *Client) waitForDiagnosticsCtx(ctx context.Context, path string, timeout time.Duration) bool {
+	if timeout <= 0 {
+		return true
+	}
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	started := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			lspDebug("LSP %s: waitForDiagnosticsCtx CANCELLED: path=%q after %v\n",
+				c.Language, path, time.Since(started))
+			return false
+		case uriPath := <-c.diagnosticsReady:
+			if samePath(uriPath, path) {
+				elapsed := time.Since(started)
+				lspDebug("LSP %s: waitForDiagnosticsCtx DONE: path=%q elapsed=%v\n",
+					c.Language, path, elapsed)
+				return true
+			}
+		case <-deadline.C:
+			elapsed := time.Since(started)
+			lspDebug("LSP %s: waitForDiagnosticsCtx TIMEOUT: path=%q after %v (no publishDiagnostics received)\n",
+				c.Language, path, elapsed)
+			return true // timeout — не ошибка, продолжаем
 		}
 	}
 }

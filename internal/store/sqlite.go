@@ -7,7 +7,11 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"ragota/internal/logger"
 
 	_ "modernc.org/sqlite"
 )
@@ -45,11 +49,11 @@ type SQLite struct {
 
 // Open открывает БД (создаёт файл и схему при необходимости).
 func Open(path string) (*SQLite, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
-	db.SetMaxOpenConns(1) // упрощает жизнь с WAL и pure-go драйвером
+	db.SetMaxOpenConns(4) // WAL поддерживает параллельное чтение; запись сериализуется
 	s := &SQLite{db: db}
 	if err := s.init(); err != nil {
 		_ = db.Close()
@@ -244,6 +248,7 @@ func (s *SQLite) init() error {
 
 	// ALTER для существующих баз — добавляем недостающие колонки.
 	// Ошибки "duplicate column" игнорируем (колонка уже есть).
+	// логируем остальные ошибки.
 	alters := []string{
 		`ALTER TABLE files ADD COLUMN vec_hash TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ast_units ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
@@ -252,7 +257,16 @@ func (s *SQLite) init() error {
 		`ALTER TABLE ast_units ADD COLUMN name_start_col INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, q := range alters {
-		_, _ = s.db.Exec(q)
+		if _, err := s.db.Exec(q); err != nil {
+			// SQLite: "duplicate column name" — ожидаемо, игнорируем.
+			// modernc.org/sqlite: может вернуть другой формат ошибки.
+			errStr := err.Error()
+			if strings.Contains(errStr, "duplicate column") ||
+				strings.Contains(errStr, "duplicate column name") {
+				continue
+			}
+			logger.Log().Warn().Err(err).Msg("store: ALTER TABLE ignored (expected for existing schema)")
+		}
 	}
 	// Repo-aware индексы могут отсутствовать в старых БД — создаём после ALTER.
 	postIdx := []string{
@@ -349,15 +363,53 @@ func (s *SQLite) EnsureFile(ctx context.Context, path, lang string) error {
 }
 
 // UpdateVectorHash обновляет только хэш векторного индекса.
+// если UPDATE не затронул строк (файл отсутствует), fallback на INSERT.
 func (s *SQLite) UpdateVectorHash(ctx context.Context, path, hash string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE files SET vec_hash = ? WHERE path = ?`, hash, path)
+	res, err := s.db.ExecContext(ctx, `UPDATE files SET vec_hash = ? WHERE path = ?`, hash, path)
 	if err != nil {
 		return err
 	}
-	// Если файла еще нет в таблице files (например, tree-sitter выключен),
-	// нужно его вставить. Но для этого нужны language, size и т.д.
-	// Поэтому безопаснее использовать UpsertFile с пустыми символами.
-	return nil
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		// Файл не найден — вставляем минимальную запись с vec_hash.
+		_, err = s.db.ExecContext(ctx,
+			`INSERT INTO files(path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash)
+			 VALUES(?,?,?,?,?,?,?,?)
+			 ON CONFLICT(path) DO UPDATE SET vec_hash=excluded.vec_hash`,
+			path, "", "", 0, 0, time.Now().Unix(), 0, hash)
+	}
+	return err
+}
+
+// GetFileHash возвращает хэш содержимого файла из таблицы files.
+func (s *SQLite) GetFileHash(ctx context.Context, path string) (string, error) {
+	var hash string
+	err := s.db.QueryRowContext(ctx, `SELECT hash FROM files WHERE path = ?`, path).Scan(&hash)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return hash, err
+}
+
+// UpdateFileHash обновляет хэш содержимого файла в таблице files.
+// определяем язык из расширения файла, чтобы не создавать записи с пустым language.
+func (s *SQLite) UpdateFileHash(ctx context.Context, path, hash string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE files SET hash = ? WHERE path = ?`, hash, path)
+	if err != nil {
+		return err
+	}
+	// Определяем язык из расширения — fallback на пустую строку.
+	lang := ""
+	if ext := filepath.Ext(path); ext != "" {
+		lang = ext[1:] // убираем точку
+	}
+	// Если файла ещё нет в таблице files, вставляем с определённым языком.
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO files(path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash)
+		 VALUES(?,?,?,?,?,?,?,?)
+		 ON CONFLICT(path) DO UPDATE SET hash=excluded.hash`,
+		path, lang, hash, 0, 0, time.Now().Unix(), 0, "")
+	return err
 }
 
 // UpsertVectorHash — специальный апсерт для векторного индекса.
@@ -388,6 +440,20 @@ func (s *SQLite) DeleteFile(ctx context.Context, path string) error {
 // принудительно переиндексировать векторный индекс.
 func (s *SQLite) ResetVecHashes(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE files SET vec_hash = '' WHERE vec_hash != ''`)
+	return err
+}
+
+// HasFileHashes проверяет, есть ли в таблице files записи с hash.
+func (s *SQLite) HasFileHashes(ctx context.Context) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE hash != ''`).Scan(&count)
+	return count > 0, err
+}
+
+// ResetFileHashes сбрасывает все hash в таблице files, чтобы
+// принудительно переиндексировать graph индекс.
+func (s *SQLite) ResetFileHashes(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE files SET hash = '' WHERE hash != ''`)
 	return err
 }
 

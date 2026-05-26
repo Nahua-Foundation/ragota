@@ -139,7 +139,7 @@ func TestJDTLSStart_Integration(t *testing.T) {
 	}
 
 	// Откроем файл и выполним Hover. Допускаем пустой ответ, но не RPC-ошибку.
-	if err := client.DidOpen(javaFile, "java", content); err != nil {
+	if err := client.DidOpen(context.Background(), javaFile, "java", content); err != nil {
 		t.Fatalf("DidOpen: %v", err)
 	}
 	// Дадим jdtls немного времени на анализ открытого файла.

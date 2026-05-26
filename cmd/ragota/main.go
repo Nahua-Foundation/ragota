@@ -12,6 +12,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"ragota/internal/logger"
@@ -31,6 +32,10 @@ var rootCmd = &cobra.Command{
 }
 
 func main() {
+	// Убеждаемся, что Go использует все доступные ядра CPU.
+	// В контейнерах/cgroup это может быть меньше физического числа ядер.
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
 	// Инициализируем логгер — пишем в .ragota/log/app.log
 	if f, path, err := logger.OpenLogFile("."); err == nil {
 		logger.InitLogger("info", false, f)
