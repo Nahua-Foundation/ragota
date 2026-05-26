@@ -107,13 +107,16 @@ func NewVector(cfg *config.Config, qd *qdrant.Client, emb *embedder.Ollama, st *
 	code := embedder.New(cfg.Ollama.URL, codeSpec.EmbedModel)
 	code.SetDim(int(codeSpec.EmbedDim))
 	code.SetSemaphore(sem)
+	code.SetBus(bus)
 
 	text := embedder.New(cfg.Ollama.URL, textSpec.EmbedModel)
 	text.SetDim(int(textSpec.EmbedDim))
 	text.SetSemaphore(sem)
+	text.SetBus(bus)
 
 	if emb != nil {
 		emb.SetSemaphore(sem)
+		emb.SetBus(bus)
 	}
 
 	return &Vector{

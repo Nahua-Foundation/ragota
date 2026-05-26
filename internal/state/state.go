@@ -10,6 +10,38 @@ import (
 	"time"
 )
 
+// MetricsTimeSeries — временной ряд для графиков (60 последних точек, 1 точка/сек).
+type MetricsTimeSeries struct {
+	Values []float64
+	Label  string
+}
+
+// Push добавляет значение в кольцевой буфер (макс maxPoints точек).
+func (ts *MetricsTimeSeries) Push(v float64, maxPoints int) {
+	if cap(ts.Values) == 0 {
+		ts.Values = make([]float64, 0, maxPoints)
+	}
+	ts.Values = append(ts.Values, v)
+	if len(ts.Values) > maxPoints {
+		ts.Values = ts.Values[len(ts.Values)-maxPoints:]
+	}
+}
+
+// OllamaLatency — метрики latency для одной модели ollama.
+type OllamaLatency struct {
+	Model      string
+	LatencyMs  MetricsTimeSeries // ms за последние 60 точек
+	TotalCalls int
+	Errors     int
+}
+
+// IndexerMetrics — метрики индексатора для графиков.
+type IndexerMetrics struct {
+	FilesPerSec MetricsTimeSeries // файлов в секунду
+	ChunksTotal int
+	SymbolsTotal int
+}
+
 // FileEntry — запись о последнем (ре)индексированном файле.
 type FileEntry struct {
 	Path       string    `json:"path"`
@@ -60,6 +92,12 @@ type Snapshot struct {
 	MCP       map[string]MCPStat `json:"mcp"`
 	Docker    DockerStatus       `json:"docker"`
 	LSP       []LSPError         `json:"lsp,omitempty"`
+
+	// Метрики для графиков.
+	IndexerMetrics map[string]*IndexerMetrics `json:"-"`
+	MCPCallHistory []int                      `json:"-"` // last 60s
+	MCPErrHistory  []int                      `json:"-"` // last 60s
+	OllamaLatency  map[string]*OllamaLatency  `json:"-"` // model -> latency
 }
 
 // DockerStatus — статус сервисов docker-compose.
@@ -81,16 +119,33 @@ type Bus struct {
 	docker   DockerStatus
 	lsp      []LSPError // ring buffer (newest first)
 	maxItems int
+
+	// Метрики для графиков.
+	indexerMetrics map[string]*IndexerMetrics // per-indexer time series
+	filesIndexedTotal int                      // кумулятивный счётчик
+	prevIndexed    map[string]int             // предыдущее значение для расчёта delta
+	mcpCallHistory []int                      // MCP calls per second (last 60s)
+	mcpErrorHistory []int                     // MCP errors per second (last 60s)
+	currentMCPsec  int                        // calls in current second bucket
+	currentMCPErrSec int                      // errors in current second bucket
+	lastTick       time.Time                  // последний tick для расчёта rate
+
+	// Ollama latency metrics.
+	ollamaLatency map[string]*OllamaLatency // model -> latency metrics
 }
 
 // NewBus создаёт шину состояния.
 func NewBus(root string) *Bus {
 	return &Bus{
-		root:     root,
-		started:  time.Now(),
-		indexers: make(map[string]Indexer),
-		mcp:      make(map[string]MCPStat),
-		maxItems: 50,
+		root:           root,
+		started:        time.Now(),
+		indexers:       make(map[string]Indexer),
+		mcp:            make(map[string]MCPStat),
+		maxItems:       50,
+		indexerMetrics: make(map[string]*IndexerMetrics),
+		prevIndexed:    make(map[string]int),
+		lastTick:       time.Now(),
+		ollamaLatency:  make(map[string]*OllamaLatency),
 	}
 }
 
@@ -130,7 +185,9 @@ func (b *Bus) IncMCPCall(server, tool string, isError bool) {
 	cur.Calls[tool]++
 	if isError {
 		cur.Errors++
+		b.currentMCPErrSec++
 	}
+	b.currentMCPsec++
 	cur.Running = true
 	b.mcp[server] = cur
 }
@@ -145,6 +202,68 @@ func (b *Bus) SetMCPRunning(server string, running bool) {
 	}
 	cur.Running = running
 	b.mcp[server] = cur
+}
+
+// RecordTick — вызывается каждый тик (1 сек) для обновления метрик.
+// Фиксирует delta файлов и MCP-вызовов за секунду.
+func (b *Bus) RecordTick() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(b.lastTick).Seconds()
+	if elapsed < 0.5 {
+		return // слишком часто
+	}
+	b.lastTick = now
+
+	// Indexer metrics: delta files per second.
+	for name, idx := range b.indexers {
+		prev := b.prevIndexed[name]
+		delta := idx.FilesIndexed - prev
+		b.prevIndexed[name] = idx.FilesIndexed
+
+		m, ok := b.indexerMetrics[name]
+		if !ok {
+			m = &IndexerMetrics{}
+			b.indexerMetrics[name] = m
+		}
+		if elapsed > 0 {
+			rate := float64(delta) / elapsed
+			m.FilesPerSec.Push(rate, 60)
+		}
+		m.ChunksTotal = idx.Chunks
+		m.SymbolsTotal = idx.Symbols
+	}
+
+	// MCP metrics: flush current second bucket.
+	b.mcpCallHistory = append(b.mcpCallHistory, b.currentMCPsec)
+	b.mcpErrorHistory = append(b.mcpErrorHistory, b.currentMCPErrSec)
+	if len(b.mcpCallHistory) > 60 {
+		b.mcpCallHistory = b.mcpCallHistory[len(b.mcpCallHistory)-60:]
+	}
+	if len(b.mcpErrorHistory) > 60 {
+		b.mcpErrorHistory = b.mcpErrorHistory[len(b.mcpErrorHistory)-60:]
+	}
+	b.currentMCPsec = 0
+	b.currentMCPErrSec = 0
+}
+
+// SetOllamaLatency записывает latency вызова ollama модели.
+func (b *Bus) SetOllamaLatency(model string, latencyMs float64, isError bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	cur, ok := b.ollamaLatency[model]
+	if !ok {
+		cur = &OllamaLatency{Model: model}
+		b.ollamaLatency[model] = cur
+	}
+	cur.LatencyMs.Push(latencyMs, 60)
+	cur.TotalCalls++
+	if isError {
+		cur.Errors++
+	}
 }
 
 // SetDocker обновляет статус docker-compose.
@@ -178,13 +297,17 @@ func (b *Bus) Snapshot() Snapshot {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	snap := Snapshot{
-		StartedAt: b.started,
-		Root:      b.root,
-		Indexers:  make(map[string]Indexer, len(b.indexers)),
-		MCP:       make(map[string]MCPStat, len(b.mcp)),
-		Recent:    append([]FileEntry(nil), b.recent...),
-		Docker:    b.docker,
-		LSP:       append([]LSPError(nil), b.lsp...),
+		StartedAt:      b.started,
+		Root:           b.root,
+		Indexers:       make(map[string]Indexer, len(b.indexers)),
+		MCP:            make(map[string]MCPStat, len(b.mcp)),
+		Recent:         append([]FileEntry(nil), b.recent...),
+		Docker:         b.docker,
+		LSP:            append([]LSPError(nil), b.lsp...),
+		IndexerMetrics: make(map[string]*IndexerMetrics, len(b.indexerMetrics)),
+		MCPCallHistory: append([]int(nil), b.mcpCallHistory...),
+		MCPErrHistory:  append([]int(nil), b.mcpErrorHistory...),
+		OllamaLatency:  make(map[string]*OllamaLatency, len(b.ollamaLatency)),
 	}
 	for k, v := range b.indexers {
 		snap.Indexers[k] = v
@@ -197,6 +320,23 @@ func (b *Bus) Snapshot() Snapshot {
 		}
 		v.Calls = calls
 		snap.MCP[k] = v
+	}
+	for k, v := range b.indexerMetrics {
+		m := &IndexerMetrics{
+			ChunksTotal:  v.ChunksTotal,
+			SymbolsTotal: v.SymbolsTotal,
+		}
+		m.FilesPerSec.Values = append([]float64(nil), v.FilesPerSec.Values...)
+		snap.IndexerMetrics[k] = m
+	}
+	for k, v := range b.ollamaLatency {
+		m := &OllamaLatency{
+			Model:      v.Model,
+			TotalCalls: v.TotalCalls,
+			Errors:     v.Errors,
+		}
+		m.LatencyMs.Values = append([]float64(nil), v.LatencyMs.Values...)
+		snap.OllamaLatency[k] = m
 	}
 	return snap
 }

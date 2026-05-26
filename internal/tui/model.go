@@ -44,6 +44,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tickMsg:
 		m.lastTick = time.Time(msg)
+		m.bus.RecordTick()
 		return m, tea.Batch(refreshSnap(m.bus), tick())
 	case snapMsg:
 		m.snap = state.Snapshot(msg)

@@ -220,6 +220,7 @@ func newRunCmd() *cobra.Command {
 				if lspMgr != nil {
 					grSvc = graph.NewWithLSP(cfg, st, lspMgr)
 				}
+				grSvc.SetBus(bus)
 				symSvc = symbols.New(st, grSvc, nil)
 				if vIdx != nil {
 					symSvc.SetSimilarSearcher(vIdx)

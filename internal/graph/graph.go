@@ -36,6 +36,7 @@ import (
 	"ragota/internal/fileutil"
 	"ragota/internal/logger"
 	"ragota/internal/lsp"
+	"ragota/internal/state"
 	"ragota/internal/store"
 )
 
@@ -119,6 +120,7 @@ type Service struct {
 	cfg *config.Config
 	st  *store.SQLite
 	mgr *lsp.Manager // опционально; если nil — работает только tree-sitter
+	bus *state.Bus   // опционально; для записи метрик ollama latency
 
 	mu        sync.Mutex
 	callCache map[int]cacheEntry // ленивый кэш для Callers (по unit.ID)
@@ -141,6 +143,11 @@ func New(cfg *config.Config, st *store.SQLite) *Service {
 		callCache: make(map[int]cacheEntry),
 		implCache: make(map[int]cacheEntry),
 	}
+}
+
+// SetBus устанавливает bus для записи метрик.
+func (s *Service) SetBus(bus *state.Bus) {
+	s.bus = bus
 }
 
 // NewWithLSP создаёт сервис с ленивым LSP-обогащением.
@@ -982,6 +989,7 @@ Return ONLY a JSON object with fields: "cluster", "core" (list), "dependencies" 
 }
 
 func (s *Service) callOllama(ctx context.Context, prompt, model string) (string, error) {
+	start := time.Now()
 	url := strings.TrimRight(s.cfg.Ollama.URL, "/") + "/api/generate"
 	body, _ := json.Marshal(map[string]any{
 		"model":  model,
@@ -998,22 +1006,35 @@ func (s *Service) callOllama(ctx context.Context, prompt, model string) (string,
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		s.recordOllamaLatency(model, start, err)
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("ollama error %d: %s", resp.StatusCode, string(b))
+		err := fmt.Errorf("ollama error %d: %s", resp.StatusCode, string(b))
+		s.recordOllamaLatency(model, start, err)
+		return "", err
 	}
 
 	var res struct {
 		Response string `json:"response"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		s.recordOllamaLatency(model, start, err)
 		return "", err
 	}
+	s.recordOllamaLatency(model, start, nil)
 	return res.Response, nil
+}
+
+func (s *Service) recordOllamaLatency(model string, start time.Time, err error) {
+	if s.bus == nil {
+		return
+	}
+	ms := float64(time.Since(start).Milliseconds())
+	s.bus.SetOllamaLatency(model, ms, err != nil)
 }
 
 // sourceContent возвращает исходный код AST-юнита из файла.

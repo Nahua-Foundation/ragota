@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ragota/internal/config"
+	"ragota/internal/docker"
 	"ragota/internal/qdrant"
 
 	"github.com/spf13/cobra"
@@ -48,20 +49,39 @@ func newCleanCmd() *cobra.Command {
 
 			var errs []error
 
+			// 0. Проверяем, что контейнеры Docker не запущены.
+			runner := docker.New(cfg.Root, cfg.Docker)
+			ps, _ := runner.Ps(ctx)
+			for _, svc := range ps {
+				if svc.State == "running" {
+					return fmt.Errorf("docker container %q is running — stop ai-tools (Ctrl+C) before cleaning", svc.Name)
+				}
+			}
+
 			// 1. Qdrant collections (code + text + legacy).
 			if !skipQdrant {
 				qd := qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))
-				names := map[string]bool{
-					cfg.Collection:            true,
-					cfg.CodeCollection().Name: true,
-					cfg.TextCollection().Name: true,
-				}
-				delete(names, "")
-				for name := range names {
-					if err := qd.DeleteCollection(ctx, name); err != nil {
-						fmt.Fprintf(os.Stderr, "qdrant: %v (skipped %s)\n", err, name)
-					} else {
-						fmt.Fprintf(os.Stderr, "qdrant: collection %q deleted\n", name)
+				// Быстрая проверка — если Qdrant недоступен, пропускаем
+				pCtx, pCancel := context.WithTimeout(ctx, 1*time.Second)
+				if err := qd.Ping(pCtx); err != nil {
+					pCancel()
+					fmt.Fprintf(os.Stderr, "qdrant: not reachable at %s:%d (skip collection cleanup)\n", cfg.Qdrant.Host, cfg.Qdrant.Port)
+				} else {
+					pCancel()
+					names := map[string]bool{
+						cfg.Collection:            true,
+						cfg.CodeCollection().Name: true,
+						cfg.TextCollection().Name: true,
+					}
+					delete(names, "")
+					for name := range names {
+						delCtx, delCancel := context.WithTimeout(ctx, 5*time.Second)
+						if err := qd.DeleteCollection(delCtx, name); err != nil {
+							fmt.Fprintf(os.Stderr, "qdrant: %v (skipped %s)\n", err, name)
+						} else {
+							fmt.Fprintf(os.Stderr, "qdrant: collection %q deleted\n", name)
+						}
+						delCancel()
 					}
 				}
 			}

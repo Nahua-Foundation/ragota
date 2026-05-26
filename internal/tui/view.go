@@ -1,13 +1,11 @@
 package tui
 
-// Файл реализует основной рендеринг главного экрана TUI (model.View) и
-// определяет стили lipgloss, используемые во всех других файлах пакета
-// (titleStyle/headerStyle/dimStyle/okStyle/warnStyle/errStyle/box).
+// Файл реализует новый дашборд RAGOTA с ASCII-art заголовком,
+// sparkline-графиками, прогресс-барами и компактным отображением ошибок.
 
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -17,13 +15,11 @@ import (
 )
 
 var (
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4")).Padding(0, 1)
-	headerStyle = lipgloss.NewStyle().Bold(true).Underline(true)
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	okStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	box         = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	okStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	errStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	box       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2)
 )
 
 func (m model) View() string {
@@ -31,232 +27,205 @@ func (m model) View() string {
 		return "  Initializing..."
 	}
 	s := m.snap
+	contentWidth := m.width - 8 // padding box
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	var sections []string
+
+	// 1. Banner RAGOTA
+	sections = append(sections, renderBanner(contentWidth))
+
+	// 2. Subtitle: root path + uptime
 	uptime := time.Since(s.StartedAt).Truncate(time.Second)
-	header := titleStyle.Render("ragota watch") + "  " +
-		dimStyle.Render(fmt.Sprintf("root=%s  uptime=%s  press q to quit", s.Root, uptime))
+	subtitle := dimStyle.Render(fmt.Sprintf("root: %s  |  uptime: %s  |  press q to quit", s.Root, uptime))
+	sections = append(sections, subtitle)
+	sections = append(sections, "")
 
-	// Docker
-	contentWidth := m.width - 4
-	if contentWidth < 20 {
-		contentWidth = 20
-	}
-	dockerLine := "docker: " + dockerLineFmt(s.Docker, contentWidth)
+	// 3. Docker status
+	sections = append(sections, renderDockerSection(s.Docker, contentWidth))
+	sections = append(sections, "")
 
-	// Indexers
-	var idxRows []string
-	idxRows = append(idxRows, headerStyle.Render("Indexers"))
-	for _, name := range []string{"treesitter", "graph", "vector"} {
-		if i, ok := s.Indexers[name]; ok {
-			idxRows = append(idxRows, renderIndexer(i, contentWidth))
-		} else {
-			idxRows = append(idxRows, fmt.Sprintf("  %-11s %s", name, dimStyle.Render("not started")))
-		}
-	}
+	// 4. Two-column layout: Indexers (left) + Ollama latency (right)
+	leftWidth := contentWidth / 2
+	rightWidth := contentWidth - leftWidth
+	leftCol := renderIndexersSection(s, leftWidth)
+	rightCol := renderOllamaLatencySection(s.OllamaLatency, rightWidth)
+	sections = append(sections, lipgloss.JoinHorizontal(lipgloss.Top, leftCol, "    ", rightCol))
+	sections = append(sections, "")
 
-	// MCP stats
-	var mcpRows []string
-	mcpRows = append(mcpRows, headerStyle.Render("MCP servers (this session)"))
-	names := make([]string, 0, len(s.MCP))
-	for k := range s.MCP {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		mcpRows = append(mcpRows, dimStyle.Render("  no calls yet"))
-	}
-	for _, name := range names {
-		st := s.MCP[name]
-		var total int
-		var calls []string
-		// детерминированный порядок tools
-		toolNames := make([]string, 0, len(st.Calls))
-		for t := range st.Calls {
-			toolNames = append(toolNames, t)
-		}
-		sort.Strings(toolNames)
-		for _, t := range toolNames {
-			total += st.Calls[t]
-			calls = append(calls, fmt.Sprintf("%s=%d", t, st.Calls[t]))
-		}
-		status := okStyle.Render("●")
-		if !st.Running {
-			status = dimStyle.Render("○")
-		}
-		mcpRows = append(mcpRows,
-			fmt.Sprintf("  %s %-12s total=%d errors=%d  %s",
-				status, name, total, st.Errors, dimStyle.Render(strings.Join(calls, " "))))
+	// 5. MCP servers с графиками
+	sections = append(sections, renderMCPMiniTable(s.MCP, s.MCPCallHistory, s.MCPErrHistory, contentWidth))
+	sections = append(sections, "")
+
+	// 6. Recent activity sparkline
+	sections = append(sections, renderRecentActivitySection(s.Recent, contentWidth))
+
+	// 7. LSP errors (компактно)
+	if len(s.LSP) > 0 {
+		sections = append(sections, "")
+		sections = append(sections, renderLSPErrorsSection(s.LSP, contentWidth))
 	}
 
-	// Разделяем Recent на "обычные" и "ошибки" — секция ошибок имеет приоритет
-	// и вытесняет Recent снизу, но Recent гарантированно показывает минимум 3 строки.
-	var normal, errs []state.FileEntry
+	// 8. Errors (компактно)
+	var errs []state.FileEntry
 	for _, e := range s.Recent {
 		if e.Error != "" {
 			errs = append(errs, e)
+		}
+	}
+	if len(errs) > 0 {
+		sections = append(sections, "")
+		sections = append(sections, renderErrorsSection(errs, contentWidth))
+	}
+
+	body := strings.Join(sections, "\n")
+	return box.Render(body)
+}
+
+// ─── Docker section ───────────────────────────────────────────────────────────
+
+func renderDockerSection(d state.DockerStatus, width int) string {
+	var lines []string
+	lines = append(lines, headerStyle.Render("Docker"))
+
+	if d.LastError != "" {
+		lines = append(lines, errStyle.Render("  ✗ "+d.LastError))
+		return strings.Join(lines, "\n")
+	}
+	if !d.Running && len(d.Services) == 0 {
+		lines = append(lines, dimStyle.Render("  not started"))
+		return strings.Join(lines, "\n")
+	}
+
+	var svcLines []string
+	for _, svc := range d.Services {
+		svcLines = append(svcLines, okStyle.Render("●")+" "+svc)
+	}
+	lines = append(lines, "  "+strings.Join(svcLines, "  "))
+	return strings.Join(lines, "\n")
+}
+
+// ─── Indexers section ────────────────────────────────────────────────────────
+
+func renderIndexersSection(s state.Snapshot, width int) string {
+	var lines []string
+	lines = append(lines, headerStyle.Render("Indexers"))
+
+	for _, name := range []string{"treesitter", "graph", "vector"} {
+		if idx, ok := s.Indexers[name]; ok {
+			metrics := s.IndexerMetrics[name]
+			lines = append(lines, renderIndexerDashboard(name, idx, metrics, width))
 		} else {
-			normal = append(normal, e)
+			lines = append(lines, fmt.Sprintf("  ○ %-11s %s", name, dimStyle.Render("not started")))
 		}
 	}
 
-	// LSP errors — тоже считаем ошибками для приоритета отображения.
-	hasLSPErrors := len(s.LSP) > 0
+	return strings.Join(lines, "\n")
+}
 
-	// Фиксированная часть body (всё, кроме Recent и Errors).
-	fixedSections := []string{
-		dockerLine,
-		"",
-		strings.Join(idxRows, "\n"),
-		"",
-		strings.Join(mcpRows, "\n"),
-		"",
-	}
-	fixedText := strings.Join(fixedSections, "\n")
-	// header (1) + рамка box (2) + fixedText + заголовки (Recent, LSP?, Errors) + safety (1).
-	headersOverhead := 2
-	if hasLSPErrors {
-		headersOverhead = 3
-	}
-	if len(errs) == 0 && !hasLSPErrors {
-		headersOverhead = 1
-	}
-	usedLines := 1 + 2 + strings.Count(fixedText, "\n") + headersOverhead + 1
-	avail := m.height - usedLines
-	if avail < 4 {
-		avail = 4
-	}
+// ─── LSP errors section ──────────────────────────────────────────────────────
 
-	const minRecent = 3
-	// Сначала отдадим всё доступное ошибкам (indexer + LSP), но Recent оставим минимум minRecent строк.
-	maxErrors := len(errs)
-	if hasLSPErrors {
-		maxErrors += len(s.LSP) // считаем LSP ошибки вместе с indexer errors
-	}
-	if maxErrors > avail-minRecent {
-		maxErrors = avail - minRecent
-	}
-	if maxErrors < 0 {
-		maxErrors = 0
-	}
-	maxRecent := avail - maxErrors
-	if maxRecent > len(normal) {
-		// Если Recent меньше выделенного — отдаём остаток ошибкам.
-		extra := maxRecent - len(normal)
-		maxRecent = len(normal)
-		if maxErrors+extra > len(errs)+len(s.LSP) {
-			maxErrors = len(errs) + len(s.LSP)
-		} else {
-			maxErrors += extra
-		}
-	}
-	if maxRecent > 30 {
-		maxRecent = 30
-	}
+func renderLSPErrorsSection(lspErrors []state.LSPError, width int) string {
+	var lines []string
+	lines = append(lines, headerStyle.Render(fmt.Sprintf("LSP errors (%d)", len(lspErrors))))
 
-	// cwd для обрезки путей.
 	cwd, _ := os.Getwd()
-	pathWidth := contentWidth - 40
-	if pathWidth < 20 {
-		pathWidth = 20
-	}
-
-	// LSP errors (под Recent, перед Errors).
-	var lspRows []string
-	if hasLSPErrors {
-		lspRows = append(lspRows, headerStyle.Render(fmt.Sprintf("LSP errors (%d)", len(s.LSP))))
-		lspMax := maxErrors / 2 // делим место между LSP и indexer errors
-		if lspMax < 3 {
-			lspMax = 3
+	maxShow := 5
+	for i, e := range lspErrors {
+		if i >= maxShow {
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("  … +%d more (see log file)", len(lspErrors)-i)))
+			break
 		}
-		for i, e := range s.LSP {
-			if i >= lspMax {
-				lspRows = append(lspRows,
-					dimStyle.Render(fmt.Sprintf("  … +%d more (see log file)", len(s.LSP)-i)))
-				break
-			}
-			when := time.Since(e.Timestamp).Truncate(time.Second)
-			shownPath := truncateStart(relToCwd(e.Path, cwd), pathWidth)
-			line := fmt.Sprintf("  %-12s %s  %s  %s",
-				e.Method, shownPath, errStyle.Render(e.Error),
-				dimStyle.Render(fmt.Sprintf("%s ago", when)))
-			lspRows = append(lspRows, line)
-		}
+		when := time.Since(e.Timestamp).Truncate(time.Second)
+		shownPath := truncateStart(relToCwd(e.Path, cwd), width-40)
+		line := fmt.Sprintf("  %-12s %s  %s  %s",
+			e.Method, shownPath, errStyle.Render(e.Error),
+			dimStyle.Render(fmt.Sprintf("%s ago", when)))
+		lines = append(lines, line)
 	}
+	return strings.Join(lines, "\n")
+}
 
-	// Recent (без ошибок).
-	var recentRows []string
-	recentHeader := headerStyle.Render("Recent files (newest first)")
-	if m.logFile != nil {
-		recentHeader += dimStyle.Render(fmt.Sprintf("  (full log: %s)", logFilePathHint()))
-	}
-	recentRows = append(recentRows, recentHeader)
-	if len(normal) == 0 {
-		recentRows = append(recentRows, dimStyle.Render("  —"))
-	}
-	for i, e := range normal {
-		if i >= maxRecent {
-			recentRows = append(recentRows,
-				dimStyle.Render(fmt.Sprintf("  … +%d more (see log file)", len(normal)-i)))
+// ─── Errors section ──────────────────────────────────────────────────────────
+
+func renderErrorsSection(errs []state.FileEntry, width int) string {
+	var lines []string
+	lines = append(lines, headerStyle.Render(fmt.Sprintf("Errors (%d)", len(errs))))
+
+	cwd, _ := os.Getwd()
+	maxShow := 5
+	for i, e := range errs {
+		if i >= maxShow {
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("  … +%d more (see log file)", len(errs)-i)))
 			break
 		}
 		when := time.Since(e.IndexedAt).Truncate(time.Second)
-		extra := ""
-		if e.Chunks > 0 {
-			extra = fmt.Sprintf(" chunks=%d", e.Chunks)
+		short := e.Error
+		if idx := strings.IndexByte(short, '\n'); idx >= 0 {
+			short = short[:idx]
 		}
-		if e.Symbols > 0 {
-			extra += fmt.Sprintf(" symbols=%d", e.Symbols)
-		}
-		shownPath := relToCwd(e.Path, cwd)
-		shownPath = truncateStart(shownPath, pathWidth)
-		line := fmt.Sprintf("  %-9s %s%s  %s",
-			e.Kind, shownPath, extra,
-			dimStyle.Render(fmt.Sprintf("%dms, %s ago", e.DurationMs, when)))
-		recentRows = append(recentRows, line)
+		shownPath := truncateStart(relToCwd(e.Path, cwd), width-50)
+		lines = append(lines, fmt.Sprintf("  %-9s %s  %s  %s",
+			e.Kind, shownPath, errStyle.Render(short),
+			dimStyle.Render(fmt.Sprintf("%s ago", when))))
 	}
-
-	// Errors (под LSP).
-	var errorRows []string
-	if len(errs) > 0 {
-		errorRows = append(errorRows, headerStyle.Render(fmt.Sprintf("Errors (%d)", len(errs))))
-		errMax := maxErrors - len(lspRows) + 1 // оставшееся место после LSP
-		if errMax < 2 {
-			errMax = 2
-		}
-		for i, e := range errs {
-			if i >= errMax {
-				errorRows = append(errorRows,
-					dimStyle.Render(fmt.Sprintf("  … +%d more (see log file)", len(errs)-i)))
-				break
-			}
-			when := time.Since(e.IndexedAt).Truncate(time.Second)
-			short := e.Error
-			if idx := strings.IndexByte(short, '\n'); idx >= 0 {
-				short = short[:idx]
-			}
-			shownPath := truncateStart(relToCwd(e.Path, cwd), pathWidth)
-			// Доступная ширина под текст ошибки.
-			errWidth := contentWidth - 14 - len([]rune(shownPath))
-			if errWidth < 20 {
-				errWidth = 20
-			}
-			if len([]rune(short)) > errWidth {
-				r := []rune(short)
-				short = string(r[:errWidth-1]) + "…"
-			}
-			errorRows = append(errorRows, fmt.Sprintf("  %-9s %s  %s  %s",
-				e.Kind, shownPath, errStyle.Render(short),
-				dimStyle.Render(fmt.Sprintf("%s ago", when))))
-		}
-	}
-
-	parts := []string{fixedText + strings.Join(recentRows, "\n")}
-	if len(lspRows) > 0 {
-		parts = append(parts, strings.Join(lspRows, "\n"))
-	}
-	if len(errorRows) > 0 {
-		parts = append(parts, strings.Join(errorRows, "\n"))
-	}
-	body := strings.Join(parts, "\n")
-
-	return header + "\n" + box.Render(body)
+	return strings.Join(lines, "\n")
 }
+
+// ─── Recent activity section ─────────────────────────────────────────────────
+
+func renderRecentActivitySection(recent []state.FileEntry, width int) string {
+	var lines []string
+
+	// Считаем активность за последние 60 секунд.
+	activity := computeRecentActivity(recent, 60)
+
+	// Считаем суммарную статистику.
+	totalFiles := len(recent)
+	var totalChunks, totalSymbols int
+	var avgDuration int64
+	for _, e := range recent {
+		totalChunks += e.Chunks
+		totalSymbols += e.Symbols
+		avgDuration += e.DurationMs
+	}
+	if totalFiles > 0 {
+		avgDuration /= int64(totalFiles)
+	}
+
+	// Sparkline.
+	sparkline := renderSparkline(activity, width-14, okStyle)
+
+	lines = append(lines, headerStyle.Render("Recent activity (files/sec, last 60s)"))
+	lines = append(lines, fmt.Sprintf("  %s", sparkline))
+
+	// Summary stats.
+	summary := fmt.Sprintf("  %d files  |  %d chunks  |  %d symbols  |  avg %dms",
+		totalFiles, totalChunks, totalSymbols, avgDuration)
+	lines = append(lines, dimStyle.Render(summary))
+
+	// Последние 3 файла.
+	if len(recent) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, dimStyle.Render("  latest:"))
+		show := 3
+		if show > len(recent) {
+			show = len(recent)
+		}
+		cwd, _ := os.Getwd()
+		for i := 0; i < show; i++ {
+			e := recent[i]
+			shownPath := truncateStart(relToCwd(e.Path, cwd), width-25)
+			lines = append(lines, fmt.Sprintf("    %s %-9s %s  %dms",
+				okStyle.Render("●"), e.Kind, shownPath, e.DurationMs))
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// ─── Header style (определён здесь чтобы не дублировать) ──────────────────────
+
+var headerStyle = lipgloss.NewStyle().Bold(true).Underline(true)

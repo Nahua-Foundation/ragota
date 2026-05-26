@@ -20,6 +20,17 @@ type Ollama struct {
 	dim     int // желаемая размерность (0 - дефолт модели)
 	http    *http.Client
 	sem     chan struct{} // опциональный семафор для ограничения параллелизма
+	bus     metricsSink   // опциональный sink для метрик latency
+}
+
+// metricsSink — интерфейс для записи метрик (избегает import cycle).
+type metricsSink interface {
+	SetOllamaLatency(model string, latencyMs float64, isError bool)
+}
+
+// SetBus устанавливает sink для метрик.
+func (o *Ollama) SetBus(bus metricsSink) {
+	o.bus = bus
 }
 
 // New создаёт клиента. baseURL обычно "http://localhost:11434".
@@ -90,9 +101,11 @@ type legacyEmbedResponse struct {
 
 // Embed возвращает один вектор для prompt.
 func (o *Ollama) Embed(ctx context.Context, prompt string) ([]float32, error) {
+	start := time.Now()
 	// 1. Пробуем современный эндпоинт /api/embed
 	v, err := o.embedModern(ctx, prompt)
 	if err == nil {
+		o.recordLatency(err, start)
 		return v, nil
 	}
 
@@ -100,10 +113,21 @@ func (o *Ollama) Embed(ctx context.Context, prompt string) ([]float32, error) {
 	// Если же произошла другая ошибка (например, 500 Context Length),
 	// то fallback на legacy не поможет, так как там лимиты те же или жестче.
 	if strings.Contains(err.Error(), "not found") {
-		return o.embedLegacy(ctx, prompt)
+		v, err = o.embedLegacy(ctx, prompt)
+		o.recordLatency(err, start)
+		return v, err
 	}
 
+	o.recordLatency(err, start)
 	return nil, err
+}
+
+func (o *Ollama) recordLatency(err error, start time.Time) {
+	if o.bus == nil {
+		return
+	}
+	ms := float64(time.Since(start).Milliseconds())
+	o.bus.SetOllamaLatency(o.model, ms, err != nil)
 }
 
 func (o *Ollama) embedModern(ctx context.Context, prompt string) ([]float32, error) {
@@ -237,6 +261,15 @@ func (o *Ollama) EmbedBatch(ctx context.Context, prompts []string) ([][]float32,
 	if len(prompts) == 0 {
 		return nil, nil
 	}
+
+	start := time.Now()
+	defer func() {
+		// Записываем среднюю latency батча.
+		if o.bus != nil {
+			avgMs := float64(time.Since(start).Milliseconds()) / float64(len(prompts))
+			o.bus.SetOllamaLatency(o.model, avgMs, false)
+		}
+	}()
 
 	// Оптимальный размер батча для Ollama (обычно 32-64).
 	// Мы используем 64 для уменьшения количества сетевых вызовов.

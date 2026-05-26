@@ -211,6 +211,7 @@ func newServeSymbolCmd() *cobra.Command {
 			lspMgr.SetRepoResolver(resolver)
 			defer lspMgr.Close()
 			gr := graph.NewWithLSP(cfg, st, lspMgr)
+			gr.SetBus(bus)
 			syms := symbols.New(st, gr, nil)
 			syms.SetLSPManager(lspMgr)
 			// Опционально подключаем similar-search через Vector, если qdrant доступен.
