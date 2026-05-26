@@ -43,15 +43,15 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
         run: |
-          BINARY_NAME=ai-tools
+          BINARY_NAME=ragota
           # Используем -ldflags для уменьшения размера и передачи версии, если нужно
-          go build -v -o "$BINARY_NAME" ./cmd/ai-tools
+          go build -v -o "$BINARY_NAME" ./cmd/ragota
 
       - name: Package
         shell: bash
         run: |
-          BINARY_NAME=ai-tools
-          ASSET_NAME="ai-tools-${{ matrix.goos }}-${{ matrix.goarch }}"
+          BINARY_NAME=ragota
+          ASSET_NAME="ragota-${{ matrix.goos }}-${{ matrix.goarch }}"
           
           mv "$BINARY_NAME" "$ASSET_NAME"
           

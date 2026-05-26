@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v0.0.5] - 2026-05-26
+## [v0.1.0] - 2026-05-26
 
 ### Переименование проекта
 Проект переименован из `aitools` в `ragota`. Новое имя используется повсеместно: Go-модуль, CLI-команды, MCP-серверы, Docker-образы, конфигурационные пути.
