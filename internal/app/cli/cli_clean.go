@@ -11,6 +11,7 @@ import (
 	"ragota/pkg/config"
 	"ragota/pkg/docker"
 	"ragota/pkg/qdrant"
+	"ragota/internal/store"
 
 	"github.com/spf13/cobra"
 )
@@ -29,6 +30,7 @@ func newCleanCmd() *cobra.Command {
 		skipQdrant   bool
 		skipSQLite   bool
 		alsoStorages bool
+		crossRepo    bool
 	)
 	c := &cobra.Command{
 		Use:   "clean [directory]",
@@ -56,6 +58,31 @@ func newCleanCmd() *cobra.Command {
 				if svc.State == "running" {
 					return fmt.Errorf("docker container %q is running — stop ai-tools (Ctrl+C) before cleaning", svc.Name)
 				}
+			}
+
+			// 0b. Selective crossrepo edges clean.
+			if crossRepo {
+				st, err := store.Open(cfg.SQLitePath())
+				if err != nil {
+					return fmt.Errorf("open sqlite for crossrepo clean: %w", err)
+				}
+				// Удаляем только cross_call edges
+				if err := st.DeleteCrossCallEdges(ctx); err != nil {
+					errs = append(errs, fmt.Errorf("delete crossrepo edges: %w", err))
+				} else {
+					fmt.Fprintf(os.Stderr, "crossrepo: cross_call edges deleted\n")
+				}
+				// Сбрасываем cross_hash чтобы следующий FullScan перезапустил индексацию
+				if err := st.ResetCrossHashes(ctx); err != nil {
+					errs = append(errs, fmt.Errorf("reset cross_hash: %w", err))
+				} else {
+					fmt.Fprintf(os.Stderr, "crossrepo: cross_hash reset\n")
+				}
+				_ = st.Close()
+				if len(errs) > 0 {
+					return errors.Join(errs...)
+				}
+				return nil
 			}
 
 			// 1. Qdrant collections (code + text + legacy).
@@ -138,6 +165,7 @@ func newCleanCmd() *cobra.Command {
 	c.Flags().BoolVar(&skipQdrant, "skip-qdrant", false, "don't delete the Qdrant collection")
 	c.Flags().BoolVar(&skipSQLite, "skip-sqlite", false, "don't delete the tree-sitter SQLite DB")
 	c.Flags().BoolVar(&alsoStorages, "storages", false, "also remove ai-tools/qdrant_storage")
+	c.Flags().BoolVar(&crossRepo, "cross-repo", false, "delete only crossrepo edges and reset cross_hash (keeps AST/vec indexes)")
 	return c
 }
 

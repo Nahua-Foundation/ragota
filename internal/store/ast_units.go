@@ -286,6 +286,8 @@ type EdgeRef struct {
 	DstName       string
 	DstUnitIdx    int  // -1 если не resolved по индексу (local file)
 	ResolvedDstID int // уже разрешённый dst_id из global map (0 = unresolved)
+	DstRepo       string // целевой репо (для cross-repo edges)
+	Confidence    float64 // уверенность (1.0 = default)
 	Kind          string
 	Line          int
 }
@@ -346,7 +348,7 @@ func (s *SQLite) ReplaceFileGraph(ctx context.Context, filePath string, units []
 	// Insert edges с разрешением src_id по индексу и dst_id по имени
 	if len(edgeRefs) > 0 {
 		stmt, err := tx.PrepareContext(ctx,
-			`INSERT INTO edges(repo, src_id, dst_id, kind, dst_name, file_path, line) VALUES(?,?,?,?,?,?,?)`)
+			`INSERT INTO edges(repo, src_id, dst_id, kind, dst_name, file_path, line, dst_repo, confidence) VALUES(?,?,?,?,?,?,?,?,?)`)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -373,8 +375,12 @@ func (s *SQLite) ReplaceFileGraph(ctx context.Context, filePath string, units []
 				// Skip edges with unresolved src — should never happen for valid edges
 				continue
 			}
+			confidence := e.Confidence
+			if confidence == 0 {
+				confidence = 1.0
+			}
 			// Write edge even if dst is unresolved (dst_id = 0) — ResolvePendingEdges will fix it later
-			if _, err := stmt.ExecContext(ctx, repo, srcID, dstID, e.Kind, e.DstName, filePath, e.Line); err != nil {
+			if _, err := stmt.ExecContext(ctx, repo, srcID, dstID, e.Kind, e.DstName, filePath, e.Line, e.DstRepo, confidence); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -384,4 +390,23 @@ func (s *SQLite) ReplaceFileGraph(ctx context.Context, filePath string, units []
 		return nil, nil, err
 	}
 	return ids, unitIDs, nil
+}
+
+// FindASTUnitsByFileLine находит AST unit, содержащий указанную линию в файле.
+func (s *SQLite) FindASTUnitsByFileLine(ctx context.Context, filePath string, line int) ([]ASTUnit, error) {
+	q := `SELECT ` + astUnitColumns + ` FROM ast_units WHERE file_path = ? AND start_line <= ? AND end_line >= ? ORDER BY start_line DESC LIMIT 1`
+	rows, err := s.db.QueryContext(ctx, q, filePath, line, line)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ASTUnit
+	for rows.Next() {
+		u, err := scanASTUnit(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }

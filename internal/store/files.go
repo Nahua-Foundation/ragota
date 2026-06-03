@@ -18,16 +18,17 @@ type FileRow struct {
 	IndexedAt time.Time
 	Symbols   int
 	VecHash   string
+	CrossHash string
 }
 
 // GetFile возвращает строку файла или nil, если не найдена.
 func (s *SQLite) GetFile(ctx context.Context, path string) (*FileRow, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash FROM files WHERE path = ?`,
+		`SELECT path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash, cross_hash FROM files WHERE path = ?`,
 		path)
 	var fr FileRow
 	var modTime, indexedAt int64
-	err := row.Scan(&fr.Path, &fr.Language, &fr.Hash, &fr.Size, &modTime, &indexedAt, &fr.Symbols, &fr.VecHash)
+	err := row.Scan(&fr.Path, &fr.Language, &fr.Hash, &fr.Size, &modTime, &indexedAt, &fr.Symbols, &fr.VecHash, &fr.CrossHash)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -185,4 +186,37 @@ func (s *SQLite) HasVecHashes(ctx context.Context) (bool, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE vec_hash != ''`).Scan(&count)
 	return count > 0, err
+}
+
+// GetCrossHash возвращает агрегированный хеш crossrepo-состояния.
+// Хранится в одной записи с path = '__cross_hash__'.
+func (s *SQLite) GetCrossHash(ctx context.Context) (string, error) {
+	var hash string
+	err := s.db.QueryRowContext(ctx, `SELECT hash FROM files WHERE path = '__cross_hash__'`).Scan(&hash)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return hash, err
+}
+
+// SetCrossHash сохраняет агрегированный хеш crossrepo-состояния.
+func (s *SQLite) SetCrossHash(ctx context.Context, hash string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO files(path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash, cross_hash)
+		 VALUES('__cross_hash__','','','',0,0,0,'','')
+		 ON CONFLICT(path) DO UPDATE SET hash=excluded.hash`,
+		hash)
+	return err
+}
+
+// ResetCrossHashes сбрасывает cross_hash (для обнаружения stale состояния).
+func (s *SQLite) ResetCrossHashes(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE files SET cross_hash = '' WHERE cross_hash != ''`)
+	return err
+}
+
+// DeleteCrossCallEdges удаляет все edges вида cross_call.
+func (s *SQLite) DeleteCrossCallEdges(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM edges WHERE kind = 'cross_call'`)
+	return err
 }

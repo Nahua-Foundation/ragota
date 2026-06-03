@@ -4,11 +4,17 @@ import (
 	"sync"
 	"time"
 
+	"ragota/internal/indexing/crossrepo"
 	"ragota/pkg/config"
 	"ragota/pkg/lsp/manager"
 	"ragota/pkg/state"
 	"ragota/internal/store"
 )
+
+// CrossRepoIndexer — интерфейс cross-repo индексатора.
+type CrossRepoIndexer interface {
+	GetEdgesByRepo(repo string) ([]crossrepo.CrossEdge, error)
+}
 
 // EdgeKind — типы рёбер.
 const (
@@ -95,7 +101,8 @@ type Service struct {
 	cfg *config.Config
 	st  *store.SQLite
 	mgr *manager.Manager // опционально; если nil — работает только tree-sitter
-	bus *state.Bus   // опционально; для записи метрик ollama latency
+	bus *state.Bus       // опционально; для записи метрик ollama latency
+	CRI CrossRepoIndexer // опционально; cross-repo индекс (экспортирован для MCP handlers)
 
 	mu        sync.Mutex
 	callCache map[int]cacheEntry // ленивый кэш для Callers (по unit.ID)
@@ -131,3 +138,6 @@ func NewWithLSP(cfg *config.Config, st *store.SQLite, mgr *manager.Manager) *Ser
 	s.mgr = mgr
 	return s
 }
+
+// SetCrossRepoIndex подключает cross-repo индекс.
+func (s *Service) SetCrossRepoIndex(cri CrossRepoIndexer) { s.CRI = cri }

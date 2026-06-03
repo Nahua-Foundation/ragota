@@ -81,6 +81,7 @@ func (m model) View() string {
 	}
 
 	body := strings.Join(sections, "\n")
+	body = strings.TrimRight(body, "\n")
 	return box.Render(body)
 }
 
@@ -113,7 +114,7 @@ func renderIndexersSection(s state.Snapshot, width int) string {
 	var lines []string
 	lines = append(lines, headerStyle.Render("Indexers"))
 
-	for _, name := range []string{"ast", "vector"} {
+	for _, name := range []string{"ast", "vector", "crossrepo"} {
 		if idx, ok := s.Indexers[name]; ok {
 			metrics := s.IndexerMetrics[name]
 			lines = append(lines, renderIndexerDashboard(name, idx, metrics, width))

@@ -245,6 +245,9 @@ func (s *CodeServer) Build() *server.MCPServer {
 		s.wrap("code.stats", s.handleStats),
 	)
 
+	// === Cross-repo tools (если crIdx подключён) ===
+	s.registerCrossRepoTools(srv)
+
 	return srv
 }
 

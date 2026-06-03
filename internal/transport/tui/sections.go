@@ -53,14 +53,33 @@ func renderIndexerDashboard(name string, idx state.Indexer, metrics *state.Index
 		}
 		statsStr = dimStyle.Render(fmt.Sprintf("%s edges pending", prettyCount(pending)))
 
-	case "idle":
-		progressStr = okStyle.Render(fmt.Sprintf("✓ %d files", idx.FilesTotal))
-		if idx.Chunks > 0 && idx.Symbols == 0 {
-			// Vector indexer: только chunks
-			statsStr = dimStyle.Render(fmt.Sprintf("chunks=%s", prettyCount(idx.Chunks)))
+	case "detecting", "classifying", "writing":
+		// Cross-repo indexer statuses
+		if idx.Status == "classifying" && idx.FilesTotal > 0 {
+			progressBar := renderProgressBar(idx.FilesIndexed, idx.FilesTotal, 20, okStyle)
+			pct := int(float64(idx.FilesIndexed) / float64(idx.FilesTotal) * 100)
+			progressStr = fmt.Sprintf("%s  %d/%d (%d%%)", progressBar, idx.FilesIndexed, idx.FilesTotal, pct)
 		} else {
-			// AST indexer: units + edges
-			statsStr = dimStyle.Render(fmt.Sprintf("units=%d edges=%d", idx.Symbols, idx.Chunks))
+			progressStr = dimStyle.Render(fmt.Sprintf("%s...", idx.Status))
+		}
+		if idx.Symbols > 0 || idx.Chunks > 0 {
+			statsStr = dimStyle.Render(fmt.Sprintf("import_edges=%d call_edges=%d", idx.Symbols, idx.Chunks))
+		}
+
+	case "idle":
+		// Cross-repo idle: показываем edges вместо файлов
+		if name == "crossrepo" {
+			progressStr = okStyle.Render("✓ indexed")
+			statsStr = dimStyle.Render(fmt.Sprintf("import_edges=%d call_edges=%d", idx.Symbols, idx.Chunks))
+		} else {
+			progressStr = okStyle.Render(fmt.Sprintf("✓ %d files", idx.FilesTotal))
+			if idx.Chunks > 0 && idx.Symbols == 0 {
+				// Vector indexer: только chunks
+				statsStr = dimStyle.Render(fmt.Sprintf("chunks=%s", prettyCount(idx.Chunks)))
+			} else {
+				// AST indexer: units + edges
+				statsStr = dimStyle.Render(fmt.Sprintf("units=%d edges=%d", idx.Symbols, idx.Chunks))
+			}
 		}
 
 	case "error":

@@ -52,16 +52,19 @@ type ASTUnit struct {
 //   - "extends"     : src наследует от dst
 //   - "reference"   : src ссылается на dst (поле/переменная/тип)
 //   - "contains"    : src содержит dst (parent-child, дублирует ParentID, опционально)
+//   - "cross_call"  : src вызывает сервис в другом репо (HTTP/gRPC/Kafka)
 type Edge struct {
 	ID    int `json:"id"`
 	SrcID int `json:"src_id"`
 	DstID int `json:"dst_id"` // 0 если ещё не разрешено — тогда используется DstName
 	// Repo — имя репозитория источника ребра. Резолв dst допускается
 	// только внутри той же репы (см. ResolvePendingEdges).
-	Repo     string `json:"repo"`
-	Kind     string `json:"kind"`
-	DstName  string `json:"dst_name"`
-	FilePath string `json:"file_path"`
-	Line     int    `json:"line"`
+	Repo       string  `json:"repo"`
+	Kind       string  `json:"kind"`
+	DstName    string  `json:"dst_name"`
+	DstRepo    string  `json:"dst_repo"`     // целевой репо (для cross-repo edges)
+	Confidence float64 `json:"confidence"`   // уверенность (1.0 = AST match, < 1.0 = LLM)
+	FilePath   string  `json:"file_path"`
+	Line       int     `json:"line"`
 }
 

@@ -57,6 +57,11 @@ func (i *Indexer) FullScan(ctx context.Context) error {
 			if hasHashes {
 				_ = i.st.ResetFileHashes(ctx)
 			}
+			// Also reset cross_hash if graph is empty but cross_hash exists
+			hasCrossHash, _ := i.st.HasCrossHashes(ctx)
+			if hasCrossHash {
+				_ = i.st.ResetCrossHashes(ctx)
+			}
 		}
 	}
 

@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 
+	"ragota/internal/indexing/ast"
+	"ragota/internal/indexing/crossrepo/classifier"
+	"ragota/internal/indexing/crossrepoindex"
 	"ragota/internal/search/bm25"
 	"ragota/pkg/config"
 	"ragota/internal/indexing/embedder"
-	"ragota/internal/indexing/ast"
 	"ragota/internal/search/graph"
 	"ragota/internal/indexing/vector"
 	"ragota/pkg/lsp/manager"
@@ -106,6 +108,19 @@ func newServeCmd() *cobra.Command {
 			// Graph service
 			gr := graph.NewWithLSP(env.cfg, env.st, lspMgr)
 			gr.SetBus(env.bus)
+
+			// Cross-repo индексатор (отдельный, после AST)
+			crIdx := crossrepoindex.New(env.resolver, env.st)
+			crIdx.InitManifests()
+			if env.cfg.Ollama.URL != "" {
+				crIdx.SetClassifier(classifier.New(env.cfg.Ollama.URL, "qwen2.5-coder:3b"))
+			}
+			crIdx.SetBus(env.bus)
+			// Запускаем после AST
+			if err := crIdx.FullScan(context.Background()); err != nil {
+				fmt.Fprintf(os.Stderr, "crossrepo: fullscan failed: %v\n", err)
+			}
+			gr.SetCrossRepoIndex(crIdx)
 
 			// Vector index
 			qd := qdrant.New(fmt.Sprintf("http://%s:%d", env.cfg.Qdrant.Host, env.cfg.Qdrant.Port))

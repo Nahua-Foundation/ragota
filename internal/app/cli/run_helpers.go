@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ragota/internal/indexing/ast"
+	"ragota/internal/indexing/crossrepoindex"
 	"ragota/internal/indexing/embedder"
 	"ragota/internal/indexing/vector"
 	"ragota/pkg/config"
@@ -78,7 +79,7 @@ func waitAndScanVector(ctx context.Context, qd *qdrant.Client, emb *embedder.Oll
 }
 
 // fanoutWatchEvents транслирует события watcher'а во все индексаторы.
-func fanoutWatchEvents(ctx context.Context, w *watcher.Watcher, vIdx *vector.Vector, astIdx *astindex.Indexer) {
+func fanoutWatchEvents(ctx context.Context, w *watcher.Watcher, vIdx *vector.Vector, astIdx *astindex.Indexer, crIdx *crossrepoindex.Indexer) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -99,6 +100,11 @@ func fanoutWatchEvents(ctx context.Context, w *watcher.Watcher, vIdx *vector.Vec
 						logger.Log().Warn().Err(err).Str("path", ev.RelPath).Msg("ast: remove file failed")
 					}
 				}
+				if crIdx != nil {
+					if err := crIdx.RemoveFile(ctx, ev.AbsPath); err != nil {
+						logger.Log().Warn().Err(err).Str("path", ev.RelPath).Msg("crossrepo: remove file failed")
+					}
+				}
 			default:
 				if vIdx != nil {
 					if err := vIdx.IndexFile(ctx, ev.AbsPath); err != nil {
@@ -108,6 +114,11 @@ func fanoutWatchEvents(ctx context.Context, w *watcher.Watcher, vIdx *vector.Vec
 				if astIdx != nil {
 					if err := astIdx.IndexFile(ctx, ev.AbsPath); err != nil {
 						logger.Log().Warn().Err(err).Str("path", ev.RelPath).Msg("ast: index file failed")
+					}
+				}
+				if crIdx != nil {
+					if err := crIdx.IndexFile(ctx, ev.AbsPath); err != nil {
+						logger.Log().Warn().Err(err).Str("path", ev.RelPath).Msg("crossrepo: index file failed")
 					}
 				}
 			}

@@ -13,6 +13,12 @@ import (
 // resolveProgressFn вызывается между чанками для обновления прогресса.
 type resolveProgressFn func(pass int, resolved int64, remaining int64)
 
+// CrossRepoResolver — интерфейс для разрешения import paths → repo names.
+// Реализуется manifests.Registry из crossrepo пакета.
+type CrossRepoResolver interface {
+	ResolveImport(importPath string) string
+}
+
 // countUnresolved возвращает количество edges с dst_id = 0.
 func (s *SQLite) CountUnresolvedEdges(ctx context.Context) (int64, error) {
 	var n int64
@@ -188,6 +194,64 @@ func (s *SQLite) ResolvePendingEdges(ctx context.Context, onProgress resolveProg
 	return int(total), nil
 }
 
+// ResolvePendingEdgesCrossRepo — Pass 5: cross-repo import resolution.
+// Использует resolver для маппинга import_path → repo_name.
+// Для resolved edges ставит dst_repo и confidence = 1.0.
+// dst_id остаётся 0 если target module не найден в целевой репе.
+func (s *SQLite) ResolvePendingEdgesCrossRepo(ctx context.Context, resolver CrossRepoResolver, onProgress resolveProgressFn) (int, error) {
+	if resolver == nil {
+		return 0, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	// Получаем все unresolved import edges
+	rows, err := tx.QueryContext(ctx,
+		`SELECT `+edgeColumns+` FROM edges WHERE kind = 'import' AND dst_id = 0 AND dst_name <> ''`)
+	if err != nil {
+		return 0, err
+	}
+	edges, err := scanEdges(rows)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(edges) == 0 {
+		return 0, nil
+	}
+
+	var totalResolved int64
+	for _, e := range edges {
+		targetRepo := resolver.ResolveImport(e.DstName)
+		if targetRepo == "" {
+			continue
+		}
+
+		// Update edge with dst_repo
+		_, err := tx.ExecContext(ctx,
+			`UPDATE edges SET dst_repo = ?, confidence = 1.0 WHERE id = ?`,
+			targetRepo, e.ID)
+		if err != nil {
+			return 0, err
+		}
+		totalResolved++
+
+		if onProgress != nil {
+			onProgress(5, totalResolved, int64(len(edges))-totalResolved)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return int(totalResolved), nil
+}
+
 // ReplaceEdges атомарно заменяет рёбра, исходящие из любого ast_unit'а
 // данного srcFile. (Файл — естественная граница инкрементальной
 // переиндексации.)
@@ -205,13 +269,17 @@ func (s *SQLite) ReplaceEdges(ctx context.Context, srcFile string, edges []Edge)
 		return tx.Commit()
 	}
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO edges(repo, src_id, dst_id, kind, dst_name, file_path, line) VALUES(?,?,?,?,?,?,?)`)
+		`INSERT INTO edges(repo, src_id, dst_id, kind, dst_name, file_path, line, dst_repo, confidence) VALUES(?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, e := range edges {
-		if _, err := stmt.ExecContext(ctx, e.Repo, e.SrcID, e.DstID, e.Kind, e.DstName, e.FilePath, e.Line); err != nil {
+		conf := e.Confidence
+		if conf == 0 {
+			conf = 1.0
+		}
+		if _, err := stmt.ExecContext(ctx, e.Repo, e.SrcID, e.DstID, e.Kind, e.DstName, e.FilePath, e.Line, e.DstRepo, conf); err != nil {
 			return err
 		}
 	}
@@ -240,7 +308,7 @@ func scanEdges(rows *sql.Rows) ([]Edge, error) {
 	out := []Edge{}
 	for rows.Next() {
 		var e Edge
-		if err := rows.Scan(&e.ID, &e.Repo, &e.SrcID, &e.DstID, &e.Kind, &e.DstName, &e.FilePath, &e.Line); err != nil {
+		if err := rows.Scan(&e.ID, &e.Repo, &e.SrcID, &e.DstID, &e.Kind, &e.DstName, &e.FilePath, &e.Line, &e.DstRepo, &e.Confidence); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -248,7 +316,7 @@ func scanEdges(rows *sql.Rows) ([]Edge, error) {
 	return out, rows.Err()
 }
 
-const edgeColumns = `id, repo, src_id, dst_id, kind, dst_name, file_path, line`
+const edgeColumns = `id, repo, src_id, dst_id, kind, dst_name, file_path, line, dst_repo, confidence`
 
 // EdgesFrom возвращает все исходящие рёбра из srcID. kind="" — без фильтра.
 func (s *SQLite) EdgesFrom(ctx context.Context, srcID int, kind string) ([]Edge, error) {
@@ -267,6 +335,18 @@ func (s *SQLite) EdgesFrom(ctx context.Context, srcID int, kind string) ([]Edge,
 	return scanEdges(rows)
 }
 
+// DeleteEdgesByFilePath удаляет edges указанного вида для данного файла.
+func (s *SQLite) DeleteEdgesByFilePath(ctx context.Context, filePath, kind string) error {
+	if kind == "" {
+		_, err := s.db.ExecContext(ctx,
+			`DELETE FROM edges WHERE src_id IN (SELECT id FROM ast_units WHERE file_path = ?)`, filePath)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM edges WHERE src_id IN (SELECT id FROM ast_units WHERE file_path = ?) AND kind = ?`, filePath, kind)
+	return err
+}
+
 // EdgesTo возвращает все входящие рёбра в dstID. kind="" — без фильтра.
 func (s *SQLite) EdgesTo(ctx context.Context, dstID int, kind string) ([]Edge, error) {
 	var (
@@ -278,6 +358,49 @@ func (s *SQLite) EdgesTo(ctx context.Context, dstID int, kind string) ([]Edge, e
 	} else {
 		rows, err = s.db.QueryContext(ctx, `SELECT `+edgeColumns+` FROM edges WHERE dst_id = ? AND kind = ?`, dstID, kind)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return scanEdges(rows)
+}
+
+// AllEdgesByKind возвращает все edges указанного вида.
+// kind="" — все edges.
+func (s *SQLite) AllEdgesByKind(ctx context.Context, kind string) ([]Edge, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if kind == "" {
+		rows, err = s.db.QueryContext(ctx, `SELECT `+edgeColumns+` FROM edges`)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `SELECT `+edgeColumns+` FROM edges WHERE kind = ?`, kind)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return scanEdges(rows)
+}
+
+// InsertEdge вставляет одно ребро.
+func (s *SQLite) InsertEdge(ctx context.Context, e Edge) (int, error) {
+	conf := e.Confidence
+	if conf == 0 {
+		conf = 1.0
+	}
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO edges(repo, src_id, dst_id, kind, dst_name, file_path, line, dst_repo, confidence) VALUES(?,?,?,?,?,?,?,?,?)`,
+		e.Repo, e.SrcID, e.DstID, e.Kind, e.DstName, e.FilePath, e.Line, e.DstRepo, conf)
+	if err != nil {
+		return 0, err
+	}
+	id64, _ := res.LastInsertId()
+	return int(id64), nil
+}
+
+// AllCrossRepoEdges возвращает все edges с dst_repo != "" (cross-repo связи).
+func (s *SQLite) AllCrossRepoEdges(ctx context.Context) ([]Edge, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+edgeColumns+` FROM edges WHERE dst_repo <> ''`)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +462,7 @@ func (s *SQLite) EdgesByDstNameForLangRepo(ctx context.Context, name, kind, lang
 	}
 	// Явные алиасы edges.* обязательны: после JOIN с ast_units такие
 	// колонки как `id`, `repo` становятся неоднозначными.
-	q := `SELECT edges.id, edges.repo, edges.src_id, edges.dst_id, edges.kind, edges.dst_name, edges.file_path, edges.line
+	q := `SELECT edges.id, edges.repo, edges.src_id, edges.dst_id, edges.kind, edges.dst_name, edges.file_path, edges.line, edges.dst_repo, edges.confidence
 	      FROM edges
 	      JOIN ast_units AS src ON src.id = edges.src_id
 	      WHERE (edges.dst_name = ? OR edges.dst_name LIKE ?)`

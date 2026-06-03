@@ -207,6 +207,11 @@ func (s *SQLite) init() error {
 		`ALTER TABLE edges ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ast_units ADD COLUMN name_start_line INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE ast_units ADD COLUMN name_start_col INTEGER NOT NULL DEFAULT 0`,
+		// Cross-repo columns
+		`ALTER TABLE edges ADD COLUMN dst_repo TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE edges ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0`,
+		// Crossrepo aggregate hash — skip reindex if AST didn't change
+		`ALTER TABLE files ADD COLUMN cross_hash TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, q := range alters {
 		if _, err := s.db.Exec(q); err != nil {

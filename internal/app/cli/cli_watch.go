@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	"ragota/internal/indexing/ast"
+	"ragota/internal/indexing/crossrepo/classifier"
+	"ragota/internal/indexing/crossrepoindex"
 	"ragota/pkg/config"
 	"ragota/internal/indexing/vector"
 	"ragota/pkg/state"
@@ -58,6 +60,14 @@ func newWatchCmd() *cobra.Command {
 			astIdx.SetBus(bus)
 			astIdx.SetRepoResolver(boot.resolver)
 
+			// Cross-repo indexer.
+			crIdx := crossrepoindex.New(boot.resolver, boot.st)
+			crIdx.InitManifests()
+			if cfg.Ollama.URL != "" {
+				crIdx.SetClassifier(classifier.New(cfg.Ollama.URL, "qwen2.5-coder:3b"))
+			}
+			crIdx.SetBus(bus)
+
 			// Vector indexer — optional.
 			var vIdx *vector.Vector
 			if !skipVector {
@@ -72,8 +82,11 @@ func newWatchCmd() *cobra.Command {
 			}
 			defer w.Close()
 
-			go func() { _ = astIdx.FullScan(ctx) }()
-			go fanoutWatchEvents(ctx, w, vIdx, astIdx)
+			go func() {
+				_ = astIdx.FullScan(ctx)
+				_ = crIdx.FullScan(ctx)
+			}()
+			go fanoutWatchEvents(ctx, w, vIdx, astIdx, crIdx)
 
 			// TUI or wait for signal.
 			if noTUI {

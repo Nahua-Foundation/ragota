@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"ragota/internal/indexing/ast"
+	"ragota/internal/indexing/crossrepo/classifier"
+	"ragota/internal/indexing/crossrepoindex"
 	"ragota/internal/search/bm25"
 	"ragota/pkg/config"
 	"ragota/internal/indexing/embedder"
@@ -35,12 +37,13 @@ import (
 // newRunCmd: ai-tools run [-t] [-v] [-l] [-s] [-w] [--env local|docker] [directory]
 func newRunCmd() *cobra.Command {
 	var (
-		enableVector bool
-		enableLSP    bool
-		enableSymbol bool
-		doWatch      bool
-		envMode      string
-		noTUI        bool
+		enableVector   bool
+		enableLSP      bool
+		enableSymbol   bool
+		enableTreeSitter bool // alias for -s (backward compat)
+		doWatch        bool
+		envMode        string
+		noTUI          bool
 	)
 	c := &cobra.Command{
 		Use:   "run [directory]",
@@ -86,13 +89,17 @@ func newRunCmd() *cobra.Command {
 
 			startDockerAll := envMode == "docker"
 
+			// -t — alias для -s (backward compatibility)
+			symbolEnabled := enableSymbol || enableTreeSitter
+
 			return runCore(ctx, cancel, cfg, bus, boot.resolver, boot.repoSig,
-				enableVector, enableLSP, enableSymbol, doWatch, noTUI, startDockerAll)
+				enableVector, enableLSP, symbolEnabled, doWatch, noTUI, startDockerAll)
 		},
 	}
 	c.Flags().BoolVarP(&enableVector, "vec", "v", false, "enable vector search")
 	c.Flags().BoolVarP(&enableLSP, "lsp", "l", false, "enable LSP features")
 	c.Flags().BoolVarP(&enableSymbol, "sym", "s", false, "enable symbol-aware search")
+	c.Flags().BoolVarP(&enableTreeSitter, "treesitter", "t", false, "enable symbol-aware search (alias for -s)")
 	c.Flags().BoolVarP(&doWatch, "watch", "w", false, "start indexers and TUI")
 	c.Flags().StringVar(&envMode, "env", "", "environment: 'local' or 'docker'")
 	c.Flags().BoolVar(&noTUI, "no-tui", false, "don't open TUI (only with -w)")
@@ -166,6 +173,17 @@ func runCore(ctx context.Context, cancel context.CancelFunc, cfg *config.Config,
 		grSvc.SetBus(bus)
 	}
 
+	// Cross-repo индексатор (отдельный, после AST)
+	var crIdx *crossrepoindex.Indexer
+	if enableSymbol && repoResolver != nil {
+		crIdx = crossrepoindex.New(repoResolver, st)
+		crIdx.InitManifests()
+		if cfg.Ollama.URL != "" {
+			crIdx.SetClassifier(classifier.New(cfg.Ollama.URL, "qwen2.5-coder:3b"))
+		}
+		crIdx.SetBus(bus)
+	}
+
 	if doWatch && vIdx != nil {
 		go waitAndScanVector(ctx, qd, emb, vIdx, bus)
 	}
@@ -185,9 +203,13 @@ func runCore(ctx context.Context, cancel context.CancelFunc, cfg *config.Config,
 			go func() {
 				time.Sleep(2 * time.Second)
 				_ = astIdx.FullScan(ctx)
+				// Cross-repo после AST
+				if crIdx != nil {
+					_ = crIdx.FullScan(ctx)
+				}
 			}()
 		}
-		go fanoutWatchEvents(ctx, w, vIdx, astIdx)
+		go fanoutWatchEvents(ctx, w, vIdx, astIdx, crIdx)
 	}
 
 	var wg sync.WaitGroup
@@ -212,6 +234,10 @@ func runCore(ctx context.Context, cancel context.CancelFunc, cfg *config.Config,
 	}
 	if grSvc != nil {
 		codeSrv.SetGraphService(grSvc)
+	}
+	// Cross-repo graph service
+	if crIdx != nil && grSvc != nil {
+		grSvc.SetCrossRepoIndex(crIdx)
 	}
 
 	if !doWatch {
