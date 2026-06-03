@@ -157,8 +157,7 @@ func repoMatchCondition(val any) map[string]any {
 	return nil
 }
 
-// SimilarToUnit реализует symbols.SimilarSearcher: ищет AST units, чьи
-// эмбеддинги ближе всего к содержимому unit'а u. Сейчас — приближение
+// SimilarToUnit ищет AST units, чьи эмбеддинги ближе всего к содержимому unit'а u. Сейчас — приближение
 // через text-based семантический поиск по подписи + первой строке тела.
 func (v *Vector) SimilarToUnit(ctx context.Context, u store.ASTUnit, limit int) ([]store.ASTUnit, error) {
 	if v.store == nil {

@@ -1,3 +1,6 @@
+// Tests для util-функций: parseRepoParam, repoMatcher, filterUnitsByRepo,
+// filterEdgesByRepo, jsonResult, errorToResult.
+
 package mcp
 
 import (
@@ -43,7 +46,6 @@ func TestParseRepoParam_JSONArray(t *testing.T) {
 
 func TestParseRepoParam_JSONArraySingleElement(t *testing.T) {
 	result := parseRepoParam(`["only"]`)
-	// Single element should be unwrapped to string
 	assert.Equal(t, "only", result)
 }
 
@@ -58,7 +60,6 @@ func TestParseRepoParam_JSONArrayEmpty(t *testing.T) {
 }
 
 func TestParseRepoParam_InvalidJSONArray(t *testing.T) {
-	// Invalid JSON starting with '[' falls back to string
 	result := parseRepoParam("[not-json")
 	assert.Equal(t, "[not-json", result)
 }
@@ -66,28 +67,26 @@ func TestParseRepoParam_InvalidJSONArray(t *testing.T) {
 func TestParseRepoParam_CSV(t *testing.T) {
 	result := parseRepoParam("a,b,c")
 	arr, ok := result.([]string)
-	require.True(t, ok, "expected []string, got %T", result)
+	require.True(t, ok)
 	assert.Equal(t, []string{"a", "b", "c"}, arr)
 }
 
 func TestParseRepoParam_CSVWithSpaces(t *testing.T) {
 	result := parseRepoParam(" a , b , c ")
 	arr, ok := result.([]string)
-	require.True(t, ok, "expected []string, got %T", result)
+	require.True(t, ok)
 	assert.Equal(t, []string{"a", "b", "c"}, arr)
 }
 
 func TestParseRepoParam_CSVWithEmptyParts(t *testing.T) {
 	result := parseRepoParam("a,,b,")
 	arr, ok := result.([]string)
-	require.True(t, ok, "expected []string, got %T", result)
+	require.True(t, ok)
 	assert.Equal(t, []string{"a", "b"}, arr)
 }
 
 func TestParseRepoParam_CSVSingleValue(t *testing.T) {
-	// Single value with trailing comma becomes CSV
 	result := parseRepoParam("only,")
-	// After filtering empty parts, single element
 	assert.Equal(t, "only", result)
 }
 
@@ -113,7 +112,7 @@ func TestNormalizeRepoList_MultipleElements(t *testing.T) {
 }
 
 func TestNormalizeRepoList_WithWildcard(t *testing.T) {
-	assert.Nil(t, normalizeRepoList([]string{"a", "*"}), "wildcard should cancel filter")
+	assert.Nil(t, normalizeRepoList([]string{"a", "*"}))
 	assert.Nil(t, normalizeRepoList([]string{"*"}))
 }
 
@@ -328,22 +327,26 @@ func TestFilterEdgesByRepo_EmptyInput(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// jsonResult (additional coverage beyond util_test.go)
+// jsonResult
 // ---------------------------------------------------------------------------
+
+func TestJsonResult_Nil(t *testing.T) {
+	res, err := jsonResult(nil)
+	require.NoError(t, err)
+	assert.Equal(t, "[]", contentText(res.Content[0]))
+}
 
 func TestJsonResult_NilSlice(t *testing.T) {
 	var nilSlice []store.ASTUnit
 	res, err := jsonResult(nilSlice)
 	require.NoError(t, err)
-	text := contentText(res.Content[0])
-	assert.Equal(t, "[]", text)
+	assert.Equal(t, "[]", contentText(res.Content[0]))
 }
 
 func TestJsonResult_EmptySlice(t *testing.T) {
 	res, err := jsonResult([]store.ASTUnit{})
 	require.NoError(t, err)
-	text := contentText(res.Content[0])
-	assert.Equal(t, "[]", text)
+	assert.Equal(t, "[]", contentText(res.Content[0]))
 }
 
 func TestJsonResult_NonNilSlice(t *testing.T) {
@@ -373,7 +376,7 @@ func TestJsonResult_Map(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// errorToResult (additional coverage)
+// errorToResult
 // ---------------------------------------------------------------------------
 
 func TestErrorToResult_Format(t *testing.T) {
@@ -386,10 +389,21 @@ func TestErrorToResult_Format(t *testing.T) {
 }
 
 func TestErrorToResult_NilError(t *testing.T) {
-	// Passing nil error should still format without panic
 	res, err := errorToResult("tool", nil)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	text := contentText(res.Content[0])
 	assert.Contains(t, text, "tool")
+}
+
+// ---------------------------------------------------------------------------
+// parseCSVParam
+// ---------------------------------------------------------------------------
+
+func TestParseCSVParam(t *testing.T) {
+	assert.Nil(t, parseCSVParam(""))
+	assert.Nil(t, parseCSVParam("  "))
+	assert.Equal(t, []string{"a"}, parseCSVParam("a"))
+	assert.Equal(t, []string{"a", "b"}, parseCSVParam("a,b"))
+	assert.Equal(t, []string{"a", "b"}, parseCSVParam(" a , b "))
 }

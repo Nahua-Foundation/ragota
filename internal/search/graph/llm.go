@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -302,27 +301,12 @@ func (s *Service) recordOllamaLatency(model string, start time.Time, err error) 
 
 // sourceContent возвращает исходный код AST-юнита из файла.
 func (s *Service) sourceContent(u store.ASTUnit) string {
-	src, err := os.ReadFile(u.FilePath)
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(string(src), "\n")
-	start := u.StartLine - 1
-	end := u.EndLine
-	if start < 0 {
-		start = 0
-	}
-	if end > len(lines) {
-		end = len(lines)
-	}
-	return strings.Join(lines[start:end], "\n")
+	src, _ := u.ReadSource(store.SourceOptions{})
+	return src
 }
 
 // sourceContentFile возвращает полный исходный код файла.
 func (s *Service) sourceContentFile(path string) (string, error) {
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return string(src), nil
+	u := store.ASTUnit{FilePath: path}
+	return u.ReadFullSource()
 }

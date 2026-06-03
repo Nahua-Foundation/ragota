@@ -266,14 +266,14 @@ func TestNewRunCmd_Flags(t *testing.T) {
 	assert.NotNil(t, cmd)
 
 	// Check that expected flags exist
-	flags := []string{"ts", "vec", "lsp", "sym", "watch", "env", "no-tui"}
+	flags := []string{"vec", "lsp", "sym", "watch", "env", "no-tui"}
 	for _, name := range flags {
 		f := cmd.Flags().Lookup(name)
 		assert.NotNil(t, f, "flag %q should exist", name)
 	}
 
 	// Check short flags
-	shortFlags := map[string]string{"ts": "t", "vec": "v", "lsp": "l", "sym": "s", "watch": "w"}
+	shortFlags := map[string]string{"vec": "v", "lsp": "l", "sym": "s", "watch": "w"}
 	for name, short := range shortFlags {
 		f := cmd.Flags().ShorthandLookup(short)
 		assert.NotNil(t, f, "short flag -%s for %q should exist", short, name)
@@ -295,7 +295,7 @@ func TestNewRunCmd_InvalidEnv(t *testing.T) {
 	cmd := newRunCmd()
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
-	cmd.SetArgs([]string{"--env", "invalid", "-t"})
+	cmd.SetArgs([]string{"--env", "invalid", "-v"})
 	err := cmd.Execute()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid --env:")
@@ -346,26 +346,8 @@ func TestNewMcpConfigCmd_Flags(t *testing.T) {
 	assert.NotNil(t, f)
 }
 
-func TestNewServeTreesitterCmd_HasRootFlag(t *testing.T) {
-	cmd := newServeTreesitterCmd()
-	f := cmd.Flags().Lookup("root")
-	assert.NotNil(t, f)
-}
-
-func TestNewServeVectorCmd_HasRootFlag(t *testing.T) {
-	cmd := newServeVectorCmd()
-	f := cmd.Flags().Lookup("root")
-	assert.NotNil(t, f)
-}
-
-func TestNewServeLSPCmd_HasRootFlag(t *testing.T) {
-	cmd := newServeLSPCmd()
-	f := cmd.Flags().Lookup("root")
-	assert.NotNil(t, f)
-}
-
-func TestNewServeSymbolCmd_HasRootFlag(t *testing.T) {
-	cmd := newServeSymbolCmd()
+func TestNewServeCmd_HasRootFlag(t *testing.T) {
+	cmd := newServeCmd()
 	f := cmd.Flags().Lookup("root")
 	assert.NotNil(t, f)
 }

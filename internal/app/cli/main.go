@@ -5,9 +5,7 @@
 //   - clean                — почистить индексы и БД
 //   - current              — статистика файлов с учётом игнорирования
 //   - gen-config           — сгенерировать дефолтный YAML-конфиг рядом с бинарём
-//   - serve-treesitter     — MCP tree-sitter сервер (stdio)
-//   - serve-vector         — MCP vector сервер (stdio)
-//   - serve-lsp            — MCP LSP сервер (stdio)
+//   - serve                — единый MCP ragota-code сервер (stdio)
 package cli
 
 import (
@@ -55,10 +53,7 @@ func Execute() {
 	rootCmd.AddCommand(newCurrentCmd())
 	rootCmd.AddCommand(newGenConfigCmd())
 	rootCmd.AddCommand(newMcpConfigCmd())
-	rootCmd.AddCommand(newServeTreesitterCmd())
-	rootCmd.AddCommand(newServeVectorCmd())
-	rootCmd.AddCommand(newServeLSPCmd())
-	rootCmd.AddCommand(newServeSymbolCmd())
+	rootCmd.AddCommand(newServeCmd())
 
 	// Поддержка слитной записи коротких флагов для run: `-tvlw`, `-tw`, `-lvt` и т.п.
 	// Разворачиваем такие токены в набор индивидуальных `-x` ДО передачи cobra.

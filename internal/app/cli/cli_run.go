@@ -25,7 +25,6 @@ import (
 	"ragota/internal/search/rerank"
 	"ragota/pkg/state"
 	"ragota/internal/store"
-	"ragota/internal/search/symbols"
 	"ragota/internal/transport/tui"
 	"ragota/pkg/watcher"
 
@@ -36,7 +35,6 @@ import (
 // newRunCmd: ai-tools run [-t] [-v] [-l] [-s] [-w] [--env local|docker] [directory]
 func newRunCmd() *cobra.Command {
 	var (
-		enableTS     bool
 		enableVector bool
 		enableLSP    bool
 		enableSymbol bool
@@ -46,14 +44,15 @@ func newRunCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "run [directory]",
-		Short: "Run selected MCP servers (-t -v -l -s) and/or -w indexing",
-		Long: "Run any combination of MCP servers and the watcher.\n" +
-			"Short flags: -t (tree-sitter), -v (vector), -l (LSP), -s (symbol), -w (watch+TUI).\n" +
+		Short: "Run unified code MCP server and/or -w indexing",
+		Long: "Run the unified ragota-code MCP server and/or watcher.\n" +
+			"Flags: -v (vector), -l (LSP), -s (symbol), -w (watch+TUI).\n" +
+			"All enabled features are combined into a single unified server.\n" +
 			"Environment: --env local (default) or --env docker.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !enableTS && !enableVector && !enableLSP && !enableSymbol && !doWatch {
-				return errors.New("nothing to run: pass at least one of -t, -v, -l, -s, -w")
+			if !enableVector && !enableLSP && !enableSymbol && !doWatch {
+				return errors.New("nothing to run: pass at least one of -v, -l, -s, -w")
 			}
 			if envMode != "" && envMode != "local" && envMode != "docker" {
 				return fmt.Errorf("invalid --env: %s", envMode)
@@ -88,13 +87,12 @@ func newRunCmd() *cobra.Command {
 			startDockerAll := envMode == "docker"
 
 			return runCore(ctx, cancel, cfg, bus, boot.resolver, boot.repoSig,
-				enableTS, enableVector, enableLSP, enableSymbol, doWatch, noTUI, startDockerAll)
+				enableVector, enableLSP, enableSymbol, doWatch, noTUI, startDockerAll)
 		},
 	}
-	c.Flags().BoolVarP(&enableTS, "ts", "t", false, "run tree-sitter MCP server")
-	c.Flags().BoolVarP(&enableVector, "vec", "v", false, "run vector MCP server")
-	c.Flags().BoolVarP(&enableLSP, "lsp", "l", false, "run LSP MCP server")
-	c.Flags().BoolVarP(&enableSymbol, "sym", "s", false, "run symbol-aware MCP server")
+	c.Flags().BoolVarP(&enableVector, "vec", "v", false, "enable vector search")
+	c.Flags().BoolVarP(&enableLSP, "lsp", "l", false, "enable LSP features")
+	c.Flags().BoolVarP(&enableSymbol, "sym", "s", false, "enable symbol-aware search")
 	c.Flags().BoolVarP(&doWatch, "watch", "w", false, "start indexers and TUI")
 	c.Flags().StringVar(&envMode, "env", "", "environment: 'local' or 'docker'")
 	c.Flags().BoolVar(&noTUI, "no-tui", false, "don't open TUI (only with -w)")
@@ -102,7 +100,7 @@ func newRunCmd() *cobra.Command {
 }
 
 func runCore(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, bus *state.Bus, repoResolver *repos.Resolver, repoSig string,
-	enableTS, enableVector, enableLSP, enableSymbol, doWatch, noTUI, startDockerAll bool) error {
+	enableVector, enableLSP, enableSymbol, doWatch, noTUI, startDockerAll bool) error {
 
 	var (
 		st      *store.SQLite
@@ -114,7 +112,6 @@ func runCore(ctx context.Context, cancel context.CancelFunc, cfg *config.Config,
 		bleveIx bm25.Index
 		rer     rerank.Reranker
 		grSvc   *graph.Service
-		symSvc  *symbols.Service
 		err     error
 	)
 	if enableVector || enableSymbol || doWatch {
@@ -167,10 +164,6 @@ func runCore(ctx context.Context, cancel context.CancelFunc, cfg *config.Config,
 			grSvc = graph.NewWithLSP(cfg, st, lspMgr)
 		}
 		grSvc.SetBus(bus)
-		symSvc = symbols.New(st, grSvc, nil)
-		if vIdx != nil {
-			symSvc.SetSimilarSearcher(vIdx)
-		}
 	}
 
 	if doWatch && vIdx != nil {
@@ -198,28 +191,37 @@ func runCore(ctx context.Context, cancel context.CancelFunc, cfg *config.Config,
 	}
 
 	var wg sync.WaitGroup
-	sseServers := make([]*server.SSEServer, 0, 4)
-	if enableVector {
-		if !doWatch {
+	sseServers := make([]*server.SSEServer, 0, 1)
+
+	// Build unified code server with all enabled features
+	codeSrv := mcppkg.NewCodeServer(cfg, st, bus, repoResolver)
+	if astIdx != nil {
+		codeSrv.SetASTIndex(astIdx)
+	}
+	if vIdx != nil {
+		codeSrv.SetVector(vIdx, qd)
+		if bleveIx != nil {
+			codeSrv.SetBM25(bm25.AsWriteSink(bleveIx))
+		}
+		if rer != nil {
+			codeSrv.SetReranker(rer)
+		}
+	}
+	if lspMgr != nil {
+		codeSrv.SetLSPManager(lspMgr)
+	}
+	if grSvc != nil {
+		codeSrv.SetGraphService(grSvc)
+	}
+
+	if !doWatch {
+		if vIdx != nil {
 			if err := vIdx.Init(ctx); err != nil {
 				return fmt.Errorf("vector init: %w", err)
 			}
 		}
-		vs := mcppkg.NewVectorServer(cfg, vIdx, qd, bus)
-		if bleveIx != nil {
-			vs.SetBM25(bm25.AsWriteSink(bleveIx))
-		}
-		if rer != nil {
-			vs.SetReranker(rer)
-		}
-		sseServers = append(sseServers, startSSE(ctx, &wg, vs.Build(), "vector", cfg.MCP.Vector))
 	}
-	if enableLSP {
-		sseServers = append(sseServers, startSSE(ctx, &wg, mcppkg.NewLSPServer(cfg, lspMgr, st, bus).Build(), "lsp", cfg.MCP.LSP))
-	}
-	if enableSymbol {
-		sseServers = append(sseServers, startSSE(ctx, &wg, mcppkg.NewSymbolServer(cfg, st, symSvc, grSvc, bus).Build(), "symbol", cfg.MCP.Symbol))
-	}
+	sseServers = append(sseServers, startSSE(ctx, &wg, codeSrv.Build(), "code", cfg.MCP.Vector))
 
 	runErr := func() error {
 		if doWatch && !noTUI {

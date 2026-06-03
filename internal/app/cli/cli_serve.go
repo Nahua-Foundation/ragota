@@ -18,7 +18,6 @@ import (
 	"ragota/internal/search/rerank"
 	"ragota/pkg/state"
 	"ragota/internal/store"
-	"ragota/internal/search/symbols"
 
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
@@ -82,129 +81,80 @@ func serveBootstrap(root string) (*serveEnv, error) {
 	}, nil
 }
 
-func newServeTreesitterCmd() *cobra.Command {
+func newServeCmd() *cobra.Command {
 	var root string
 	c := &cobra.Command{
-		Use:   "serve-treesitter",
-		Short: "Run AST/tree-sitter MCP server over stdio",
+		Use:   "serve",
+		Short: "Run unified ragota-code MCP server over stdio (AST + vector + LSP + graph)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			env, err := serveBootstrap(root)
 			if err != nil {
 				return err
 			}
 			defer env.st.Close()
-			idx := astindex.New(env.cfg, env.st)
-			idx.SetBus(env.bus)
-			idx.SetRepoResolver(env.resolver)
-			srv := mcppkg.NewTreeSitterServer(env.cfg, idx, env.st, env.bus).Build()
-			return server.ServeStdio(srv)
-		},
-	}
-	addRootFlag(c, &root)
-	return c
-}
 
-func newServeVectorCmd() *cobra.Command {
-	var root string
-	c := &cobra.Command{
-		Use:   "serve-vector",
-		Short: "Run vector (qdrant+ollama) + BM25 + reranker MCP server over stdio",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			env, err := serveBootstrap(root)
-			if err != nil {
-				return err
-			}
-			defer env.st.Close()
+			// AST indexer
+			astIdx := astindex.New(env.cfg, env.st)
+			astIdx.SetBus(env.bus)
+			astIdx.SetRepoResolver(env.resolver)
+
+			// LSP manager
+			lspMgr := manager.NewManager(env.cfg.Root, cfgToLSPSpecs(env.cfg))
+			lspMgr.SetRepoResolver(env.resolver)
+			defer lspMgr.Close()
+
+			// Graph service
+			gr := graph.NewWithLSP(env.cfg, env.st, lspMgr)
+			gr.SetBus(env.bus)
+
+			// Vector index
 			qd := qdrant.New(fmt.Sprintf("http://%s:%d", env.cfg.Qdrant.Host, env.cfg.Qdrant.Port))
 			emb := embedder.New(env.cfg.Ollama.URL, env.cfg.Ollama.EmbedModel)
-			idx := vector.NewVector(env.cfg, qd, emb, env.st, env.bus)
-			idx.SetRepoResolver(env.resolver)
+			vIdx := vector.NewVector(env.cfg, qd, emb, env.st, env.bus)
+			vIdx.SetRepoResolver(env.resolver)
 
+			// BM25
 			var bleveIx bm25.Index
 			if env.cfg.BM25.Enabled {
 				if b, berr := bm25.Open(env.cfg.BM25Path(), env.cfg.BM25.K1, env.cfg.BM25.B); berr == nil {
 					bleveIx = b
 					defer bleveIx.Close()
-					idx.SetBM25(bm25.AsWriteSink(bleveIx))
+					vIdx.SetBM25(bm25.AsWriteSink(bleveIx))
 				} else {
 					fmt.Fprintf(os.Stderr, "bm25 open failed: %v (continuing)\n", berr)
 				}
 			}
 
-			if err := idx.Init(context.Background()); err != nil {
+			// Init vector collections
+			if err := vIdx.Init(context.Background()); err != nil {
 				return fmt.Errorf("init qdrant: %w", err)
 			}
-			vs := mcppkg.NewVectorServer(env.cfg, idx, qd, env.bus)
-			if bleveIx != nil {
-				vs.SetBM25(bm25.AsWriteSink(bleveIx))
-			}
+
+			// Reranker
+			var rer rerank.Reranker
 			if env.cfg.Rerank.Enabled {
-				vs.SetReranker(rerank.New(rerank.Options{
+				rer = rerank.New(rerank.Options{
 					URL:      env.cfg.RerankURL(),
 					Model:    env.cfg.Rerank.Model,
 					Required: env.cfg.Rerank.Required,
 					TopN:     env.cfg.Rerank.TopN,
-				}))
+				})
 			}
-			return server.ServeStdio(vs.Build())
-		},
-	}
-	addRootFlag(c, &root)
-	return c
-}
 
-func newServeLSPCmd() *cobra.Command {
-	var root string
-	c := &cobra.Command{
-		Use:   "serve-lsp",
-		Short: "Run LSP-multiplexer MCP server over stdio (go/typescript/python/java)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			env, err := serveBootstrap(root)
-			if err != nil {
-				return err
+			// Build unified code server
+			srv := mcppkg.NewCodeServer(env.cfg, env.st, env.bus, env.resolver)
+			srv.SetASTIndex(astIdx)
+			srv.SetVector(vIdx, qd)
+			srv.SetLSPManager(lspMgr)
+			srv.SetGraphService(gr)
+			if bleveIx != nil {
+				srv.SetBM25(bm25.AsWriteSink(bleveIx))
 			}
-			defer env.st.Close()
-
-			mgr := manager.NewManager(env.cfg.Root, cfgToLSPSpecs(env.cfg))
-			mgr.SetRepoResolver(env.resolver)
-			defer mgr.Close()
-			srv := mcppkg.NewLSPServer(env.cfg, mgr, env.st, env.bus).Build()
-			return server.ServeStdio(srv)
-		},
-	}
-	addRootFlag(c, &root)
-	return c
-}
-
-func newServeSymbolCmd() *cobra.Command {
-	var root string
-	c := &cobra.Command{
-		Use:   "serve-symbol",
-		Short: "Run symbol-aware MCP server over stdio (AST units + code graph)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			env, err := serveBootstrap(root)
-			if err != nil {
-				return err
+			if rer != nil {
+				srv.SetReranker(rer)
 			}
-			defer env.st.Close()
-			// LSP-manager для ленивого обогащения графа (calls/implements).
-			// При недоступности LSP graph.Service всегда падает обратно на tree-sitter.
-			lspMgr := manager.NewManager(env.cfg.Root, cfgToLSPSpecs(env.cfg))
-			lspMgr.SetRepoResolver(env.resolver)
-			defer lspMgr.Close()
-			gr := graph.NewWithLSP(env.cfg, env.st, lspMgr)
-			gr.SetBus(env.bus)
-			syms := symbols.New(env.st, gr, nil)
-			syms.SetLSPManager(lspMgr)
-			// Опционально подключаем similar-search через Vector, если qdrant доступен.
-			qd := qdrant.New(fmt.Sprintf("http://%s:%d", env.cfg.Qdrant.Host, env.cfg.Qdrant.Port))
-			emb := embedder.New(env.cfg.Ollama.URL, env.cfg.Ollama.EmbedModel)
-			vIdx := vector.NewVector(env.cfg, qd, emb, env.st, env.bus)
-			vIdx.SetRepoResolver(env.resolver)
-			syms.SetSimilarSearcher(vIdx)
 
-			srv := mcppkg.NewSymbolServer(env.cfg, env.st, syms, gr, env.bus).Build()
-			return server.ServeStdio(srv)
+			return server.ServeStdio(srv.Build())
 		},
 	}
 	addRootFlag(c, &root)

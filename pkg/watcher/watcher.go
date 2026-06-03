@@ -72,6 +72,10 @@ type Watcher struct {
 	// goroutine lifecycle
 	wg     sync.WaitGroup
 	doneCh chan struct{} // закрывается когда loop() завершается
+
+	// closedMu защищает флаг closed — чтобы flush не писал в закрытый channel.
+	closedMu sync.Mutex
+	closed   bool
 }
 
 // SetRepoResolver настраивает резолвер репо для multi-repo workspace.
@@ -168,8 +172,13 @@ func (w *Watcher) shouldAccept(path string) bool {
 }
 
 func (w *Watcher) loop(ctx context.Context) {
-	defer close(w.out)
-	defer close(w.doneCh)
+	defer func() {
+		w.closedMu.Lock()
+		w.closed = true
+		w.closedMu.Unlock()
+		close(w.out)
+		close(w.doneCh)
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -254,6 +263,14 @@ func (w *Watcher) flush() {
 	w.pending = make(map[string]Event, len(pending))
 	w.timer = nil
 	w.mu.Unlock()
+
+	// Держим closedMu locked во время отправки чтобы loop() не мог
+	// закрыть w.out между нашей проверкой и send.
+	w.closedMu.Lock()
+	defer w.closedMu.Unlock()
+	if w.closed {
+		return
+	}
 	for _, e := range pending {
 		select {
 		case w.out <- e:

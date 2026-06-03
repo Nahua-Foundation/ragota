@@ -10,8 +10,7 @@
 1. **Индексирует** репозиторий: парсит AST (tree-sitter + go/ast), бьёт код на
    чанки, считает embedding-ы и складывает их в Qdrant + Bleve (BM25) + SQLite
    (граф вызовов/ссылок).
-2. **Отдаёт** результаты как **MCP-серверы** (stdio): `vector`, `tree-sitter`,
-   `lsp` — для интеграции с AI-агентами.
+2. **Отдаёт** результаты как **единый MCP-сервер** `ragota-code` (stdio) — 12 инструментов под префиксом `code.*`.
 3. **Дополняет** статический граф ссылками от LSP (gopls / pyright /
    tsserver / jdtls).
 4. Имеет **TUI** для наблюдения за индексаторами и docker-сервисами.
@@ -28,7 +27,7 @@ cmd/ragota/main.go         # тонкая точка входа → вызыва
 internal/app/cli/           # пакет cli — cobra-роутер подкоманд
   main.go                     # Execute() — сборка rootCmd, expandRunShortFlags
   cli_run.go                  # run     — всё-в-одном (watch + MCP + TUI)
-  cli_serve.go                # serve-* — отдельный MCP-сервер по stdio
+  cli_serve.go                # serve    — единый MCP-сервер ragota-code (stdio)
   cli_watch.go                # watch   — индексация + TUI без MCP
   cli_clean.go                # clean   — снести индексы/БД
   cli_genconfig.go            # gen-config
@@ -78,7 +77,7 @@ ragota/
 │   │   └── bm25/                 # Bleve BM25 index
 │   ├── store/                  # SQLite: миграции, CRUD, доменные типы
 │   ├── transport/              # Точки входа (транспортный слой)
-│   │   ├── mcp/                  # MCP-серверы (vector, treesitter, lsp, symbol)
+│   │   ├── mcp/                  # Единый MCP-сервер ragota-code (code.go + code_handlers.go)
 │   │   └── tui/                  # bubbletea дашборд
 │   └── app/
 │       └── cli/                  # cobra + DI
@@ -166,8 +165,27 @@ ragota/
 
 | Пакет | Ответственность |
 |---|---|
-| `transport/mcp` | MCP-инструменты (`mark3labs/mcp-go`): `vector.go` / `treesitter.go` / `symbol.go` / `lspsrv.go` + `util.go`. |
+| `transport/mcp` | Единый MCP-сервер `ragota-code` (`code.go` + `code_handlers.go`): 12 инструментов `code.*`. Объединяет AST, vector, LSP и graph-поиск. |
 | `transport/tui` | bubbletea-TUI: статус docker, индексаторов, MCP-статистика, графики. |
+
+## MCP-инструменты (code.*)
+
+Все инструменты принимают опциональный параметр `repo` для поиска по конкретному репозиторию. При отсутствии `repo` — поиск по всем репозиториям.
+
+| Инструмент | Описание |
+|---|---|
+| `code.search` | Unified code search (semantic/keyword/hybrid). Default: hybrid (RRF). |
+| `code.find_symbol` | Поиск символов по имени (substring match). |
+| `code.get_definition` | Go-to-definition: LSP → tree-sitter fallback + source code. |
+| `code.find_references` | Все ссылки на символ (LSP + AST edges). |
+| `code.find_implementations` | Реализации интерфейса/абстрактного класса. |
+| `code.get_context` | Комплексный контекст: callers/callees/imports/related_types/parent. |
+| `code.get_call_graph` | Граф вызовов с направлением (up/down/both). |
+| `code.reindex` | Переиндексация AST + vector (full/incremental). |
+| `code.get_chunks` | Предварительно нарезанные чанки для RAG с метаданными. |
+| `code.batch_get_context` | Пакетный запрос контекста для нескольких символов. |
+| `code.get_file_intent` | LLM-анализ назначения файла. |
+| `code.stats` | Статистика индексов (AST units, edges, vector chunks, BM25 docs). |
 
 ## Поток данных при индексации (`run`/`watch`)
 
@@ -184,14 +202,20 @@ LSP (gopls/pyright/tsserver/jdtls) ──► graph.Service ──► MCP-отв�
 ## Поток данных при MCP-запросе
 
 ```
-MCP-клиент ──stdio──► mcp.Tool handler
+MCP-клиент ──stdio──► code.* handler (CodeServer)
                           │
-                          ├──► vector.Search    (Qdrant + BM25 + RRF)
-                          │            └──► rerank
-                          ├──► graph.Callers/Callees/References
-                          │            ├──► store (tree-sitter)
-                          │            └──► lsp   (живые ссылки)
-                          └──► symbols.Find
+                          ├──► code.search       (Qdrant + BM25 + RRF / semantic / keyword)
+                          ├──► code.find_symbol   (AST search by name)
+                          ├──► code.get_definition (LSP → tree-sitter fallback)
+                          ├──► code.find_references (LSP + AST edges)
+                          ├──► code.find_implementations (LSP + AST edges)
+                          ├──► code.get_context    (callers/callees/imports/related)
+                          ├──► code.get_call_graph (call graph expansion)
+                          ├──► code.get_chunks     (pre-chunked code for RAG)
+                          ├──► code.batch_get_context (batch symbol context)
+                          ├──► code.get_file_intent (LLM file analysis)
+                          ├──► code.reindex        (AST + vector reindex)
+                          └──► code.stats          (index statistics)
 ```
 
 ## Тесты
