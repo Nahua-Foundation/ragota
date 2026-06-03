@@ -7,7 +7,24 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
+
+// resolveProgressFn вызывается между чанками для обновления прогресса.
+type resolveProgressFn func(pass int, resolved int64, remaining int64)
+
+// countUnresolved возвращает количество edges с dst_id = 0.
+func (s *SQLite) CountUnresolvedEdges(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM edges WHERE dst_id = 0 AND dst_name <> ''`).Scan(&n)
+	return n, err
+}
+
+// resolveChunkSize — максимальное количество рёбер, разрешаемых
+// за один pass. Большие кодовые базы (>100K unresolved edges)
+// обрабатываются чанками, чтобы не создавать гигантские временные
+// таблицы и не блокировать БД на минуты.
+const resolveChunkSize = 50000
 
 // ResolvePendingEdges пытается разрешить dst_id для всех edges с dst_id=0,
 // используя точное совпадение dst_name с ast_units.qualified или
@@ -18,21 +35,26 @@ import (
 //   - Repo-граница (multi-repo workspace): функция Save в репо A никогда
 //     не должна резолвиться в Save из репо B — графы репо независимы.
 //
-// Алгоритм:
-//  1. Определяем язык/репо каждого ребра по его src (JOIN с ast_units).
-//  2. Ищем кандидата в ast_units того же language И того же repo.
-//  3. Сначала qualified-матч, затем name-матч для оставшихся.
+// Алгоритм (4 pass, чанки по 50K, early termination):
+//  1. Qualified-матч (dst.qualified = e.dst_name)
+//  2. Local name-матч (dst.name = e.dst_name, same file)
+//  3. Import-матч (LIKE file_path для relative paths)
+//  4. Global name-матч (fallback)
+//
+// После каждого pass и чанка проверяется количество оставшихся unresolved edges —
+// если 0, оставшиеся pass пропускаются (early termination).
+// Каждый pass обрабатывается чанками по 50K рёбер для стабильности.
+// onProgress вызывается между чанками для обновления UI.
 //
 // Возвращает суммарное количество разрешённых рёбер.
-func (s *SQLite) ResolvePendingEdges(ctx context.Context) (int, error) {
+func (s *SQLite) ResolvePendingEdges(ctx context.Context, onProgress resolveProgressFn) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
 
-	// Используем временную таблицу для сбора разрешенных ID.
-	// Это НАМНОГО быстрее, чем коррелированные подзапросы в UPDATE.
+	// Временная таблица для сбора разрешённых ID.
 	if _, err := tx.ExecContext(ctx, `CREATE TEMPORARY TABLE IF NOT EXISTS tmp_resolved (row_id INTEGER PRIMARY KEY, dst_id INTEGER)`); err != nil {
 		return 0, err
 	}
@@ -42,103 +64,127 @@ func (s *SQLite) ResolvePendingEdges(ctx context.Context) (int, error) {
 
 	var total int64
 
-	// Pass 1: qualified-матч (точный, кросс-файловый, одноязычный, одна репа).
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO tmp_resolved (row_id, dst_id)
-		SELECT e.rowid, MIN(dst.id)
+	// countUnresolved возвращает количество edges с dst_id = 0.
+	countUnresolved := func() (int64, error) {
+		var n int64
+		err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM edges WHERE dst_id = 0 AND dst_name <> ''`).Scan(&n)
+		return n, err
+	}
+
+	// Helper: resolve one pass with chunking + progress reporting.
+	resolvePass := func(query string, pass int) (int64, error) {
+		passTotal := int64(0)
+		for {
+			// Report progress BEFORE chunk execution so UI shows "still working"
+			// even if remaining is 0 from previous chunk.
+			if onProgress != nil {
+				rem, _ := countUnresolved()
+				onProgress(pass, passTotal, rem)
+			}
+
+			chunked := query + fmt.Sprintf(` LIMIT %d`, resolveChunkSize)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO tmp_resolved (row_id, dst_id) `+chunked); err != nil {
+				return 0, err
+			}
+			res, err := tx.ExecContext(ctx, `UPDATE edges SET dst_id = (SELECT dst_id FROM tmp_resolved WHERE row_id = edges.rowid) WHERE rowid IN (SELECT row_id FROM tmp_resolved)`)
+			if err != nil {
+				return 0, err
+			}
+			n, _ := res.RowsAffected()
+			passTotal += n
+			total += n
+			if _, err := tx.ExecContext(ctx, `DELETE FROM tmp_resolved`); err != nil {
+				return 0, err
+			}
+
+			if n < resolveChunkSize {
+				// Чанк не заполнен — значит все рёбра этого pass обработаны.
+				break
+			}
+		}
+		return passTotal, nil
+	}
+
+	// ── Pass 1: qualified-матч (точный, кросс-файловый, одноязычный, одна репа).
+	q1 := `SELECT e.rowid, MIN(dst.id)
 		FROM edges e
 		JOIN ast_units src ON src.id = e.src_id
-		JOIN ast_units dst ON dst.qualified = e.dst_name 
-		                  AND dst.language = src.language 
+		JOIN ast_units dst ON dst.qualified = e.dst_name
+		                  AND dst.language = src.language
 		                  AND dst.repo = src.repo
 		WHERE e.dst_id = 0 AND e.dst_name <> ''
-		GROUP BY e.rowid`); err != nil {
-		return 0, err
-	}
-	res1, err := tx.ExecContext(ctx, `UPDATE edges SET dst_id = (SELECT dst_id FROM tmp_resolved WHERE row_id = edges.rowid) WHERE rowid IN (SELECT row_id FROM tmp_resolved)`)
+		GROUP BY e.rowid`
+	n1, err := resolvePass(q1, 1)
 	if err != nil {
 		return 0, err
 	}
-	n1, _ := res1.RowsAffected()
-	total += n1
-	if _, err := tx.ExecContext(ctx, `DELETE FROM tmp_resolved`); err != nil {
-		return 0, err
+	// Early termination
+	if rem, _ := countUnresolved(); rem == 0 {
+		return int(total), nil
 	}
 
-	// Pass 2: Локальный name-матч (в пределах того же файла).
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO tmp_resolved (row_id, dst_id)
-		SELECT e.rowid, MIN(dst.id)
+	// ── Pass 2: Локальный name-матч (в пределах того же файла).
+	q2 := `SELECT e.rowid, MIN(dst.id)
 		FROM edges e
 		JOIN ast_units src ON src.id = e.src_id
-		JOIN ast_units dst ON dst.name = e.dst_name 
-		                  AND dst.language = src.language 
+		JOIN ast_units dst ON dst.name = e.dst_name
+		                  AND dst.language = src.language
 		                  AND dst.file_path = src.file_path
 		                  AND dst.repo = src.repo
 		WHERE e.dst_id = 0 AND e.dst_name <> ''
-		GROUP BY e.rowid`); err != nil {
-		return 0, err
-	}
-	res2, err := tx.ExecContext(ctx, `UPDATE edges SET dst_id = (SELECT dst_id FROM tmp_resolved WHERE row_id = edges.rowid) WHERE rowid IN (SELECT row_id FROM tmp_resolved)`)
+		GROUP BY e.rowid`
+	n2, err := resolvePass(q2, 2)
 	if err != nil {
 		return 0, err
 	}
-	n2, _ := res2.RowsAffected()
-	total += n2
-	if _, err := tx.ExecContext(ctx, `DELETE FROM tmp_resolved`); err != nil {
-		return 0, err
+	if rem, _ := countUnresolved(); rem == 0 {
+		return int(total), nil
 	}
 
-	// Pass 3: Относительный путь для импортов (JS/TS).
-	// Pass 3 оставляем как есть или тоже через tmp, но там LIKE, он медленный сам по себе.
-	// Для консистентности сделаем через tmp.
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO tmp_resolved (row_id, dst_id)
-		SELECT e.rowid, MIN(dst.id)
+	// ── Pass 3: Import-матч (JS/TS) — relative path resolution.
+	// Нормализуем "./foo" → "foo", "../bar/baz" → "bar/baz" и ищем
+	// module unit, чей file_path содержит нормализованный путь.
+	// LIKE неизбеен, но chunking + early termination делают его терпимым.
+	q3 := `SELECT e.rowid, MIN(dst.id)
 		FROM edges e
 		JOIN ast_units src ON src.id = e.src_id
 		JOIN ast_units dst ON dst.kind = 'module'
 		                  AND dst.language = src.language
 		                  AND dst.repo = src.repo
 		                  AND dst.file_path LIKE '%' || REPLACE(REPLACE(e.dst_name, './', ''), '../', '') || '%'
-		WHERE e.dst_id = 0 AND e.kind = 'import' AND (e.dst_name LIKE './%' OR e.dst_name LIKE '../%')
-		GROUP BY e.rowid`); err != nil {
-		return 0, err
-	}
-	res3, err := tx.ExecContext(ctx, `UPDATE edges SET dst_id = (SELECT dst_id FROM tmp_resolved WHERE row_id = edges.rowid) WHERE rowid IN (SELECT row_id FROM tmp_resolved)`)
+		WHERE e.dst_id = 0 AND e.kind = 'import'
+		  AND (e.dst_name LIKE './%' OR e.dst_name LIKE '../%')
+		GROUP BY e.rowid`
+	n3, err := resolvePass(q3, 3)
 	if err != nil {
 		return 0, err
 	}
-	n3, _ := res3.RowsAffected()
-	total += n3
-	if _, err := tx.ExecContext(ctx, `DELETE FROM tmp_resolved`); err != nil {
-		return 0, err
+	if rem, _ := countUnresolved(); rem == 0 {
+		return int(total), nil
 	}
 
-	// Pass 4: Глобальный name-матч для всё ещё неразрешённых.
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO tmp_resolved (row_id, dst_id)
-		SELECT e.rowid, MIN(dst.id)
+	// ── Pass 4: Глобальный name-матч для всё ещё неразрешённых.
+	q4 := `SELECT e.rowid, MIN(dst.id)
 		FROM edges e
 		JOIN ast_units src ON src.id = e.src_id
-		JOIN ast_units dst ON dst.name = e.dst_name 
-		                  AND dst.language = src.language 
+		JOIN ast_units dst ON dst.name = e.dst_name
+		                  AND dst.language = src.language
 		                  AND dst.repo = src.repo
 		WHERE e.dst_id = 0 AND e.dst_name <> ''
-		GROUP BY e.rowid`); err != nil {
-		return 0, err
-	}
-	res4, err := tx.ExecContext(ctx, `UPDATE edges SET dst_id = (SELECT dst_id FROM tmp_resolved WHERE row_id = edges.rowid) WHERE rowid IN (SELECT row_id FROM tmp_resolved)`)
+		GROUP BY e.rowid`
+	n4, err := resolvePass(q4, 4)
 	if err != nil {
 		return 0, err
 	}
-	n4, _ := res4.RowsAffected()
-	total += n4
 
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 
+	_ = n1
+	_ = n2
+	_ = n3
+	_ = n4
 	return int(total), nil
 }
 
@@ -168,6 +214,23 @@ func (s *SQLite) ReplaceEdges(ctx context.Context, srcFile string, edges []Edge)
 		if _, err := stmt.ExecContext(ctx, e.Repo, e.SrcID, e.DstID, e.Kind, e.DstName, e.FilePath, e.Line); err != nil {
 			return err
 		}
+	}
+	return tx.Commit()
+}
+
+// RemoveFileGraph атомарно удаляет AST units и edges файла в одной транзакции.
+func (s *SQLite) RemoveFileGraph(ctx context.Context, filePath string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// CASCADE удаляет edges при удалении units, но делаем явно для консистентности.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM edges WHERE src_id IN (SELECT id FROM ast_units WHERE file_path = ?)`, filePath); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ast_units WHERE file_path = ?`, filePath); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

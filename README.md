@@ -82,18 +82,20 @@ go build -o ragota ./cmd/ragota
 
 ```
 cmd/ragota/        — CLI (cobra)
+pkg/
+  config/           — YAML-конфиг, пути, дефолты
+  docker/           — Docker container runner
+  fileutil/         — Walk, hash, ignore-match, SecureJoin
+  logger/           — zerolog wrapper
+  lsp/              — LSP-клиент + менеджер (gopls, pyright, tsserver, jdtls)
+  qdrant/           — HTTP-клиент Qdrant REST
+  repos/            — Multi-repo discovery + resolver
+  state/            — In-memory шина статусов
+  watcher/          — fsnotify + debounce
 internal/
-  mcp/             — 4 MCP-сервера (ts/vec/sym/lsp)
-  index/           — Vector + BM25 индексаторы
-  astindex/        — AST units + edges извлечение
-  graph/           — Callers/callees/implementations/BFS
-  symbols/         — Symbol-aware retrieval
-  lsp/             — JSON-RPC LSP-клиент
-  rerank/          — Ollama reranker + fallback
-  hybrid/          — RRF / weighted-sum fusion
-  store/           — SQLite (ast_units, edges, embed_meta)
-  tui/             — bubbletea дашборд
-  docker/          — Docker-управление
-  watcher/         — fsnotify + debounce
-.ragota/           — Служебные данные (config, БД, индексы, логи)
+  indexing/         — Индексаторы (ast, vector, treesitter, parser, chunker, embedder)
+  search/           — Поиск (graph, symbols, hybrid, rerank, bm25)
+  store/            — SQLite (ast_units, edges, embed_meta)
+  transport/        — MCP-серверы + TUI
+.ragota/            — Служебные данные (config, БД, индексы, логи)
 ```

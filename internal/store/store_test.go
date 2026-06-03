@@ -195,7 +195,7 @@ func TestResolvePendingEdges(t *testing.T) {
 		t.Fatalf("ReplaceEdges: %v", err)
 	}
 
-	n, err := st.ResolvePendingEdges(ctx)
+	n, err := st.ResolvePendingEdges(ctx, nil)
 	if err != nil {
 		t.Fatalf("ResolvePendingEdges: %v", err)
 	}

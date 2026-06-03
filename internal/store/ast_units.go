@@ -235,6 +235,30 @@ func (s *SQLite) UpdateASTParents(ctx context.Context, updates map[int]int) erro
 	return tx.Commit()
 }
 
+// FindModuleUnits ищет модульные AST units, чей FilePath содержит указанный путь.
+// Используется для резолва модулей по относительному пути.
+func (s *SQLite) FindModuleUnits(ctx context.Context, pathPattern string, limit int) ([]ASTUnit, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+astUnitColumns+` FROM ast_units WHERE kind = 'module' AND file_path LIKE ? LIMIT ?`,
+		"%"+pathPattern+"%", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ASTUnit{}
+	for rows.Next() {
+		u, err := scanASTUnit(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 // ChildrenOf возвращает прямых детей AST unit.
 func (s *SQLite) ChildrenOf(ctx context.Context, id int) ([]ASTUnit, error) {
 	rows, err := s.db.QueryContext(ctx,
@@ -252,4 +276,112 @@ func (s *SQLite) ChildrenOf(ctx context.Context, id int) ([]ASTUnit, error) {
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// ReplaceFileGraph атомарно заменяет AST units и edges файла в одной транзакции.
+// EdgeRef описывает ребро через индексы в units slice (для SrcID) и dstName для резолва.
+type EdgeRef struct {
+	SrcUnitIdx    int
+	ResolvedSrcID int // уже разрешённый src_id (0 = resolve via SrcUnitIdx)
+	DstName       string
+	DstUnitIdx    int  // -1 если не resolved по индексу (local file)
+	ResolvedDstID int // уже разрешённый dst_id из global map (0 = unresolved)
+	Kind          string
+	Line          int
+}
+
+// ReplaceFileGraph атомарно заменяет AST units и edges файла в одной транзакции.
+func (s *SQLite) ReplaceFileGraph(ctx context.Context, filePath string, units []ASTUnit, edgeRefs []EdgeRef, repo string) (map[string]int, []int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+
+	// Delete old data (только units если переданы)
+	if len(units) > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM ast_units WHERE file_path = ?`, filePath); err != nil {
+			return nil, nil, err
+		}
+	}
+	// Delete edges всегда (для перезаписи)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM edges WHERE src_id IN (SELECT id FROM ast_units WHERE file_path = ?)`, filePath); err != nil {
+		return nil, nil, err
+	}
+
+	// Insert units и запоминаем id по индексу
+	unitIDs := make([]int, len(units))
+	ids := make(map[string]int, len(units))
+	if len(units) > 0 {
+		stmt, err := tx.PrepareContext(ctx,
+			`INSERT INTO ast_units(repo, file_path, language, kind, name, qualified, parent_id,
+				start_line, end_line, start_byte, end_byte, name_start_line, name_start_col, signature, doc, hash)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer stmt.Close()
+
+		for i, u := range units {
+			res, err := stmt.ExecContext(ctx,
+				u.Repo, filePath, u.Language, u.Kind, u.Name, u.Qualified, u.ParentID,
+				u.StartLine, u.EndLine, u.StartByte, u.EndByte,
+				u.NameStartLine, u.NameStartCol,
+				u.Signature, u.Doc, u.Hash)
+			if err != nil {
+				return nil, nil, err
+			}
+			id64, _ := res.LastInsertId()
+			unitIDs[i] = int(id64)
+			key := u.Qualified
+			if key == "" {
+				key = u.Name
+			}
+			if key != "" {
+				ids[key] = int(id64)
+			}
+		}
+	}
+
+	// Insert edges с разрешением src_id по индексу и dst_id по имени
+	if len(edgeRefs) > 0 {
+		stmt, err := tx.PrepareContext(ctx,
+			`INSERT INTO edges(repo, src_id, dst_id, kind, dst_name, file_path, line) VALUES(?,?,?,?,?,?,?)`)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer stmt.Close()
+
+		for _, e := range edgeRefs {
+			// Приоритет: ResolvedSrcID → SrcUnitIdx через unitIDs
+			srcID := 0
+			if e.ResolvedSrcID > 0 {
+				srcID = e.ResolvedSrcID
+			} else if e.SrcUnitIdx >= 0 && e.SrcUnitIdx < len(unitIDs) {
+				srcID = unitIDs[e.SrcUnitIdx]
+			}
+			// Приоритет: уже разрешённый ResolvedDstID → локальный DstUnitIdx → ids по имени
+			dstID := 0
+			if e.ResolvedDstID > 0 {
+				dstID = e.ResolvedDstID
+			} else if e.DstUnitIdx >= 0 && e.DstUnitIdx < len(unitIDs) {
+				dstID = unitIDs[e.DstUnitIdx]
+			} else if id, ok := ids[e.DstName]; ok {
+				dstID = id
+			}
+			if srcID == 0 {
+				// Skip edges with unresolved src — should never happen for valid edges
+				continue
+			}
+			// Write edge even if dst is unresolved (dst_id = 0) — ResolvePendingEdges will fix it later
+			if _, err := stmt.ExecContext(ctx, repo, srcID, dstID, e.Kind, e.DstName, filePath, e.Line); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return ids, unitIDs, nil
 }

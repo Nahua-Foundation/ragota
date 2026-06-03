@@ -65,8 +65,3 @@ type Edge struct {
 	Line     int    `json:"line"`
 }
 
-// TraverseResult — результат направленного обхода.
-type TraverseResult struct {
-	Nodes []ASTUnit `json:"nodes"`
-	Edges []Edge    `json:"edges"`
-}

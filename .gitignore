@@ -1,11 +1,12 @@
 # Binaries
 /ai-tools
-ai-tools
+ragota
 
 # Data and logs
 /.ai-tools/
 /.ragota/
 *.log
+*.test
 
 # IDEs
 .idea/

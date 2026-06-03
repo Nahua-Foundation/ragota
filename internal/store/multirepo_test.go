@@ -69,7 +69,7 @@ func TestMultiRepoResolvePendingDoesNotCrossRepos(t *testing.T) {
 	_, saveA := seedRepo(t, st, "alpha", "/tmp/alpha")
 	_, saveB := seedRepo(t, st, "beta", "/tmp/beta")
 
-	n, err := st.ResolvePendingEdges(ctx)
+	n, err := st.ResolvePendingEdges(ctx, nil)
 	if err != nil {
 		t.Fatalf("ResolvePendingEdges: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestMultiRepoResolvePendingDoesNotCrossRepos(t *testing.T) {
 	}
 
 	// Проверим, что caller alpha смотрит на Save alpha, а не на Save beta.
-	rows, err := st.GetDB().QueryContext(ctx,
+	rows, err := st.GetDBForTests().QueryContext(ctx,
 		`SELECT edges.dst_id, edges.repo FROM edges
 		   JOIN ast_units AS src ON src.id = edges.src_id
 		  WHERE src.repo = ? AND edges.kind = 'call'`, "alpha")
@@ -120,7 +120,7 @@ func TestMultiRepoEdgesByDstNameForLangRepoScoped(t *testing.T) {
 
 	seedRepo(t, st, "alpha", "/tmp/alpha")
 	seedRepo(t, st, "beta", "/tmp/beta")
-	if _, err := st.ResolvePendingEdges(ctx); err != nil {
+	if _, err := st.ResolvePendingEdges(ctx, nil); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 

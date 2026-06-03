@@ -1,46 +1,28 @@
 // Package store — SQLite-хранилище метаданных файлов и символов tree-sitter.
 // Используется pure-Go драйвер modernc.org/sqlite (без CGO).
+//
+// Структура файлов:
+//   - sqlite.go   — SQLite struct, Open, OpenFresh, Close, init (миграции).
+//   - files.go    — FileRow + CRUD файлов (GetFile, UpsertFile, EnsureFile, hash ops).
+//   - symbols.go  — SymbolRow + SearchSymbols, SymbolsByFile.
+//   - ast_units.go — CRUD AST units.
+//   - edges.go    — CRUD рёбер + отложенный резолв.
+//   - neighbors.go — BFS-обход графа.
+//   - embed_meta.go — EmbedMeta + Get/SetEmbedMeta.
+//   - graph.go    — доменные типы (ASTUnit, Edge).
+//   - stats.go    — Stats, GraphStats.
 package store
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
-	"ragota/internal/logger"
+	"ragota/pkg/logger"
 
 	_ "modernc.org/sqlite"
 )
-
-// FileRow — строка таблицы files.
-type FileRow struct {
-	Path      string
-	Language  string
-	Hash      string
-	Size      int64
-	ModTime   time.Time
-	IndexedAt time.Time
-	Symbols   int
-	VecHash   string
-}
-
-// SymbolRow — строка таблицы symbols.
-type SymbolRow struct {
-	ID         int64
-	FilePath   string
-	Name       string
-	Kind       string // function/method/class/struct/interface/var/const/...
-	StartLine  int
-	EndLine    int
-	StartByte  int
-	EndByte    int
-	ParentName string
-	Signature  string
-}
 
 // SQLite — хранилище.
 type SQLite struct {
@@ -49,11 +31,11 @@ type SQLite struct {
 
 // Open открывает БД (создаёт файл и схему при необходимости).
 func Open(path string) (*SQLite, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(30000)")
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
-	db.SetMaxOpenConns(4) // WAL поддерживает параллельное чтение; запись сериализуется
+	db.SetMaxOpenConns(4)
 	s := &SQLite{db: db}
 	if err := s.init(); err != nil {
 		_ = db.Close()
@@ -63,16 +45,10 @@ func Open(path string) (*SQLite, error) {
 }
 
 // OpenFresh открывает БД, предварительно удаляя файлы, если текущий
-// workspace-signature не совпадает с сохранённым. Используется в CLI при
-// запуске индексации: смена состава репо/корня инвалидирует старый граф.
-//
-// path — путь к sqlite-файлу; signature — стабильный хеш текущего набора
-// репо (см. repos.Signature). При несовпадении удаляется path, path+"-wal"
-// и path+"-shm".
+// workspace-signature не совпадает с сохранённым.
 func OpenFresh(path, signature string) (*SQLite, error) {
 	if signature != "" {
 		if prev, err := readSignature(path); err == nil && prev != "" && prev != signature {
-			// Workspace изменился — старый индекс несогласован, сносим.
 			removeDBFiles(path)
 		}
 	}
@@ -95,9 +71,7 @@ func removeDBFiles(path string) {
 	}
 }
 
-// readSignature читает workspace-signature напрямую (через временное
-// открытие БД); это позволяет инвалидировать файлы _до_ init() и без
-// глобальных мутаций.
+// readSignature читает workspace-signature напрямую через временное открытие БД.
 func readSignature(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil || info.Size() == 0 {
@@ -126,7 +100,9 @@ func (s *SQLite) setSignature(sig string) error {
 // Close закрывает БД.
 func (s *SQLite) Close() error { return s.db.Close() }
 
-func (s *SQLite) GetDB() *sql.DB {
+// GetDBForTests возвращает raw *sql.DB для тестов.
+// Не используйте в production-коде — это нарушает инкапсуляцию store.
+func (s *SQLite) GetDBForTests() *sql.DB {
 	return s.db
 }
 
@@ -158,19 +134,15 @@ func (s *SQLite) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path)`,
 		`CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name)`,
 		`CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind)`,
-
-		// AST units — самостоятельные единицы кода: function, method, class,
-		// interface, module/file, struct, enum и т.п. Используются для
-		// hybrid retrieval (vector + BM25) и parent-child навигации.
 		`CREATE TABLE IF NOT EXISTS ast_units (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			repo        TEXT NOT NULL DEFAULT '', -- имя репозитория (multi-repo workspace)
+			repo        TEXT NOT NULL DEFAULT '',
 			file_path   TEXT NOT NULL,
 			language    TEXT NOT NULL,
-			kind        TEXT NOT NULL,           -- function|method|class|interface|module|struct|enum|...
+			kind        TEXT NOT NULL,
 			name        TEXT NOT NULL,
-			qualified   TEXT NOT NULL DEFAULT '', -- pkg.Class.method или эквивалент
-			parent_id   INTEGER,                  -- родительская AST-единица (для parent-child)
+			qualified   TEXT NOT NULL DEFAULT '',
+			parent_id   INTEGER,
 			start_line  INTEGER NOT NULL,
 			end_line    INTEGER NOT NULL,
 			start_byte  INTEGER NOT NULL,
@@ -179,7 +151,7 @@ func (s *SQLite) init() error {
 			name_start_col  INTEGER NOT NULL DEFAULT 0,
 			signature   TEXT NOT NULL DEFAULT '',
 			doc         TEXT NOT NULL DEFAULT '',
-			hash        TEXT NOT NULL DEFAULT '', -- хэш содержимого юнита для инкрементальной индексации
+			hash        TEXT NOT NULL DEFAULT '',
 			FOREIGN KEY (file_path) REFERENCES files(path) ON DELETE CASCADE,
 			FOREIGN KEY (parent_id) REFERENCES ast_units(id) ON DELETE SET NULL
 		)`,
@@ -188,20 +160,14 @@ func (s *SQLite) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_kind ON ast_units(kind)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_qualified ON ast_units(qualified COLLATE NOCASE)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_parent ON ast_units(parent_id)`,
-		// Repo-aware индексы (multi-repo).
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_qualified ON ast_units(repo, qualified COLLATE NOCASE)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_name ON ast_units(repo, name COLLATE NOCASE)`,
-
-		// Edges — направленные связи между AST-единицами для graph expansion.
-		// kind: call | import | implements | reference | extends | contains
 		`CREATE TABLE IF NOT EXISTS edges (
 			id        INTEGER PRIMARY KEY AUTOINCREMENT,
-			repo      TEXT NOT NULL DEFAULT '', -- имя репозитория источника ребра
+			repo      TEXT NOT NULL DEFAULT '',
 			src_id    INTEGER NOT NULL,
 			dst_id    INTEGER NOT NULL,
 			kind      TEXT NOT NULL,
-			-- Если dst пока неразрешён (forward-reference / внешний символ),
-			-- то dst_id = 0 и используется dst_name для отложенного резолва.
 			dst_name  TEXT NOT NULL DEFAULT '',
 			file_path TEXT NOT NULL DEFAULT '',
 			line      INTEGER NOT NULL DEFAULT 0,
@@ -213,26 +179,15 @@ func (s *SQLite) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_edges_unresolved ON edges(dst_id, dst_name) WHERE dst_id = 0`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name ON edges(dst_name) WHERE dst_id = 0`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_repo_dst_name_kind ON edges(repo, dst_name, kind)`,
-		// Индекс для EdgesByDstNameForLang — покрывает JOIN с ast_units по src_id
 		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name_kind_src ON edges(dst_name, kind, src_id)`,
-		// Индекс для быстрого поиска по dst_name без фильтра dst_id=0 (для FindReferences)
 		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name_full ON edges(dst_name, kind, src_id, repo)`,
-		// Индекс для ResolvePendingEdges — ускоряет JOIN edges → ast_units по src_id
 		`CREATE INDEX IF NOT EXISTS idx_edges_src_id ON edges(src_id)`,
-		// Индекс для ResolvePendingEdges — поиск по dst_name в пределах языка/репы
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_qualified_lang_repo ON ast_units(qualified COLLATE NOCASE, language, repo)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_name_lang_repo ON ast_units(name COLLATE NOCASE, language, repo)`,
-
-		// meta — служебная key/value таблица; используется для
-		// workspace_signature (см. OpenFresh) и подобных флагов.
 		`CREATE TABLE IF NOT EXISTS meta (
 			key   TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)`,
-
-		// embed_meta — метаданные эмбеддингов по коллекциям. Используется,
-		// чтобы при смене модели/размерности эмбеддингов автоматически
-		// триггерить full reindex соответствующей коллекции.
 		`CREATE TABLE IF NOT EXISTS embed_meta (
 			collection TEXT PRIMARY KEY,
 			model      TEXT NOT NULL,
@@ -246,9 +201,6 @@ func (s *SQLite) init() error {
 		}
 	}
 
-	// ALTER для существующих баз — добавляем недостающие колонки.
-	// Ошибки "duplicate column" игнорируем (колонка уже есть).
-	// логируем остальные ошибки.
 	alters := []string{
 		`ALTER TABLE files ADD COLUMN vec_hash TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ast_units ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
@@ -258,8 +210,6 @@ func (s *SQLite) init() error {
 	}
 	for _, q := range alters {
 		if _, err := s.db.Exec(q); err != nil {
-			// SQLite: "duplicate column name" — ожидаемо, игнорируем.
-			// modernc.org/sqlite: может вернуть другой формат ошибки.
 			errStr := err.Error()
 			if strings.Contains(errStr, "duplicate column") ||
 				strings.Contains(errStr, "duplicate column name") {
@@ -268,15 +218,13 @@ func (s *SQLite) init() error {
 			logger.Log().Warn().Err(err).Msg("store: ALTER TABLE ignored (expected for existing schema)")
 		}
 	}
-	// Repo-aware индексы могут отсутствовать в старых БД — создаём после ALTER.
+
 	postIdx := []string{
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_qualified ON ast_units(repo, qualified)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_repo_name ON ast_units(repo, name)`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_repo_dst_name_kind ON edges(repo, dst_name, kind)`,
-		// Индексы для ускорения FindReferences / EdgesByDstNameForLang
 		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name_kind_src ON edges(dst_name, kind, src_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_dst_name_full ON edges(dst_name, kind, src_id, repo)`,
-		// Индексы для ResolvePendingEdges — ускоряют JOIN и поиск по языку/репе
 		`CREATE INDEX IF NOT EXISTS idx_edges_src_id ON edges(src_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_qualified_lang_repo ON ast_units(qualified COLLATE NOCASE, language, repo)`,
 		`CREATE INDEX IF NOT EXISTS idx_ast_units_name_lang_repo ON ast_units(name COLLATE NOCASE, language, repo)`,
@@ -287,270 +235,4 @@ func (s *SQLite) init() error {
 		}
 	}
 	return nil
-}
-
-// GetFile возвращает строку файла или nil, если не найдена.
-func (s *SQLite) GetFile(ctx context.Context, path string) (*FileRow, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash FROM files WHERE path = ?`,
-		path)
-	var fr FileRow
-	var modTime, indexedAt int64
-	err := row.Scan(&fr.Path, &fr.Language, &fr.Hash, &fr.Size, &modTime, &indexedAt, &fr.Symbols, &fr.VecHash)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	fr.ModTime = time.Unix(modTime, 0)
-	fr.IndexedAt = time.Unix(indexedAt, 0)
-	return &fr, nil
-}
-
-// UpsertFile добавляет/обновляет запись файла и заменяет его символы атомарно.
-func (s *SQLite) UpsertFile(ctx context.Context, f FileRow, symbols []SymbolRow) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO files(path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash)
-		 VALUES(?,?,?,?,?,?,?,?)
-		 ON CONFLICT(path) DO UPDATE SET
-		   language=excluded.language,
-		   hash=excluded.hash,
-		   size=excluded.size,
-		   mod_time=excluded.mod_time,
-		   indexed_at=excluded.indexed_at,
-		   symbol_cnt=excluded.symbol_cnt,
-		   vec_hash=CASE WHEN excluded.vec_hash != '' THEN excluded.vec_hash ELSE files.vec_hash END`,
-		f.Path, f.Language, f.Hash, f.Size, f.ModTime.Unix(), time.Now().Unix(), len(symbols), f.VecHash); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM symbols WHERE file_path = ?`, f.Path); err != nil {
-		return err
-	}
-	if len(symbols) > 0 {
-		stmt, err := tx.PrepareContext(ctx,
-			`INSERT INTO symbols(file_path, name, kind, start_line, end_line, start_byte, end_byte, parent_name, signature)
-			 VALUES(?,?,?,?,?,?,?,?,?)`)
-		if err != nil {
-			return err
-		}
-		defer stmt.Close()
-		for _, sym := range symbols {
-			if _, err := stmt.ExecContext(ctx,
-				f.Path, sym.Name, sym.Kind, sym.StartLine, sym.EndLine,
-				sym.StartByte, sym.EndByte, sym.ParentName, sym.Signature); err != nil {
-				return err
-			}
-		}
-	}
-	return tx.Commit()
-}
-
-// EnsureFile гарантирует наличие записи файла в таблице files.
-// Если файла нет, создает минимальную запись.
-func (s *SQLite) EnsureFile(ctx context.Context, path, lang string) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO files(path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash)
-		 VALUES(?,?,?,?,?,?,?,?)
-		 ON CONFLICT(path) DO NOTHING`,
-		path, lang, "", 0, 0, time.Now().Unix(), 0, "")
-	return err
-}
-
-// UpdateVectorHash обновляет только хэш векторного индекса.
-// если UPDATE не затронул строк (файл отсутствует), fallback на INSERT.
-func (s *SQLite) UpdateVectorHash(ctx context.Context, path, hash string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE files SET vec_hash = ? WHERE path = ?`, hash, path)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		// Файл не найден — вставляем минимальную запись с vec_hash.
-		_, err = s.db.ExecContext(ctx,
-			`INSERT INTO files(path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash)
-			 VALUES(?,?,?,?,?,?,?,?)
-			 ON CONFLICT(path) DO UPDATE SET vec_hash=excluded.vec_hash`,
-			path, "", "", 0, 0, time.Now().Unix(), 0, hash)
-	}
-	return err
-}
-
-// GetFileHash возвращает хэш содержимого файла из таблицы files.
-func (s *SQLite) GetFileHash(ctx context.Context, path string) (string, error) {
-	var hash string
-	err := s.db.QueryRowContext(ctx, `SELECT hash FROM files WHERE path = ?`, path).Scan(&hash)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	return hash, err
-}
-
-// UpdateFileHash обновляет хэш содержимого файла в таблице files.
-// определяем язык из расширения файла, чтобы не создавать записи с пустым language.
-func (s *SQLite) UpdateFileHash(ctx context.Context, path, hash string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE files SET hash = ? WHERE path = ?`, hash, path)
-	if err != nil {
-		return err
-	}
-	// Определяем язык из расширения — fallback на пустую строку.
-	lang := ""
-	if ext := filepath.Ext(path); ext != "" {
-		lang = ext[1:] // убираем точку
-	}
-	// Если файла ещё нет в таблице files, вставляем с определённым языком.
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO files(path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash)
-		 VALUES(?,?,?,?,?,?,?,?)
-		 ON CONFLICT(path) DO UPDATE SET hash=excluded.hash`,
-		path, lang, hash, 0, 0, time.Now().Unix(), 0, "")
-	return err
-}
-
-// UpsertVectorHash — специальный апсерт для векторного индекса.
-func (s *SQLite) UpsertVectorHash(ctx context.Context, path, hash, lang string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO files(path, language, hash, size, mod_time, indexed_at, symbol_cnt, vec_hash)
-		 VALUES(?,?,?,?,?,?,?,?)
-		 ON CONFLICT(path) DO UPDATE SET
-		   vec_hash=excluded.vec_hash,
-		   language=excluded.language,
-		   size=excluded.size,
-		   mod_time=excluded.mod_time`,
-		path, lang, "", info.Size(), info.ModTime().Unix(), time.Now().Unix(), 0, hash)
-	return err
-}
-
-// DeleteFile удаляет файл и его символы.
-func (s *SQLite) DeleteFile(ctx context.Context, path string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE path = ?`, path)
-	return err
-}
-
-// ResetVecHashes сбрасывает все vec_hash в таблице files, чтобы
-// принудительно переиндексировать векторный индекс.
-func (s *SQLite) ResetVecHashes(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE files SET vec_hash = '' WHERE vec_hash != ''`)
-	return err
-}
-
-// HasFileHashes проверяет, есть ли в таблице files записи с hash.
-func (s *SQLite) HasFileHashes(ctx context.Context) (bool, error) {
-	var count int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE hash != ''`).Scan(&count)
-	return count > 0, err
-}
-
-// ResetFileHashes сбрасывает все hash в таблице files, чтобы
-// принудительно переиндексировать graph индекс.
-func (s *SQLite) ResetFileHashes(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE files SET hash = '' WHERE hash != ''`)
-	return err
-}
-
-// HasVecHashes проверяет, есть ли в таблице files записи с vec_hash.
-func (s *SQLite) HasVecHashes(ctx context.Context) (bool, error) {
-	var count int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE vec_hash != ''`).Scan(&count)
-	return count > 0, err
-}
-
-// SearchSymbols ищет символы по подстроке имени, опционально фильтруя по kind и языку.
-func (s *SQLite) SearchSymbols(ctx context.Context, query, kind, language string, limit int) ([]SymbolRow, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	q := `SELECT s.id, s.file_path, s.name, s.kind, s.start_line, s.end_line, s.start_byte, s.end_byte, s.parent_name, s.signature
-	      FROM symbols s JOIN files f ON f.path = s.file_path
-	      WHERE s.name LIKE ?`
-	args := []any{"%" + query + "%"}
-	if kind != "" {
-		q += ` AND s.kind = ?`
-		args = append(args, kind)
-	}
-	if language != "" {
-		q += ` AND f.language = ?`
-		args = append(args, language)
-	}
-	q += ` ORDER BY length(s.name) ASC LIMIT ?`
-	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []SymbolRow{}
-	for rows.Next() {
-		var r SymbolRow
-		if err := rows.Scan(&r.ID, &r.FilePath, &r.Name, &r.Kind, &r.StartLine, &r.EndLine, &r.StartByte, &r.EndByte, &r.ParentName, &r.Signature); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// SymbolsByFile возвращает все символы из файла, упорядоченные по позиции.
-func (s *SQLite) SymbolsByFile(ctx context.Context, path string) ([]SymbolRow, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, file_path, name, kind, start_line, end_line, start_byte, end_byte, parent_name, signature
-		 FROM symbols WHERE file_path = ? ORDER BY start_byte`, path)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []SymbolRow{}
-	for rows.Next() {
-		var r SymbolRow
-		if err := rows.Scan(&r.ID, &r.FilePath, &r.Name, &r.Kind, &r.StartLine, &r.EndLine, &r.StartByte, &r.EndByte, &r.ParentName, &r.Signature); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// Stats — общая статистика индекса.
-type Stats struct {
-	Files   int
-	Symbols int
-}
-
-// GraphStats — статистика графового индекса.
-type GraphStats struct {
-	Units int
-	Edges int
-}
-
-// Stats возвращает количество файлов и символов.
-func (s *SQLite) Stats(ctx context.Context) (Stats, error) {
-	var st Stats
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files`).Scan(&st.Files); err != nil {
-		return st, err
-	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM symbols`).Scan(&st.Symbols); err != nil {
-		return st, err
-	}
-	return st, nil
-}
-
-// GraphStats возвращает количество AST юнитов и ребер.
-func (s *SQLite) GraphStats(ctx context.Context) (GraphStats, error) {
-	var st GraphStats
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ast_units`).Scan(&st.Units); err != nil {
-		return st, err
-	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM edges`).Scan(&st.Edges); err != nil {
-		return st, err
-	}
-	return st, nil
 }

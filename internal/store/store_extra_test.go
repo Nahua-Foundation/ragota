@@ -41,7 +41,7 @@ func seedUnits(t *testing.T, st *SQLite, filePath string, units []ASTUnit) map[s
 
 func TestOpen_MemoryDB(t *testing.T) {
 	st := openMem(t)
-	assert.NotNil(t, st.GetDB())
+	assert.NotNil(t, st.GetDBForTests())
 }
 
 func TestOpenFresh_NewDB(t *testing.T) {
@@ -663,7 +663,7 @@ func TestResolvePendingEdges_QualifiedMatch(t *testing.T) {
 	require.NoError(t, st.ReplaceEdges(ctx, "/qp.go", []Edge{
 		{SrcID: ids["caller"], DstID: 0, Kind: "call", DstName: "pkg.target"},
 	}))
-	n, err := st.ResolvePendingEdges(ctx)
+	n, err := st.ResolvePendingEdges(ctx, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 }
@@ -678,7 +678,7 @@ func TestResolvePendingEdges_LocalNameMatch(t *testing.T) {
 	require.NoError(t, st.ReplaceEdges(ctx, "/ln.go", []Edge{
 		{SrcID: ids["caller"], DstID: 0, Kind: "call", DstName: "helper"},
 	}))
-	n, err := st.ResolvePendingEdges(ctx)
+	n, err := st.ResolvePendingEdges(ctx, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 }
@@ -692,7 +692,7 @@ func TestResolvePendingEdges_EmptyDstName(t *testing.T) {
 	require.NoError(t, st.ReplaceEdges(ctx, "/en.go", []Edge{
 		{SrcID: ids["caller"], DstID: 0, Kind: "call", DstName: ""},
 	}))
-	n, err := st.ResolvePendingEdges(ctx)
+	n, err := st.ResolvePendingEdges(ctx, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 }
@@ -711,7 +711,7 @@ func TestResolvePendingEdges_DoesNotCrossLanguages(t *testing.T) {
 	require.NoError(t, st.ReplaceEdges(ctx, "/go.go", []Edge{
 		{SrcID: idsGo["caller"], DstID: 0, Kind: "call", DstName: "target"},
 	}))
-	n, err := st.ResolvePendingEdges(ctx)
+	n, err := st.ResolvePendingEdges(ctx, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, n, "Go caller should not resolve to Python target")
 	_ = idsPy
