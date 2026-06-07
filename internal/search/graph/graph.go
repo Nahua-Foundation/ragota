@@ -21,8 +21,10 @@ package graph
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 
+	"ragota/pkg/fileutil"
 	"ragota/pkg/logger"
 	"ragota/internal/store"
 )
@@ -58,6 +60,11 @@ func (s *Service) Callers(ctx context.Context, unitID int) ([]store.ASTUnit, err
 	if err != nil {
 		return nil, err
 	}
+	logger.Log().Debug().
+		Int("unit_id", unitID).
+		Int("edges_to_count", len(es)).
+		Msg("graph.Callers: EdgesTo result")
+
 	ids := make([]int, 0, len(es))
 	for _, e := range es {
 		ids = append(ids, e.SrcID)
@@ -66,8 +73,17 @@ func (s *Service) Callers(ctx context.Context, unitID int) ([]store.ASTUnit, err
 	if err != nil {
 		return nil, err
 	}
+	logger.Log().Debug().
+		Int("unit_id", unitID).
+		Int("base_nodes", len(base)).
+		Msg("graph.Callers: base nodes loaded")
+
 	// Ленивое обогащение через LSP (fallback на tree-sitter при любой ошибке).
 	if extra := s.lspCallers(ctx, unitID); len(extra) > 0 {
+		logger.Log().Debug().
+			Int("unit_id", unitID).
+			Int("lsp_extra", len(extra)).
+			Msg("graph.Callers: LSP enrichment")
 		base = mergeUnits(base, extra)
 	}
 	return base, nil
@@ -88,9 +104,26 @@ func (s *Service) Callees(ctx context.Context, unitID int) ([]store.ASTUnit, err
 	return s.nodesByIDs(ctx, ids)
 }
 
-// Implementations — реализации интерфейса interfaceID. tree-sitter дополняется
-// LSP-батчем (textDocument/implementation на позиции имени интерфейса).
+// Implementations — реализации интерфейса interfaceID.
+// Для Go (и других языков без явного implements) LSP является основным путём,
+// т.к. duck-typing не создаёт implements-edges в tree-sitter.
 func (s *Service) Implementations(ctx context.Context, interfaceID int) ([]store.ASTUnit, error) {
+	// Получаем unit чтобы определить язык
+	u, err := s.st.GetASTUnit(ctx, interfaceID)
+	if err != nil {
+		return nil, err
+	}
+	lang := ""
+	if u != nil {
+		lang = fileutil.LanguageByExt(filepath.Ext(u.FilePath))
+	}
+
+	// Для Go — LSP основной путь (нет явного implements, duck typing)
+	isGo := lang == "go"
+
+	var base []store.ASTUnit
+
+	// Tree-sitter edges (implements + extends)
 	es, err := s.st.EdgesTo(ctx, interfaceID, EdgeImplements)
 	if err != nil {
 		return nil, err
@@ -100,19 +133,39 @@ func (s *Service) Implementations(ctx context.Context, interfaceID int) ([]store
 		ids = append(ids, e.SrcID)
 	}
 	// Дополним extends'ами — для не-интерфейсных языков (Python/TS) часто
-	// используется наследование.
+	// используется наследование. Но только struct/class, не interface (чтобы не возвращать interface→interface)
 	if esExt, err := s.st.EdgesTo(ctx, interfaceID, EdgeExtends); err == nil {
 		for _, e := range esExt {
-			ids = append(ids, e.SrcID)
+			if srcUnit, err := s.st.GetASTUnit(ctx, e.SrcID); err == nil && srcUnit != nil {
+				// Включаем только struct/class, не interface
+				if srcUnit.Kind == "struct" || srcUnit.Kind == "class" {
+					ids = append(ids, e.SrcID)
+				}
+			}
 		}
 	}
-	base, err := s.nodesByIDs(ctx, ids)
+	base, err = s.nodesByIDs(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
-	if extra := s.lspImplementations(ctx, interfaceID); len(extra) > 0 {
-		base = mergeUnits(base, extra)
+
+	// LSP enrichment
+	lspUnits := s.lspImplementations(ctx, interfaceID)
+
+	// Для Go: если LSP дал результат, а tree-sitter пустой — используем LSP как основной
+	if isGo && len(base) == 0 && len(lspUnits) > 0 {
+		logger.Log().Debug().
+			Int("interface_id", interfaceID).
+			Int("lsp_units", len(lspUnits)).
+			Msg("graph: Go implementations via LSP (tree-sitter empty)")
+		return lspUnits, nil
 	}
+
+	// Для всех языков: мёрджим LSP с tree-sitter
+	if len(lspUnits) > 0 {
+		base = mergeUnits(base, lspUnits)
+	}
+
 	return base, nil
 }
 
@@ -126,6 +179,29 @@ func (s *Service) References(ctx context.Context, unitID int) ([]store.Edge, err
 		}
 	}
 	return out, nil
+}
+
+// ReferencesWithLSP — возвращает edges + LSP-обогащённые units.
+// LSP вызывается всегда (если доступен), т.к. tree-sitter edges для method calls
+// через receiver-переменные (obj.Method()) не резолвятся.
+func (s *Service) ReferencesWithLSP(ctx context.Context, unitID int) (*ReferencesResult, error) {
+	// Tree-sitter edges
+	var edges []store.Edge
+	for _, kind := range []string{EdgeReference, EdgeImplements, EdgeExtends, EdgeCall} {
+		es, err := s.st.EdgesTo(ctx, unitID, kind)
+		if err == nil {
+			edges = append(edges, es...)
+		}
+	}
+
+	result := &ReferencesResult{Edges: edges}
+
+	// LSP enrichment — критично для method references
+	if extra := s.lspReferences(ctx, unitID); len(extra) > 0 {
+		result.LSPUnits = extra
+	}
+
+	return result, nil
 }
 
 // ExpandNeighbors — делегирует SQLite BFS-обходчику.

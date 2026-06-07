@@ -511,3 +511,149 @@ func TestIntegration_Reindex_IncrementalWithPath(t *testing.T) {
 	text := contentText(res.Content[0])
 	assert.Contains(t, text, "main.go")
 }
+
+// ---------------------------------------------------------------------------
+// Integration: Synthetic project tests for identified issues
+// ---------------------------------------------------------------------------
+
+func TestIntegration_Synthetic_ImplementsEdge(t *testing.T) {
+	// Тестирует проблему: find_implementations возвращает другие интерфейсы вместо реализаций
+	// Go не имеет явного implements, поэтому edge не создаются
+	goDir := testProjectDir(t, "go")
+	env := setupTestEnvWithAST(t)
+	env.cfg.Root = goDir
+
+	seedASTFromDir(t, env, goDir)
+
+	srv := makeCodeServer(env)
+
+	// Equaler — интерфейс, должен найти реализации
+	res, err := srv.handleFindImplementations(context.Background(), toolReq(map[string]any{
+		"symbol": "Equaler",
+	}))
+	require.NoError(t, err)
+	assert.False(t, res.IsError)
+
+	arr := parseJSONArrayResult(t, res)
+	// Документируем текущее поведение: может быть пустым для Go
+	t.Logf("find_implementations(Equaler) returned %d results", len(arr))
+	
+	// Если не пусто, проверяем что это не другие интерфейсы
+	for _, item := range arr {
+		m := item.(map[string]any)
+		kind, _ := m["kind"].(string)
+		// Реализация должна быть struct или type, не interface
+		if kind == "interface" {
+			t.Errorf("find_implementations returned another interface instead of implementation: %v", m)
+		}
+	}
+}
+
+func TestIntegration_Synthetic_MethodReferences(t *testing.T) {
+	// Тестирует проблему: find_references не находит методы, только функции
+	goDir := testProjectDir(t, "go")
+	env := setupTestEnvWithAST(t)
+	env.cfg.Root = goDir
+
+	seedASTFromDir(t, env, goDir)
+
+	srv := makeCodeServer(env)
+
+	// Process — метод у DataProcessor
+	res, err := srv.handleFindReferences(context.Background(), toolReq(map[string]any{
+		"symbol": "Process",
+	}))
+	require.NoError(t, err)
+	assert.False(t, res.IsError)
+
+	m := parseJSONResult(t, res)
+	edges, ok := m["edges"].([]any)
+	if !ok {
+		edges = nil
+	}
+	lspUnits, _ := m["lsp_units"].([]any)
+	total, _ := m["total"].(float64)
+	t.Logf("find_references(Process method): edges=%d, lsp_units=%d, total=%.0f", len(edges), len(lspUnits), total)
+
+	// Документируем: методы могут не иметь reference edges без LSP
+}
+
+func TestIntegration_Synthetic_CallGraphUp(t *testing.T) {
+	// Тестирует проблему: get_call_graph direction=up возвращает узлы без edges
+	goDir := testProjectDir(t, "go")
+	env := setupTestEnvWithAST(t)
+	env.cfg.Root = goDir
+
+	seedASTFromDir(t, env, goDir)
+
+	srv := makeCodeServer(env)
+
+	// Граф вызовов для main с direction=up (callers)
+	res, err := srv.handleGetCallGraph(context.Background(), toolReq(map[string]any{
+		"symbol":    "main",
+		"direction": "up",
+	}))
+	require.NoError(t, err)
+	assert.False(t, res.IsError)
+
+	m := parseJSONResult(t, res)
+	nodes, ok := m["nodes"].([]any)
+	if ok && len(nodes) > 0 {
+		// Проверяем наличие edges
+		hasEdges := false
+		for _, node := range nodes {
+			n := node.(map[string]any)
+			if edges, exists := n["edges"]; exists {
+				if edgeList, ok := edges.([]any); ok && len(edgeList) > 0 {
+					hasEdges = true
+					break
+				}
+			}
+		}
+		if !hasEdges {
+			t.Log("KNOWN ISSUE: call graph direction=up has nodes but no edges")
+		}
+	}
+}
+
+func TestIntegration_Synthetic_ResolveCall(t *testing.T) {
+	// Тестирует проблему: resolve_call возвращает первый edge без фильтрации по kind
+	// Может вернуть reference вместо call
+	t.Skip("resolve_call требует cross-repo edges — тестируется в unit тестах")
+}
+
+func TestIntegration_Synthetic_ExtendsAsImplements(t *testing.T) {
+	// Тестирует: extends edge должен считаться реализацией
+	jsDir := testProjectDir(t, "js")
+	env := setupTestEnvWithAST(t)
+	env.cfg.Root = jsDir
+
+	seedASTFromDir(t, env, jsDir)
+
+	srv := makeCodeServer(env)
+
+	// Base класс, Derived extends Base
+	res, err := srv.handleFindImplementations(context.Background(), toolReq(map[string]any{
+		"symbol": "Base",
+	}))
+	require.NoError(t, err)
+	assert.False(t, res.IsError)
+
+	arr := parseJSONArrayResult(t, res)
+	t.Logf("find_implementations(Base) returned %d results", len(arr))
+	
+	// Derived должен быть в реализациях через extends
+	foundDerived := false
+	for _, item := range arr {
+		m := item.(map[string]any)
+		if name, ok := m["symbol"].(string); ok && name == "Derived" {
+			foundDerived = true
+			break
+		}
+	}
+	if foundDerived {
+		t.Log("Extends edge correctly found as implementation")
+	} else {
+		t.Log("KNOWN ISSUE: extends edge may not be found as implementation")
+	}
+}

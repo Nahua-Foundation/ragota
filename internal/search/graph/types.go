@@ -85,6 +85,12 @@ type TraverseResult struct {
 	Edges []store.Edge    `json:"edges"`
 }
 
+// ReferencesResult — результат поиска ссылок с LSP-обогащением.
+type ReferencesResult struct {
+	Edges    []store.Edge    `json:"edges"`              // tree-sitter edges
+	LSPUnits []store.ASTUnit `json:"lsp_units,omitempty"` // LSP-enriched locations
+}
+
 // ExecutionContext — результат get_execution_context.
 type ExecutionContext struct {
 	Definition     *store.ASTUnit  `json:"definition"`
@@ -107,6 +113,7 @@ type Service struct {
 	mu        sync.Mutex
 	callCache map[int]cacheEntry // ленивый кэш для Callers (по unit.ID)
 	implCache map[int]cacheEntry // ленивый кэш для Implementations
+	refCache  map[int]cacheEntry // ленивый кэш для References (LSP units)
 }
 
 type cacheEntry struct {
@@ -124,6 +131,7 @@ func New(cfg *config.Config, st *store.SQLite) *Service {
 		st:        st,
 		callCache: make(map[int]cacheEntry),
 		implCache: make(map[int]cacheEntry),
+		refCache:  make(map[int]cacheEntry),
 	}
 }
 
@@ -141,3 +149,6 @@ func NewWithLSP(cfg *config.Config, st *store.SQLite, mgr *manager.Manager) *Ser
 
 // SetCrossRepoIndex подключает cross-repo индекс.
 func (s *Service) SetCrossRepoIndex(cri CrossRepoIndexer) { s.CRI = cri }
+
+// Store возвращает SQLite store для прямого доступа к edges.
+func (s *Service) Store() *store.SQLite { return s.st }

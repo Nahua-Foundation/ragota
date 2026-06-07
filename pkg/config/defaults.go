@@ -1,21 +1,6 @@
 package config
 
-// Файл содержит дефолтные значения конфига: DefaultIgnore/DefaultExtensions
-// и фабрику Default(), формирующую полностью заполненный *Config.
-
-// DefaultIgnore — папки, которые по умолчанию исключаются.
-var DefaultIgnore = []string{
-	".git", ".hg", ".svn", ".idea", ".vscode", ".fleet",
-	"vendor",
-	"node_modules", "bower_components", ".next", ".nuxt", "dist", "build", ".turbo", ".svelte-kit",
-	"__pycache__", ".venv", "venv", "env", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "site-packages", "*.egg-info",
-	"target", ".gradle", "out",
-	".cache", "coverage", "tmp",
-	"*.pb.go", "*_grpc.pb.go", "*.gen.go", "*.pb.js", "*.pb.ts", "*_pb2.py", "*_pb2_grpc.py",
-	"ragota",
-	".ragota",
-	"migrations", "protodeps", "gen", "release-notes",
-}
+// Файл содержит дефолтные значения конфига и фабрику Default().
 
 // DefaultExtensions — расширения для индексирования по умолчанию.
 var DefaultExtensions = []string{
@@ -31,99 +16,45 @@ var DefaultExtensions = []string{
 // Default возвращает дефолтный конфиг (без root — он задаётся CLI).
 func Default() *Config {
 	return &Config{
-		Ignore:     append([]string{}, DefaultIgnore...),
 		Extensions: append([]string{}, DefaultExtensions...),
-		Qdrant: QdrantConfig{
-			Host: "localhost",
-			Port: 6333,
-		},
 		Ollama: OllamaConfig{
 			URL:         "http://localhost:11434",
 			EmbedModel:  "nomic-embed-text",
-			EmbedDim:    768,
-			SymbolModel: "qwen2.5-coder:3b",
+			SymbolModel: "qwen3:4b",
+			IgnoreModel: "qwen3:4b",
 		},
-		Collection: "ai_tools_code",
 		Collections: CollectionsConfig{
 			Code: CollectionSpec{
 				Name:       "ai_tools_code",
 				EmbedModel: "qwen3-embedding:0.6b",
-				EmbedDim:   1024,
 			},
 			Text: CollectionSpec{
 				Name:       "ai_tools_text",
 				EmbedModel: "nomic-embed-text",
-				EmbedDim:   768,
 			},
 		},
 		BM25: BM25Config{
 			Enabled: true,
-			Path:    "", // вычисляется через BM25Path() при пустом значении
 			K1:      1.2,
 			B:       0.75,
 		},
 		Rerank: RerankConfig{
 			Enabled:  true,
 			Model:    "qllama/bge-reranker-v2-m3",
-			URL:      "", // если пусто — используется Ollama.URL
 			Required: false,
 			TopN:     20,
-		},
-		Hybrid: HybridConfig{
-			VectorWeight:        0,
-			BM25Weight:          0,
-			RRFK:                60,
-			CandidatesPerSource: 50,
 		},
 		ChunkLines:       60,
 		ChunkOverlap:     10,
 		VectorWorkers:    16,
 		EmbedParallelism: 16,
-		MCP: MCPPorts{
-			TreeSitter: 7771,
-			Vector:     7772,
-			LSP:        7773,
-			Symbol:     7774,
-		},
-		Docker: DockerConfig{
-			Network: "ragota-net",
-			Qdrant: DockerContainerCfg{
-				Name:    "ragota-qdrant",
-				Image:   "qdrant/qdrant:latest",
-				Ports:   []string{"127.0.0.1:6333:6333", "127.0.0.1:6334:6334"},
-				Volumes: []string{".ragota/qdrant_storage:/qdrant/storage"},
-			},
-			// Единый LSP-контейнер со всеми серверами
-			LSP: LSPDockerCfg{
-				Image:   "ragota-lsp:latest",
-				Volumes: []string{".:/workspace"},
-			},
-		},
+		MCPPort:          7772,
 		LSP: []LSPServerConfig{
-			{
-				Language: "go",
-				Command:  "gopls",
-			},
-			{
-				Language: "typescript",
-				Command:  "typescript-language-server",
-				Args:     []string{"--stdio"},
-			},
-			{
-				Language: "javascript",
-				Command:  "typescript-language-server",
-				Args:     []string{"--stdio"},
-			},
-			{
-				Language: "python",
-				Command:  "pyright-langserver",
-				Args:     []string{"--stdio"},
-			},
-			{
-				Language: "java",
-				Command:  "jdtls",
-				Args:     []string{"-data", ".ragota/jdtls-data"},
-			},
+			{Language: "go", Command: "gopls"},
+			{Language: "typescript", Command: "typescript-language-server", Args: []string{"--stdio"}},
+			{Language: "javascript", Command: "typescript-language-server", Args: []string{"--stdio"}},
+			{Language: "python", Command: "pyright-langserver", Args: []string{"--stdio"}},
+			{Language: "java", Command: "jdtls", Args: []string{"-data", ".ragota/jdtls-data"}},
 		},
 	}
 }

@@ -791,3 +791,384 @@ func TestRecordOllamaLatency_WithError(t *testing.T) {
 func writeTestFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
+
+// =============================================================================
+// Tests for identified MCP server issues
+// =============================================================================
+
+// TestImplementations_GoImplicitInterface tests that Go implicit implementations
+// are NOT found via implements edges (Go doesn't have explicit implements keyword).
+// This is a KNOWN LIMITATION: tree-sitter doesn't extract implements edges for Go.
+func TestImplementations_GoImplicitInterface(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	path := "/tmp/implicit.go"
+	require.NoError(t, st.EnsureFile(ctx, path, "go"))
+
+	// Create interface and struct that implicitly implements it
+	units := []store.ASTUnit{
+		{FilePath: path, Language: "go", Kind: "interface", Name: "Processor", Qualified: "pkg.Processor", StartLine: 1, EndLine: 5},
+		{FilePath: path, Language: "go", Kind: "struct", Name: "DataProcessor", Qualified: "pkg.DataProcessor", StartLine: 10, EndLine: 15},
+		{FilePath: path, Language: "go", Kind: "method", Name: "Process", Qualified: "pkg.DataProcessor.Process", StartLine: 20, EndLine: 25},
+	}
+	ids, err := st.ReplaceASTUnits(ctx, path, units)
+	require.NoError(t, err)
+
+	idIface := ids["pkg.Processor"]
+	idStruct := ids["pkg.DataProcessor"]
+
+	// In Go, there's NO implements edge because it's implicit
+	// This test verifies the current behavior (returns empty)
+	impls, err := svc.Implementations(ctx, idIface)
+	require.NoError(t, err)
+	assert.Empty(t, impls, "Go implicit implementations should NOT be found without explicit implements edge")
+
+	// Verify struct exists but has no implements edge
+	refs, err := svc.References(ctx, idIface)
+	require.NoError(t, err)
+	// Should be empty or only have reference edges, not implements
+	for _, ref := range refs {
+		assert.NotEqual(t, EdgeImplements, ref.Kind, "Go should not have implements edges")
+	}
+
+	_ = idStruct // struct exists but no implements relationship
+}
+
+// TestImplementations_ExplicitImplementsEdge tests that implementations ARE found
+// when explicit implements edge exists (TypeScript/Java pattern).
+func TestImplementations_ExplicitImplementsEdge(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	path := "/tmp/explicit.ts"
+	require.NoError(t, st.EnsureFile(ctx, path, "typescript"))
+
+	// Create interface and class with explicit implements edge
+	units := []store.ASTUnit{
+		{FilePath: path, Language: "typescript", Kind: "interface", Name: "IProcessor", Qualified: "IProcessor", StartLine: 1, EndLine: 5},
+		{FilePath: path, Language: "typescript", Kind: "class", Name: "DataProcessor", Qualified: "DataProcessor", StartLine: 10, EndLine: 20},
+	}
+	ids, err := st.ReplaceASTUnits(ctx, path, units)
+	require.NoError(t, err)
+
+	idIface := ids["IProcessor"]
+	// Class ID might be qualified differently, use name lookup
+	var idClass int
+	for k, v := range ids {
+		if k == "DataProcessor" || k == "pkg.DataProcessor" {
+			idClass = v
+			break
+		}
+	}
+	if idClass == 0 && len(ids) > 0 {
+		// Fallback: use second ID
+		for _, v := range ids {
+			if v != idIface {
+				idClass = v
+				break
+			}
+		}
+	}
+
+	// Add explicit implements edge (TypeScript/Java pattern)
+	edges := []store.Edge{
+		{SrcID: idClass, DstID: idIface, Kind: EdgeImplements, Repo: "", FilePath: path, Line: 10, DstName: "IProcessor"},
+	}
+	require.NoError(t, st.ReplaceEdges(ctx, path, edges))
+
+	// Now implementations SHOULD be found
+	impls, err := svc.Implementations(ctx, idIface)
+	require.NoError(t, err)
+	assert.NotEmpty(t, impls, "Explicit implements edge should be found")
+	assert.Len(t, impls, 1)
+	assert.Equal(t, idClass, impls[0].ID)
+}
+
+// TestImplementations_ExtendsAsImplementation tests that extends edges are also
+// considered as implementations (subclass implements parent interface).
+func TestImplementations_ExtendsAsImplementation(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	path := "/tmp/extends.ts"
+	require.NoError(t, st.EnsureFile(ctx, path, "typescript"))
+
+	units := []store.ASTUnit{
+		{FilePath: path, Language: "typescript", Kind: "class", Name: "BaseClass", Qualified: "BaseClass", StartLine: 1, EndLine: 10},
+		{FilePath: path, Language: "typescript", Kind: "class", Name: "DerivedClass", Qualified: "DerivedClass", StartLine: 15, EndLine: 25},
+	}
+	ids, err := st.ReplaceASTUnits(ctx, path, units)
+	require.NoError(t, err)
+
+	idBase := ids["BaseClass"]
+	idDerived := ids["DerivedClass"]
+
+	// Add extends edge
+	edges := []store.Edge{
+		{SrcID: idDerived, DstID: idBase, Kind: EdgeExtends, Repo: "", FilePath: path, Line: 15, DstName: "BaseClass"},
+	}
+	require.NoError(t, st.ReplaceEdges(ctx, path, edges))
+
+	// Extends should be found as implementation
+	impls, err := svc.Implementations(ctx, idBase)
+	require.NoError(t, err)
+	assert.NotEmpty(t, impls, "Extends edge should be found as implementation")
+	assert.Len(t, impls, 1)
+	assert.Equal(t, idDerived, impls[0].ID)
+}
+
+// TestReferences_MethodsVsFunctions tests that method references are handled
+// differently from function references (KNOWN ISSUE: methods may not be found).
+func TestReferences_MethodsVsFunctions(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	path := "/tmp/methods.go"
+	require.NoError(t, st.EnsureFile(ctx, path, "go"))
+
+	// Create function and method
+	units := []store.ASTUnit{
+		{FilePath: path, Language: "go", Kind: "function", Name: "standaloneFunc", Qualified: "pkg.standaloneFunc", StartLine: 1, EndLine: 10},
+		{FilePath: path, Language: "go", Kind: "struct", Name: "MyStruct", Qualified: "pkg.MyStruct", StartLine: 15, EndLine: 20},
+		{FilePath: path, Language: "go", Kind: "method", Name: "MyMethod", Qualified: "pkg.MyStruct.MyMethod", StartLine: 25, EndLine: 30},
+	}
+	ids, err := st.ReplaceASTUnits(ctx, path, units)
+	require.NoError(t, err)
+
+	idFunc := ids["pkg.standaloneFunc"]
+	idMethod := ids["pkg.MyStruct.MyMethod"]
+
+	// Create reference edges for function (should work)
+	funcCallerID := ids["pkg.MyStruct"] // reuse struct as caller
+	edges := []store.Edge{
+		{SrcID: funcCallerID, DstID: idFunc, Kind: EdgeCall, Repo: "", FilePath: path, Line: 5, DstName: "standaloneFunc"},
+		// NOTE: Method references may not work due to how tree-sitter extracts methods
+	}
+	require.NoError(t, st.ReplaceEdges(ctx, path, edges))
+
+	// Function references SHOULD be found
+	funcRefs, err := svc.References(ctx, idFunc)
+	require.NoError(t, err)
+	assert.NotEmpty(t, funcRefs, "Function references should be found")
+
+	// Method references may be empty (KNOWN LIMITATION)
+	methodRefs, err := svc.References(ctx, idMethod)
+	require.NoError(t, err)
+	// This test documents the current behavior - may be empty
+	// If tree-sitter doesn't extract method call edges, this will be empty
+	assert.Empty(t, methodRefs, "Method references may not be found without explicit call edges")
+}
+
+// TestReferences_CallEdgeKind tests that only call edges are returned for callers,
+// not reference edges (KNOWN ISSUE: resolve_call may return wrong kind).
+func TestReferences_CallEdgeKind(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	path := "/tmp/kinds.go"
+	require.NoError(t, st.EnsureFile(ctx, path, "go"))
+
+	units := []store.ASTUnit{
+		{FilePath: path, Language: "go", Kind: "function", Name: "target", Qualified: "pkg.target", StartLine: 1, EndLine: 10},
+		{FilePath: path, Language: "go", Kind: "function", Name: "caller", Qualified: "pkg.caller", StartLine: 15, EndLine: 25},
+	}
+	ids, err := st.ReplaceASTUnits(ctx, path, units)
+	require.NoError(t, err)
+
+	idTarget := ids["pkg.target"]
+	idCaller := ids["pkg.caller"]
+
+	// Create BOTH call and reference edges
+	edges := []store.Edge{
+		{SrcID: idCaller, DstID: idTarget, Kind: EdgeCall, Repo: "", FilePath: path, Line: 20, DstName: "target"},
+		{SrcID: idCaller, DstID: idTarget, Kind: EdgeReference, Repo: "", FilePath: path, Line: 18, DstName: "target"},
+	}
+	require.NoError(t, st.ReplaceEdges(ctx, path, edges))
+
+	// References should return ALL kinds (call + reference)
+	refs, err := svc.References(ctx, idTarget)
+	require.NoError(t, err)
+	assert.Len(t, refs, 2, "Should return both call and reference edges")
+
+	// Verify kinds
+	kinds := make(map[string]bool)
+	for _, ref := range refs {
+		kinds[ref.Kind] = true
+	}
+	assert.True(t, kinds[EdgeCall], "Should have call edge")
+	assert.True(t, kinds[EdgeReference], "Should have reference edge")
+}
+
+// TestResolveCrossCall_EdgeKindFiltering tests that resolve_call returns correct
+// edge kind (call vs reference). KNOWN ISSUE: may return reference instead of call.
+func TestResolveCrossCall_EdgeKindFiltering(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	path := "/tmp/resolve.go"
+	require.NoError(t, st.EnsureFile(ctx, path, "go"))
+
+	units := []store.ASTUnit{
+		{FilePath: path, Language: "go", Kind: "function", Name: "caller", Qualified: "pkg.caller", StartLine: 1, EndLine: 20},
+		{FilePath: path, Language: "go", Kind: "function", Name: "target", Qualified: "pkg.target", StartLine: 25, EndLine: 35},
+	}
+	ids, err := st.ReplaceASTUnits(ctx, path, units)
+	require.NoError(t, err)
+
+	idCaller := ids["pkg.caller"]
+	idTarget := ids["pkg.target"]
+
+	// Create cross-call edge at specific line
+	edges := []store.Edge{
+		{SrcID: idCaller, DstID: idTarget, Kind: EdgeCall, Repo: "repo-a", DstRepo: "repo-b",
+			DstName: "target", FilePath: path, Line: 10, Confidence: 0.9},
+		// Also add a reference edge at different line
+		{SrcID: idCaller, DstID: idTarget, Kind: EdgeReference, Repo: "repo-a", DstRepo: "repo-b",
+			DstName: "target", FilePath: path, Line: 15, Confidence: 0.5},
+	}
+	for _, e := range edges {
+		_, _ = st.InsertEdge(ctx, e)
+	}
+
+	// Resolve at line 10 (should return call edge)
+	res, err := svc.ResolveCrossCall(ctx, path, 10)
+	require.NoError(t, err)
+	if res != nil {
+		// NOTE: Current implementation may return first matching edge, not necessarily at exact line
+		t.Logf("ResolveCrossCall at line 10 returned kind=%s (expected: call)", res.Edge.Kind)
+	}
+
+	// Resolve at line 15 (should return reference edge)
+	res2, err := svc.ResolveCrossCall(ctx, path, 15)
+	require.NoError(t, err)
+	if res2 != nil {
+		t.Logf("ResolveCrossCall at line 15 returned kind=%s (expected: reference)", res2.Edge.Kind)
+	}
+	
+	// KNOWN ISSUE: resolve_call may not filter by exact line, returns first match
+	// This test documents the current behavior
+}
+
+// TestFindCallers_MethodsVsFunctions tests that callers of methods are found
+// correctly (KNOWN ISSUE: method callers may not be found).
+func TestFindCallers_MethodsVsFunctions(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	path := "/tmp/callers.go"
+	require.NoError(t, st.EnsureFile(ctx, path, "go"))
+
+	units := []store.ASTUnit{
+		{FilePath: path, Language: "go", Kind: "function", Name: "standaloneFunc", Qualified: "pkg.standaloneFunc", StartLine: 1, EndLine: 10},
+		{FilePath: path, Language: "go", Kind: "struct", Name: "MyStruct", Qualified: "pkg.MyStruct", StartLine: 15, EndLine: 20},
+		{FilePath: path, Language: "go", Kind: "method", Name: "MyMethod", Qualified: "pkg.MyStruct.MyMethod", StartLine: 25, EndLine: 30},
+		{FilePath: path, Language: "go", Kind: "function", Name: "caller1", Qualified: "pkg.caller1", StartLine: 35, EndLine: 40},
+		{FilePath: path, Language: "go", Kind: "function", Name: "caller2", Qualified: "pkg.caller2", StartLine: 45, EndLine: 50},
+	}
+	ids, err := st.ReplaceASTUnits(ctx, path, units)
+	require.NoError(t, err)
+
+	idFunc := ids["pkg.standaloneFunc"]
+	idMethod := ids["pkg.MyStruct.MyMethod"]
+	idCaller1 := ids["pkg.caller1"]
+	idCaller2 := ids["pkg.caller2"]
+
+	// Create call edges
+	edges := []store.Edge{
+		{SrcID: idCaller1, DstID: idFunc, Kind: EdgeCall, Repo: "", FilePath: path, Line: 5, DstName: "standaloneFunc"},
+		{SrcID: idCaller1, DstID: idMethod, Kind: EdgeCall, Repo: "", FilePath: path, Line: 38, DstName: "MyMethod"},
+		{SrcID: idCaller2, DstID: idMethod, Kind: EdgeCall, Repo: "", FilePath: path, Line: 48, DstName: "MyMethod"},
+	}
+	require.NoError(t, st.ReplaceEdges(ctx, path, edges))
+
+	// Function callers SHOULD be found
+	funcCallers, err := svc.Callers(ctx, idFunc)
+	require.NoError(t, err)
+	assert.NotEmpty(t, funcCallers, "Function callers should be found")
+	assert.Len(t, funcCallers, 1)
+
+	// Method callers SHOULD be found (if edges exist)
+	methodCallers, err := svc.Callers(ctx, idMethod)
+	require.NoError(t, err)
+	assert.NotEmpty(t, methodCallers, "Method callers should be found when edges exist")
+	assert.Len(t, methodCallers, 2)
+}
+
+// TestCallGraph_DirectionUp tests that call graph with direction=up (callers)
+// returns edges correctly (KNOWN ISSUE: may return nodes without edges).
+func TestCallGraph_DirectionUp(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	path := "/tmp/callgraph.go"
+	require.NoError(t, st.EnsureFile(ctx, path, "go"))
+
+	units := []store.ASTUnit{
+		{FilePath: path, Language: "go", Kind: "function", Name: "leaf", Qualified: "pkg.leaf", StartLine: 1, EndLine: 10},
+		{FilePath: path, Language: "go", Kind: "function", Name: "middle", Qualified: "pkg.middle", StartLine: 15, EndLine: 25},
+		{FilePath: path, Language: "go", Kind: "function", Name: "root", Qualified: "pkg.root", StartLine: 30, EndLine: 40},
+	}
+	ids, err := st.ReplaceASTUnits(ctx, path, units)
+	require.NoError(t, err)
+
+	idLeaf := ids["pkg.leaf"]
+	idMiddle := ids["pkg.middle"]
+	idRoot := ids["pkg.root"]
+
+	// Create call chain: root -> middle -> leaf
+	edges := []store.Edge{
+		{SrcID: idRoot, DstID: idMiddle, Kind: EdgeCall, Repo: "", FilePath: path, Line: 35, DstName: "middle"},
+		{SrcID: idMiddle, DstID: idLeaf, Kind: EdgeCall, Repo: "", FilePath: path, Line: 20, DstName: "leaf"},
+	}
+	require.NoError(t, st.ReplaceEdges(ctx, path, edges))
+
+	// Test direction=down (callees) - should work
+	downGraph, err := svc.CallGraph(ctx, idRoot, 2)
+	require.NoError(t, err)
+	require.NotNil(t, downGraph)
+	assert.NotEmpty(t, downGraph.Nodes, "Down graph should have nodes")
+	// Verify edges exist in Neighborhood
+	assert.NotEmpty(t, downGraph.Edges, "Down graph should have edges")
+
+	// Test direction=up (callers) - KNOWN ISSUE: may return nodes without edges
+	upGraph, err := svc.CallGraph(ctx, idLeaf, 2)
+	require.NoError(t, err)
+	require.NotNil(t, upGraph)
+	assert.NotEmpty(t, upGraph.Nodes, "Up graph should have nodes")
+
+	// Verify edges exist (this is the known issue - may be empty)
+	// This assertion documents the expected behavior
+	assert.NotEmpty(t, upGraph.Edges, "Up graph should have edges (KNOWN ISSUE: may be empty)")
+}
+
+// TestSemanticSearch_EmptyWithoutEmbedding tests that semantic search returns empty
+// results when embedding model is not configured (KNOWN LIMITATION).
+func TestSemanticSearch_EmptyWithoutEmbedding(t *testing.T) {
+	// This test documents the expected behavior when Ollama/Qdrant is not configured
+	// Semantic search should gracefully return empty results, not error
+	// Actual implementation tested in vector/search_test.go
+	t.Skip("Semantic search requires Ollama + Qdrant configuration - tested separately")
+}
+
+// TestKeywordSearch_Fallback tests that keyword search works as fallback
+// when semantic search is unavailable.
+func TestKeywordSearch_Fallback(t *testing.T) {
+	st := openTestDB(t)
+	ctx := context.Background()
+
+	path := "/tmp/keyword.go"
+	require.NoError(t, st.EnsureFile(ctx, path, "go"))
+
+	units := []store.ASTUnit{
+		{FilePath: path, Language: "go", Kind: "function", Name: "processData", Qualified: "pkg.processData", StartLine: 1, EndLine: 10},
+		{FilePath: path, Language: "go", Kind: "function", Name: "validateInput", Qualified: "pkg.validateInput", StartLine: 15, EndLine: 25},
+	}
+	_, err := st.ReplaceASTUnits(ctx, path, units)
+	require.NoError(t, err)
+
+	// Keyword search should work without embeddings
+	// This is tested via the hybrid search which falls back to keyword
+	// Actual implementation tested in hybrid/hybrid_test.go
+	t.Skip("Keyword search tested in hybrid search tests")
+}

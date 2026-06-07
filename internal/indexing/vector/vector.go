@@ -100,16 +100,18 @@ type preparedFile struct {
 func NewVector(cfg *config.Config, qd *qdrant.Client, emb *embedder.Ollama, st *store.SQLite, bus *state.Bus) *Vector {
 	codeSpec := cfg.CodeCollection()
 	textSpec := cfg.TextCollection()
+	codeDim := int(cfg.CodeEmbedDim())
+	textDim := int(cfg.TextEmbedDim())
 
 	sem := make(chan struct{}, cfg.EmbedParallelism)
 
 	code := embedder.New(cfg.Ollama.URL, codeSpec.EmbedModel)
-	code.SetDim(int(codeSpec.EmbedDim))
+	code.SetDim(codeDim)
 	code.SetSemaphore(sem)
 	code.SetBus(bus)
 
 	text := embedder.New(cfg.Ollama.URL, textSpec.EmbedModel)
-	text.SetDim(int(textSpec.EmbedDim))
+	text.SetDim(textDim)
 	text.SetSemaphore(sem)
 	text.SetBus(bus)
 
@@ -127,7 +129,7 @@ func NewVector(cfg *config.Config, qd *qdrant.Client, emb *embedder.Ollama, st *
 		parser:  parser.New(),
 		chunker: chunker.New(cfg.ChunkLines, cfg.ChunkOverlap),
 		bus:     bus,
-		matcher: fileutil.NewMatcher(cfg.Ignore),
+		matcher: fileutil.NewMatcher(cfg.IgnorePatterns),
 		store:   st,
 		sem:     sem,
 	}
@@ -188,27 +190,28 @@ func (v *Vector) ensureCollection(ctx context.Context, sp config.CollectionSpec)
 	if sp.Name == "" {
 		return nil
 	}
+	dim := int(v.cfg.EmbedDimForModel(sp.EmbedModel))
 	// 1. Сверяем embed_meta — если модель сменилась, удаляем коллекцию для reindex.
 	if v.store != nil {
 		prev, err := v.store.GetEmbedMeta(ctx, sp.Name)
-		if err == nil && prev != nil && (prev.Model != sp.EmbedModel || uint64(prev.Dim) != sp.EmbedDim) {
+		if err == nil && prev != nil && (prev.Model != sp.EmbedModel || prev.Dim != dim) {
 			logger.Log().Info().Str("collection", sp.Name).
 				Str("old_model", prev.Model).Int("old_dim", prev.Dim).
-				Str("new_model", sp.EmbedModel).Uint64("new_dim", sp.EmbedDim).
+				Str("new_model", sp.EmbedModel).Int("new_dim", dim).
 				Msg("vector: embed model changed — recreating collection")
 			if err := v.qd.DeleteCollection(ctx, sp.Name); err != nil {
 				logger.Log().Warn().Err(err).Str("collection", sp.Name).Msg("vector: delete collection failed, continuing")
 			}
 		}
 	}
-	if err := v.qd.EnsureCollection(ctx, sp.Name, sp.EmbedDim, qdrant.Cosine); err != nil {
+	if err := v.qd.EnsureCollection(ctx, sp.Name, uint64(dim), qdrant.Cosine); err != nil {
 		return fmt.Errorf("ensure %q: %w", sp.Name, err)
 	}
 	if v.store != nil {
 		_ = v.store.SetEmbedMeta(ctx, store.EmbedMeta{
 			Collection: sp.Name,
 			Model:      sp.EmbedModel,
-			Dim:        int(sp.EmbedDim),
+			Dim:        dim,
 		})
 	}
 	return nil

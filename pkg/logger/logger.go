@@ -53,3 +53,9 @@ func OpenLogFile(root string) (*os.File, string, error) {
 func Log() *zerolog.Logger {
 	return &log
 }
+
+// SetHook добавляет хук к глобальному логгеру.
+// Хук вызывается для каждого лог-события (можно фильтровать по level внутри хука).
+func SetHook(h zerolog.Hook) {
+	log = log.Hook(h)
+}

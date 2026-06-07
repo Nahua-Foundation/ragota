@@ -483,14 +483,14 @@ func TestCodeHandleFindReferences_ExcludeTests(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, res2.IsError)
 
-	arr := parseJSONArrayResult(t, res2)
+	m := parseJSONResult(t, res2)
+	t.Logf("find_references response: %v", m)
+	arr, ok := m["edges"].([]any)
+	require.True(t, ok, "response should have edges array, got: %T = %v", m["edges"], m["edges"])
 	// Все references из test файлов должны быть отфильтрованы
 	for _, item := range arr {
-		m := item.(map[string]any)
-		fp, _ := m["file_path"].(string)
-		if fp == "" {
-			fp, _ = m["FilePath"].(string)
-		}
+		e := item.(map[string]any)
+		fp, _ := e["file_path"].(string)
 		assert.NotContains(t, fp, "_test.", "test files should be excluded")
 	}
 }
@@ -532,7 +532,9 @@ func TestCodeHandleFindReferences_Limit(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
 
-	arr := parseJSONArrayResult(t, res)
+	m := parseJSONResult(t, res)
+	arr, ok := m["edges"].([]any)
+	require.True(t, ok, "response should have edges array")
 	assert.LessOrEqual(t, len(arr), 2, "limit should cap results")
 }
 

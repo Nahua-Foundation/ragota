@@ -5,6 +5,7 @@ ragota
 # Data and logs
 /.ai-tools/
 /.ragota/
+/logs/
 *.log
 *.test
 

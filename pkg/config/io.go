@@ -1,9 +1,10 @@
 package config
 
 // Файл реализует загрузку и сохранение конфига:
-// ResolveConfigPath/DefaultConfigPath/HomeConfigPath — алгоритм поиска;
-// Load — чтение YAML с дефолтами; WriteDefault — запись дефолтного конфига;
-// EnsureDataDir — создание служебных каталогов .ragota/ и logs/.
+// Load — чтение YAML с дефолтами из ~/.ragota/config.yaml + загрузка .ragotaignore;
+// WriteDefault — запись дефолтного конфига;
+// EnsureDataDir — создание служебных каталогов .ragota/ и logs/;
+// HomeConfigPath — возвращает ~/.ragota/config.yaml.
 
 import (
 	"errors"
@@ -11,13 +12,10 @@ import (
 	"os"
 	"path/filepath"
 
+	"ragota/pkg/ragignore"
+
 	yaml "gopkg.in/yaml.v3"
 )
-
-// DefaultConfigPath возвращает локальный путь конфига: .ragota/config.yaml в корне.
-func DefaultConfigPath(root string) string {
-	return filepath.Join(root, ".ragota", "config.yaml")
-}
 
 // HomeConfigPath возвращает глобальный путь конфига: ~/.ragota/config.yaml.
 func HomeConfigPath() string {
@@ -28,80 +26,49 @@ func HomeConfigPath() string {
 	return filepath.Join(home, ".ragota", "config.yaml")
 }
 
-// ResolveConfigPath возвращает путь к конфигу, который будет загружен.
-func ResolveConfigPath(root, configPath string) (string, error) {
+// Load загружает конфиг из ~/.ragota/config.yaml и .ragotaignore из root.
+// Если файла конфига нет — возвращаются дефолтные значения.
+// .ragotaignore загружается всегда (или DefaultPatterns если файла нет).
+func Load(root string) (*Config, error) {
 	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	path := configPath
-	if path == "" {
-		// Сначала ищем локальный (.ragota/config.yaml или старый ai-tools/config.yaml)
-		local := DefaultConfigPath(absRoot)
-		if _, err := os.Stat(local); err == nil {
-			path = local
-		} else {
-			oldLocal := filepath.Join(absRoot, "ragota", "config.yaml")
-			if info, err := os.Stat(oldLocal); err == nil && !info.IsDir() {
-				path = oldLocal
-			} else {
-				global := HomeConfigPath()
-				if global != "" {
-					if _, err := os.Stat(global); err == nil {
-						path = global
-					} else {
-						path = global
-					}
-				} else {
-					path = local
-				}
-			}
-		}
-	}
-	return filepath.Abs(path)
-}
-
-// Load загружает конфиг. Порядок поиска если configPath пустой:
-// 1. .ragota/config.yaml (локальный в корне проекта)
-// 2. ~/.ragota/config.yaml (глобальный в HOME)
-// Если файла нет нигде — возвращается дефолт.
-func Load(root, configPath string) (*Config, error) {
-	path, err := ResolveConfigPath(root, configPath)
 	if err != nil {
 		return nil, err
 	}
-	absRoot, _ := filepath.Abs(root)
+
 	cfg := Default()
 	cfg.Root = absRoot
 
-	data, err := os.ReadFile(path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		if configPath != "" {
-			return nil, fmt.Errorf("config file not found: %s", path)
-		}
-		// Файла нет — возвращаем дефолты.
+	path := HomeConfigPath()
+	if path == "" {
 		return cfg, nil
-	case err != nil:
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return cfg, nil
+		}
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.Root = absRoot
+
+	// Загружаем .ragotaignore из root
+	patterns, perr := ragignore.Load(absRoot)
+	if perr != nil {
+		// Не ошибка — логируем warning, используем DefaultPatterns
+		fmt.Fprintf(os.Stderr, "ragota: warning: loading .ragotaignore: %v\n", perr)
+		patterns = ragignore.DefaultPatterns
+	}
+	cfg.IgnorePatterns = patterns
+
 	return cfg, nil
 }
 
 // WriteDefault записывает дефолтный конфиг в указанный путь.
-// Если path пустой — пишет в HomeConfigPath().
-// Если файл уже существует и overwrite=false — возвращается ошибка.
 func WriteDefault(path string, overwrite bool) (string, error) {
-	if path == "" {
-		path = HomeConfigPath()
-		if path == "" {
-			return "", fmt.Errorf("could not determine home directory for config")
-		}
-	}
 	if _, err := os.Stat(path); err == nil && !overwrite {
 		return path, fmt.Errorf("config already exists: %s (use --force to overwrite)", path)
 	}
@@ -114,8 +81,7 @@ func WriteDefault(path string, overwrite bool) (string, error) {
 		return path, err
 	}
 	header := []byte("# ragota default configuration.\n" +
-		"# Place this file at .ragota/config.yaml or pass via --config <path>.\n" +
-		"# If you are behind a corporate proxy, add HTTP_PROXY/HTTPS_PROXY to docker envs.\n\n")
+		"# Place this file at ~/.ragota/config.yaml.\n\n")
 	if err := os.WriteFile(path, append(header, data...), 0o644); err != nil {
 		return path, err
 	}

@@ -142,7 +142,7 @@ func TestVector_Init_EmbedModelChange(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, meta)
 	assert.Equal(t, codeSpec.EmbedModel, meta.Model)
-	assert.Equal(t, int(codeSpec.EmbedDim), meta.Dim)
+	assert.Equal(t, int(cfg.CodeEmbedDim()), meta.Dim)
 }
 
 func TestVector_SyncStats(t *testing.T) {
@@ -347,7 +347,7 @@ func TestVector_processBatch_CancelledContext(t *testing.T) {
 func TestVector_processBatch_WithFiles(t *testing.T) {
 	cfg := testConfig(t)
 	qdrantSrv := mockQdrantServer(t)
-	dim := int(cfg.CodeCollection().EmbedDim)
+	dim := int(cfg.CodeEmbedDim())
 	ollamaSrv := mockOllamaServer(t, dim)
 	cfg.Ollama.URL = ollamaSrv.URL
 	st := openTestStore(t)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"ragota/internal/indexing/ast"
 	"ragota/pkg/config"
@@ -253,10 +254,46 @@ func (s *CodeServer) Build() *server.MCPServer {
 
 func (s *CodeServer) wrap(name string, fn func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		// Инициализация логгера при первом вызове
+		InitMCPLog(s.cfg.Root)
+
+		start := time.Now()
+		args := req.GetArguments()
+
+		// Логируем вход
+		mcpLog.Debug().
+			Str("tool", name).
+			Interface("args", args).
+			Msg("mcp call")
+
 		res, err := fn(ctx, req)
+
+		// Логируем результат
+		elapsed := time.Since(start)
 		if err != nil {
+			mcpLog.Error().
+				Str("tool", name).
+				Err(err).
+				Dur("elapsed", elapsed).
+				Msg("mcp error")
 			return errorToResult(name, err)
 		}
+
+		// Определяем успешность по isError в результате
+		isError := false
+		if res != nil && res.IsError {
+			isError = true
+		}
+
+		lvl := mcpLog.Debug()
+		if isError {
+			lvl = mcpLog.Warn()
+		}
+		lvl.Str("tool", name).
+			Dur("elapsed", elapsed).
+			Bool("is_error", isError).
+			Msg("mcp done")
+
 		if s.bus != nil {
 			s.bus.IncMCPCall("code", name, false)
 		}

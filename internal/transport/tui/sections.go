@@ -18,6 +18,12 @@ func renderIndexerDashboard(name string, idx state.Indexer, metrics *state.Index
 	var progressStr, statsStr string
 
 	switch idx.Status {
+	case "waiting":
+		progressStr = dimStyle.Render("waiting...")
+		if idx.LastError != "" {
+			statsStr = warnStyle.Render(idx.LastError)
+		}
+
 	case "scanning":
 		progressStr = dimStyle.Render("scanning files...")
 		statsStr = ""
@@ -226,6 +232,43 @@ func clampInt(v, min, max int) int {
 		return max
 	}
 	return v
+}
+
+// renderLogsSection рендерит секцию логов (warn/error) для TUI.
+// Максимум 15 строк, каждая строка обрезается до width.
+func renderLogsSection(logs []state.LogEntry, width int) string {
+	var lines []string
+	lines = append(lines, headerStyle.Render("Logs"))
+
+	for _, entry := range logs {
+		// Формат: HH:MM:SS [LEVEL] message
+		timeStr := entry.Timestamp.Format("15:04:05")
+		levelStr := entry.Level
+
+		// Стилизуем уровень
+		var levelStyled string
+		if entry.Level == "error" {
+			levelStr = "[ERR]"
+			levelStyled = errStyle.Render(levelStr)
+		} else {
+			levelStr = "[WRN]"
+			levelStyled = warnStyle.Render(levelStr)
+		}
+
+		// Формируем строку: "  HH:MM:SS [LEVEL] message"
+		prefix := fmt.Sprintf("  %s %s ", dimStyle.Render(timeStr), levelStyled)
+		// Обрезаем message чтобы вся строка влезла в width
+		// Примерная длина prefix: 2 + 8 + 1 + 5 + 1 = 17 символов (без стилей)
+		msgMaxLen := width - 20 // 20 = "  HH:MM:SS [WRN] " + запас
+		msg := entry.Message
+		if len(msg) > msgMaxLen && msgMaxLen > 3 {
+			msg = msg[:msgMaxLen-3] + "..."
+		}
+
+		lines = append(lines, prefix+msg)
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func prettyDuration(d time.Duration) string {

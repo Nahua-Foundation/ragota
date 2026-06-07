@@ -73,7 +73,7 @@ func (s *Service) CrossRepoCallers(ctx context.Context, symbolName string) ([]st
 }
 
 // ResolveCrossCall находит, куда ведёт cross-repo вызов.
-// Возвращает edge с dst_repo и (если найдено) target AST unit.
+// Фильтрует по kind ∈ {call, cross_call} и возвращает все совпадения.
 func (s *Service) ResolveCrossCall(ctx context.Context, filePath string, line int) (*CrossCallResolution, error) {
 	// Находим unit по file + line
 	units, err := s.st.FindASTUnitsByFileLine(ctx, filePath, line)
@@ -85,32 +85,50 @@ func (s *Service) ResolveCrossCall(ctx context.Context, filePath string, line in
 	}
 
 	unit := units[0]
-	edges, err := s.st.EdgesFrom(ctx, unit.ID, "")
-	if err != nil {
-		return nil, err
+
+	// Получаем edges двух видов: cross_call (приоритет) и call
+	crossCallEdges, _ := s.st.EdgesFrom(ctx, unit.ID, "cross_call")
+	callEdges, _ := s.st.EdgesFrom(ctx, unit.ID, EdgeCall)
+
+	// Приоритет: cross_call > call, фильтрация по line (строка вызова)
+	var candidates []store.Edge
+	for _, e := range crossCallEdges {
+		if e.Line != line {
+			continue
+		}
+		if e.DstRepo != "" || e.DstName != "" {
+			candidates = append(candidates, e)
+		}
 	}
-
-	for _, e := range edges {
+	for _, e := range callEdges {
+		if e.Line != line {
+			continue
+		}
 		if e.DstRepo != "" || (e.DstID == 0 && e.DstName != "") {
-			// Cross-repo edge
-			res := &CrossCallResolution{
-				Edge:      e,
-				SrcSymbol: unit,
-			}
-
-			// Попытаемся найти target unit в dst_repo
-			if e.DstRepo != "" {
-				targets, _ := s.st.FindASTUnits(ctx, e.DstName, "", "", e.DstRepo, 10)
-				if len(targets) > 0 {
-					res.DstSymbol = &targets[0]
-				}
-			}
-
-			return res, nil
+			candidates = append(candidates, e)
 		}
 	}
 
-	return nil, nil
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// Берём лучший candidate (первый cross_call или первый call)
+	best := candidates[0]
+	res := &CrossCallResolution{
+		Edge:      best,
+		SrcSymbol: unit,
+	}
+
+	// Попытаемся найти target unit в dst_repo
+	if best.DstRepo != "" {
+		targets, _ := s.st.FindASTUnits(ctx, best.DstName, "", "", best.DstRepo, 10)
+		if len(targets) > 0 {
+			res.DstSymbol = &targets[0]
+		}
+	}
+
+	return res, nil
 }
 
 // CrossCallResolution — результат resolve cross-repo вызова.

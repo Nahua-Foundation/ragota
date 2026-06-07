@@ -19,28 +19,28 @@ import "database/sql"
 // ASTUnit — самостоятельная AST-единица: function/method/class/interface/module/...
 // Используется для hybrid retrieval, parent-child навигации и graph expansion.
 type ASTUnit struct {
-	ID int
+	ID int `json:"id"`
 	// Repo — имя репозитория, к которому относится юнит. В multi-repo
 	// workspace используется для разделения графа: рёбра графа никогда
 	// не пересекают границу репы (см. ResolvePendingEdges и
 	// EdgesByDstNameForLangRepo).
-	Repo      string
-	FilePath  string
-	Language  string
-	Kind      string
-	Name      string
-	Qualified string
-	ParentID  sql.NullInt64
-	StartLine int
-	EndLine   int
-	StartByte int
-	EndByte   int
+	Repo      string `json:"repo"`
+	FilePath  string `json:"file_path"`
+	Language  string `json:"language"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Qualified string `json:"qualified"`
+	ParentID  sql.NullInt64 `json:"-"` // не сериализуем
+	StartLine int `json:"start_line"`
+	EndLine   int `json:"end_line"`
+	StartByte int `json:"start_byte"`
+	EndByte   int `json:"end_byte"`
 	// Позиция имени (для LSP)
-	NameStartLine int
-	NameStartCol  int
-	Signature     string
-	Doc           string
-	Hash          string
+	NameStartLine int    `json:"name_start_line"`
+	NameStartCol  int    `json:"name_start_col"`
+	Signature     string `json:"signature"`
+	Doc           string `json:"doc,omitempty"`
+	Hash          string `json:"-"` // не сериализуем
 }
 
 // Edge — направленная связь между AST units.

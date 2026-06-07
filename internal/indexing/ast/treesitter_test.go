@@ -941,7 +941,7 @@ def process():
 	cfg := config.Default()
 	cfg.Root = dir
 	cfg.Extensions = []string{".go", ".ts", ".py"}
-	cfg.Ignore = []string{}
+	cfg.IgnorePatterns = []string{}
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
@@ -966,7 +966,7 @@ func TestFullScan_EmptyDir(t *testing.T) {
 	cfg := config.Default()
 	cfg.Root = dir
 	cfg.Extensions = []string{".go", ".ts"}
-	cfg.Ignore = []string{}
+	cfg.IgnorePatterns = []string{}
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
@@ -991,7 +991,7 @@ func main() {}
 	cfg := config.Default()
 	cfg.Root = dir
 	cfg.Extensions = []string{".go"}
-	cfg.Ignore = []string{}
+	cfg.IgnorePatterns = []string{}
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
@@ -1016,7 +1016,7 @@ func Hello() string { return "hi" }
 	cfg := config.Default()
 	cfg.Root = dir
 	cfg.Extensions = []string{".go"}
-	cfg.Ignore = []string{}
+	cfg.IgnorePatterns = []string{}
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
@@ -1046,7 +1046,7 @@ func main() {}
 	cfg := config.Default()
 	cfg.Root = dir
 	cfg.Extensions = []string{".go"}
-	cfg.Ignore = []string{}
+	cfg.IgnorePatterns = []string{}
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)

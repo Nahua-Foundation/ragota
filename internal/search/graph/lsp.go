@@ -5,9 +5,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"ragota/pkg/fileutil"
-	"ragota/pkg/lsp"
 	"ragota/internal/store"
+	"ragota/pkg/fileutil"
+	"ragota/pkg/logger"
+	"ragota/pkg/lsp"
 )
 
 // lspCallers выполняет textDocument/references на позиции определения функции
@@ -15,6 +16,7 @@ import (
 // (fallback на tree-sitter обеспечивается вызывающим).
 func (s *Service) lspCallers(ctx context.Context, unitID int) []store.ASTUnit {
 	if s.mgr == nil {
+		logger.Log().Debug().Int("unit_id", unitID).Msg("lsp.callers: manager not configured")
 		return nil
 	}
 	s.mu.Lock()
@@ -48,23 +50,96 @@ func (s *Service) lspCallers(ctx context.Context, unitID int) []store.ASTUnit {
 
 	u, err := s.st.GetASTUnit(cctx, unitID)
 	if err != nil || u == nil {
+		logger.Log().Debug().Int("unit_id", unitID).Err(err).Msg("lsp.callers: GetASTUnit failed")
 		return nil
 	}
 	lang := fileutil.LanguageByExt(filepath.Ext(u.FilePath))
 	if lang == "" {
+		logger.Log().Debug().Str("file", u.FilePath).Msg("lsp.callers: unknown language")
 		return nil
 	}
 	cli, err := s.mgr.EnsureOpen(cctx, u.FilePath)
 	if err != nil || cli == nil {
+		logger.Log().Debug().Str("file", u.FilePath).Err(err).Msg("lsp.callers: EnsureOpen failed")
 		return nil
 	}
 	locs, err := cli.References(cctx, u.FilePath, max0(u.StartLine-1), nameColumn(u.Signature, u.Name), false)
 	if err != nil || len(locs) == 0 {
+		logger.Log().Debug().Str("file", u.FilePath).Str("symbol", u.Name).
+			Int("line", u.StartLine).Err(err).Int("locations", len(locs)).
+			Msg("lsp.callers: References returned empty")
 		return nil
 	}
+	logger.Log().Debug().Int("unit_id", unitID).Int("locations", len(locs)).Msg("lsp.callers: found locations")
 	units := s.locationsToUnits(cctx, locs, true /* enclosing */)
 	s.mu.Lock()
 	s.callCache[unitID] = cacheEntry{units: units, at: time.Now()}
+	s.mu.Unlock()
+	return units
+}
+
+// lspReferences выполняет textDocument/references и возвращает enclosing units.
+// Используется для обогащения find_references когда tree-sitter edges недостаточно.
+func (s *Service) lspReferences(ctx context.Context, unitID int) []store.ASTUnit {
+	if s.mgr == nil {
+		logger.Log().Debug().Int("unit_id", unitID).Msg("lsp.references: manager not configured")
+		return nil
+	}
+	s.mu.Lock()
+	// lazy eviction
+	if e, ok := s.refCache[unitID]; ok {
+		if time.Since(e.at) < cacheTTL {
+			s.mu.Unlock()
+			return e.units
+		}
+		delete(s.refCache, unitID)
+	}
+	// cap cache size
+	if len(s.refCache) >= cacheMaxSize {
+		var oldestKey int
+		oldestAt := time.Now()
+		for k, e := range s.refCache {
+			if e.at.Before(oldestAt) {
+				oldestAt = e.at
+				oldestKey = k
+			}
+		}
+		if oldestKey != 0 || len(s.refCache) > 0 {
+			delete(s.refCache, oldestKey)
+		}
+	}
+	s.mu.Unlock()
+
+	cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	u, err := s.st.GetASTUnit(cctx, unitID)
+	if err != nil || u == nil {
+		logger.Log().Debug().Int("unit_id", unitID).Err(err).Msg("lsp.references: GetASTUnit failed")
+		return nil
+	}
+	lang := fileutil.LanguageByExt(filepath.Ext(u.FilePath))
+	if lang == "" {
+		logger.Log().Debug().Str("file", u.FilePath).Msg("lsp.references: unknown language")
+		return nil
+	}
+	cli, err := s.mgr.EnsureOpen(cctx, u.FilePath)
+	if err != nil || cli == nil {
+		logger.Log().Debug().Str("file", u.FilePath).Err(err).Msg("lsp.references: EnsureOpen failed")
+		return nil
+	}
+	// includeDecl=false — не включаем само определение
+	locs, err := cli.References(cctx, u.FilePath, max0(u.StartLine-1), nameColumn(u.Signature, u.Name), false)
+	if err != nil || len(locs) == 0 {
+		logger.Log().Debug().Str("file", u.FilePath).Str("symbol", u.Name).
+			Int("line", u.StartLine).Err(err).Int("locations", len(locs)).
+			Msg("lsp.references: References returned empty")
+		return nil
+	}
+	// enclosing=true — возвращаем функции/методы, содержащие ссылку
+	units := s.locationsToUnits(cctx, locs, true)
+	s.mu.Lock()
+	s.refCache[unitID] = cacheEntry{units: units, at: time.Now()}
 	s.mu.Unlock()
 	return units
 }
@@ -73,6 +148,7 @@ func (s *Service) lspCallers(ctx context.Context, unitID int) []store.ASTUnit {
 // возвращает AST units реализаций.
 func (s *Service) lspImplementations(ctx context.Context, interfaceID int) []store.ASTUnit {
 	if s.mgr == nil {
+		logger.Log().Debug().Int("interface_id", interfaceID).Msg("lsp.implementations: manager not configured")
 		return nil
 	}
 	s.mu.Lock()
@@ -105,18 +181,24 @@ func (s *Service) lspImplementations(ctx context.Context, interfaceID int) []sto
 
 	u, err := s.st.GetASTUnit(cctx, interfaceID)
 	if err != nil || u == nil {
+		logger.Log().Debug().Int("interface_id", interfaceID).Err(err).Msg("lsp.implementations: GetASTUnit failed")
 		return nil
 	}
 	lang := fileutil.LanguageByExt(filepath.Ext(u.FilePath))
 	if lang == "" {
+		logger.Log().Debug().Str("file", u.FilePath).Msg("lsp.implementations: unknown language")
 		return nil
 	}
 	cli, err := s.mgr.EnsureOpen(cctx, u.FilePath)
 	if err != nil || cli == nil {
+		logger.Log().Debug().Str("file", u.FilePath).Err(err).Msg("lsp.implementations: EnsureOpen failed")
 		return nil
 	}
 	locs, err := cli.Implementation(cctx, u.FilePath, max0(u.StartLine-1), nameColumn(u.Signature, u.Name))
 	if err != nil || len(locs) == 0 {
+		logger.Log().Debug().Str("file", u.FilePath).Str("symbol", u.Name).
+			Int("line", u.StartLine).Err(err).Int("locations", len(locs)).
+			Msg("lsp.implementations: Implementation returned empty")
 		return nil
 	}
 	units := s.locationsToUnits(cctx, locs, false /* exact unit at position */)

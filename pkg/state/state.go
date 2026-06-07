@@ -59,6 +59,13 @@ type LSPError struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// LogEntry — запись лога (warn/error) для отображения в TUI.
+type LogEntry struct {
+	Timestamp time.Time `json:"timestamp"`
+	Level     string    `json:"level"` // "warn" | "error"
+	Message   string    `json:"message"`
+}
+
 // Indexer — статус индексации.
 type Indexer struct {
 	Name           string    `json:"name"`
@@ -92,6 +99,7 @@ type Snapshot struct {
 	MCP            map[string]MCPStat         `json:"mcp"`
 	Docker         DockerStatus               `json:"docker"`
 	LSP            []LSPError                 `json:"lsp,omitempty"`
+	Logs           []LogEntry                 `json:"logs,omitempty"`
 	IndexerMetrics map[string]*IndexerMetrics `json:"-"`
 	MCPCallHistory []int                      `json:"-"`
 	MCPErrHistory  []int                      `json:"-"`
@@ -116,6 +124,7 @@ type Bus struct {
 	mcp      map[string]MCPStat
 	docker   DockerStatus
 	lsp      []LSPError
+	logs     []LogEntry
 	maxItems int
 
 	indexerMetrics    map[string]*IndexerMetrics
@@ -210,5 +219,17 @@ func (b *Bus) AddLSPError(method, path string, line, char int, err error) {
 	b.lsp = append([]LSPError{e}, b.lsp...)
 	if len(b.lsp) > b.maxItems {
 		b.lsp = b.lsp[:b.maxItems]
+	}
+}
+
+// AddLog добавляет запись лога (warn/error) для отображения в TUI.
+// Хранит максимум 15 последних записей (новые в начале).
+func (b *Bus) AddLog(level, message string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	e := LogEntry{Timestamp: time.Now(), Level: level, Message: message}
+	b.logs = append([]LogEntry{e}, b.logs...)
+	if len(b.logs) > 15 {
+		b.logs = b.logs[:15]
 	}
 }

@@ -49,9 +49,7 @@ func (b *batcher) run(ctx context.Context) {
 				logger.Log().Error().Err(err).Int("files", len(currentBatch)).Msg("vector: batch error")
 			}
 		}
-		for range currentBatch {
-			b.v.updateProgress(b.total)
-		}
+		// updateProgress убран: воркеры считают файлы при prepareFile
 		currentBatch = nil
 		currentChunks = 0
 	}
@@ -74,7 +72,7 @@ func (b *batcher) run(ctx context.Context) {
 						logger.Log().Error().Err(err).Str("file", pf.abs).Msg("vector: large file error")
 					}
 				}
-				b.v.updateProgress(b.total)
+				// updateProgress убран: воркер уже посчитал этот файл
 				continue
 			}
 

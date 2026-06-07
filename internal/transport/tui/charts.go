@@ -134,7 +134,7 @@ func statusIndicator(status string) string {
 	switch status {
 	case "idle":
 		return okStyle.Render("●")
-	case "scanning", "indexing", "resolving":
+	case "waiting", "scanning", "indexing", "resolving":
 		return warnStyle.Render("◐")
 	case "error":
 		return errStyle.Render("✗")

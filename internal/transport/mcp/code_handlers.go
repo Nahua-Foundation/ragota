@@ -99,17 +99,8 @@ func (s *CodeServer) searchHybrid(ctx context.Context, query string, limit int, 
 		lexRet = &bm25.BM25HybridAdapter{Idx: s.bm25}
 	}
 
-	candsPerSource := 50
-	if s.cfg.Hybrid.CandidatesPerSource > 0 {
-		candsPerSource = s.cfg.Hybrid.CandidatesPerSource
-	}
-
-	eng := hybrid.New(vecRet, lexRet, hybrid.Options{
-		VectorWeight: s.cfg.Hybrid.VectorWeight,
-		BM25Weight:   s.cfg.Hybrid.BM25Weight,
-		RRFK:         s.cfg.Hybrid.RRFK,
-	})
-	res, err := eng.Search(ctx, query, candsPerSource, limit, filter)
+	eng := hybrid.New(vecRet, lexRet, hybrid.Options{})
+	res, err := eng.Search(ctx, query, 50, limit, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -213,28 +204,73 @@ func (s *CodeServer) handleFindReferences(ctx context.Context, req mcp.CallToolR
 		return nil, err
 	}
 
-	edges, err := s.gr.References(ctx, u.ID)
+	// Используем ReferencesWithLSP для обогащения method references
+	result, err := s.gr.ReferencesWithLSP(ctx, u.ID)
 	if err != nil {
 		return nil, err
 	}
 
+	edges := result.Edges
+	lspUnits := result.LSPUnits
+
+	// Гарантируем что slices не nil (для JSON-сериализации)
+	if edges == nil {
+		edges = []store.Edge{}
+	}
+	if lspUnits == nil {
+		lspUnits = []store.ASTUnit{}
+	}
+
+	// Фильтрация edges по repo
 	edges = filterEdgesByRepo(edges, parseRepoParam(repo))
 
 	if excludeTests {
-		var filtered []store.Edge
+		filteredEdges := make([]store.Edge, 0, len(edges))
 		for _, e := range edges {
 			if !strings.Contains(e.FilePath, "_test.") && !strings.Contains(e.FilePath, "test/") {
-				filtered = append(filtered, e)
+				filteredEdges = append(filteredEdges, e)
 			}
 		}
-		edges = filtered
+		edges = filteredEdges
+
+		filteredUnits := make([]store.ASTUnit, 0, len(lspUnits))
+		for _, u := range lspUnits {
+			if !strings.Contains(u.FilePath, "_test.") && !strings.Contains(u.FilePath, "test/") {
+				filteredUnits = append(filteredUnits, u)
+			}
+		}
+		lspUnits = filteredUnits
 	}
 
-	if limit > 0 && len(edges) > limit {
-		edges = edges[:limit]
+	// Логируем что нашли
+	mcpLog.Debug().
+		Str("symbol", symbol).
+		Int("tree_sitter_edges", len(edges)).
+		Int("lsp_units", len(lspUnits)).
+		Msg("find_references result")
+
+	// Формируем комбинированный результат
+	response := map[string]any{
+		"edges":      edges,
+		"lsp_units":  lspUnits,
+		"total":      len(edges) + len(lspUnits),
 	}
 
-	return jsonResult(edges)
+	// Применяем limit к общему количеству
+	if limit > 0 {
+		if len(edges) > limit {
+			edges = edges[:limit]
+		}
+		remaining := limit - len(edges)
+		if remaining > 0 && len(lspUnits) > remaining {
+			lspUnits = lspUnits[:remaining]
+		}
+		response["edges"] = edges
+		response["lsp_units"] = lspUnits
+		response["total"] = len(edges) + len(lspUnits)
+	}
+
+	return jsonResult(response)
 }
 
 // ============================================================
@@ -279,6 +315,13 @@ func (s *CodeServer) handleFindImplementations(ctx context.Context, req mcp.Call
 			}
 		}
 	}
+
+	// Логируем результат
+	mcpLog.Debug().
+		Str("symbol", symbol).
+		Int("implementations", len(units)).
+		Bool("recursive", recursive).
+		Msg("find_implementations result")
 
 	return jsonResult(units)
 }
@@ -473,18 +516,66 @@ func (s *CodeServer) handleGetCallGraph(ctx context.Context, req mcp.CallToolReq
 	switch direction {
 	case "up":
 		// Callers: идём от callers к root
+		mcpLog.Debug().
+			Str("symbol", symbol).
+			Int("unit_id", u.ID).
+			Str("qualified", u.Qualified).
+			Str("kind", u.Kind).
+			Msg("get_call_graph direction=up: resolving symbol")
+
+		// Получаем caller edges (кто вызывает этот символ)
+		callerEdges, err := s.gr.Store().EdgesTo(ctx, u.ID, graph.EdgeCall)
+		if err != nil {
+			mcpLog.Error().Err(err).Int("unit_id", u.ID).Msg("get_call_graph up: EdgesTo failed")
+			return nil, err
+		}
+		callerEdges = filterEdgesByRepo(callerEdges, parseRepoParam(repo))
+
+		mcpLog.Debug().
+			Str("symbol", symbol).
+			Int("unit_id", u.ID).
+			Int("caller_edges", len(callerEdges)).
+			Msg("get_call_graph direction=up: caller edges found")
+
+		// Логируем детали edges для диагностики
+		if len(callerEdges) > 0 {
+			for i, e := range callerEdges {
+				if i >= 5 {
+					mcpLog.Debug().Int("more", len(callerEdges)-5).Msg("get_call_graph up: more edges...")
+					break
+				}
+				mcpLog.Debug().
+					Int("edge_id", e.ID).
+					Int("src_id", e.SrcID).
+					Int("dst_id", e.DstID).
+					Str("kind", e.Kind).
+					Str("dst_name", e.DstName).
+					Int("line", e.Line).
+					Msg("get_call_graph up: edge detail")
+			}
+		}
+
 		callers, err := s.gr.Callers(ctx, u.ID)
 		if err != nil {
 			return nil, err
 		}
 		callers = filterUnitsByRepo(callers, parseRepoParam(repo))
-		result = &graph.Neighborhood{Nodes: callers, Edges: []store.Edge{}}
+
+		mcpLog.Debug().
+			Str("symbol", symbol).
+			Int("callers", len(callers)).
+			Int("edges", len(callerEdges)).
+			Msg("get_call_graph direction=up: final result")
+
+		result = &graph.Neighborhood{Nodes: callers, Edges: callerEdges}
+
 	case "down":
 		// Callees: идём от function к leaves
 		result, err = s.gr.CallGraph(ctx, u.ID, depth)
 		if err != nil {
 			return nil, err
 		}
+
 	case "both", "":
 		// Полный call graph
 		result, err = s.gr.CallGraph(ctx, u.ID, depth)
@@ -504,6 +595,19 @@ func (s *CodeServer) handleGetCallGraph(ctx context.Context, req mcp.CallToolReq
 					result.Nodes = append(result.Nodes, c)
 					seenNodes[c.ID] = true
 				}
+			}
+		}
+		// Добавляем caller edges
+		callerEdges, _ := s.gr.Store().EdgesTo(ctx, u.ID, graph.EdgeCall)
+		callerEdges = filterEdgesByRepo(callerEdges, parseRepoParam(repo))
+		seenEdges := map[int]bool{}
+		for _, e := range result.Edges {
+			seenEdges[e.ID] = true
+		}
+		for _, e := range callerEdges {
+			if !seenEdges[e.ID] {
+				result.Edges = append(result.Edges, e)
+				seenEdges[e.ID] = true
 			}
 		}
 	default:

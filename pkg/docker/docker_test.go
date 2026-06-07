@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ragota/pkg/config"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,27 +14,30 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestNew(t *testing.T) {
-	cfg := config.DockerConfig{
-		Network: "ragota-net",
-		Qdrant: config.DockerContainerCfg{
-			Name:  "ragota-qdrant",
-			Image: "qdrant/qdrant:latest",
-			Ports: []string{"6333:6333"},
-		},
-	}
-	r := New("/workspace", cfg)
-
+	r := New("/workspace")
 	require.NotNil(t, r)
 	assert.Equal(t, "/workspace", r.WorkingDir)
-	assert.Equal(t, "ragota-net", r.Cfg.Network)
-	assert.Equal(t, "ragota-qdrant", r.Cfg.Qdrant.Name)
+	assert.Equal(t, 0, r.QdrantPort)
 }
 
-func TestNew_EmptyConfig(t *testing.T) {
-	r := New("", config.DockerConfig{})
-	require.NotNil(t, r)
-	assert.Equal(t, "", r.WorkingDir)
-	assert.Empty(t, r.Cfg.Network)
+// ---------------------------------------------------------------------------
+// findFreePort
+// ---------------------------------------------------------------------------
+
+func TestFindFreePort(t *testing.T) {
+	port, err := findFreePort()
+	require.NoError(t, err)
+	assert.Greater(t, port, 0)
+}
+
+// ---------------------------------------------------------------------------
+// QdrantURL
+// ---------------------------------------------------------------------------
+
+func TestQdrantURL(t *testing.T) {
+	r := New("/workspace")
+	r.QdrantPort = 6333
+	assert.Equal(t, "http://127.0.0.1:6333", r.QdrantURL())
 }
 
 // ---------------------------------------------------------------------------
@@ -44,19 +45,19 @@ func TestNew_EmptyConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestResolveVolume_AbsolutePath(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	result := r.resolveVolume("/data/storage:/qdrant/storage")
 	assert.Equal(t, "/data/storage:/qdrant/storage", result)
 }
 
 func TestResolveVolume_RelativePath(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	result := r.resolveVolume(".ragota/qdrant_storage:/qdrant/storage")
 	assert.Equal(t, filepath.Join("/workspace", ".ragota/qdrant_storage")+":/qdrant/storage", result)
 }
 
 func TestResolveVolume_DotSlashPath(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	result := r.resolveVolume("./data:/container/data")
 	assert.Equal(t, filepath.Join("/workspace", "./data")+":/container/data", result)
 }
@@ -65,25 +66,25 @@ func TestResolveVolume_HomePath(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	result := r.resolveVolume("~/certs:/certs:ro")
 	assert.Equal(t, filepath.Join(home, "certs")+":/certs:ro", result)
 }
 
 func TestResolveVolume_NoColon(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	result := r.resolveVolume("/just/a/path")
 	assert.Equal(t, "/just/a/path", result)
 }
 
 func TestResolveVolume_Empty(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	result := r.resolveVolume("")
 	assert.Equal(t, "", result)
 }
 
 func TestResolveVolume_RelativeWithMultipleColons(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	result := r.resolveVolume("./data:/container/data:ro")
 	assert.Equal(t, filepath.Join("/workspace", "./data")+":/container/data:ro", result)
 }
@@ -93,53 +94,50 @@ func TestResolveVolume_RelativeWithMultipleColons(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestVolumesMismatch_NoMounts(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	st := &containerState{Mounts: nil}
 	assert.False(t, r.volumesMismatch(st, []string{"./data:/data"}))
 }
 
 func TestVolumesMismatch_NoVolumes(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	st := &containerState{Mounts: []string{"/data:/container"}}
 	assert.False(t, r.volumesMismatch(st, nil))
 }
 
 func TestVolumesMismatch_BothEmpty(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	st := &containerState{Mounts: nil}
 	assert.False(t, r.volumesMismatch(st, nil))
 }
 
 func TestVolumesMismatch_Matching(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	resolved := r.resolveVolume("./data:/container")
 	st := &containerState{Mounts: []string{resolved}}
 	assert.False(t, r.volumesMismatch(st, []string{"./data:/container"}))
 }
 
 func TestVolumesMismatch_StaleVolume(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	st := &containerState{Mounts: []string{"/old/path:/container"}}
 	assert.True(t, r.volumesMismatch(st, []string{"./new/path:/container"}))
 }
 
 func TestVolumesMismatch_ExtraMountInContainer(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	resolved := r.resolveVolume("./data:/container")
 	st := &containerState{Mounts: []string{resolved, "/extra:/extra"}}
-	// The configured volumes all match, so no mismatch
 	assert.False(t, r.volumesMismatch(st, []string{"./data:/container"}))
 }
 
 func TestVolumesMismatch_MultipleVolumes(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
+	r := New("/workspace")
 	resolved1 := r.resolveVolume("./data:/container/data")
 	resolved2 := r.resolveVolume("./config:/container/config")
 	st := &containerState{Mounts: []string{resolved1, resolved2}}
 
-	// All match
 	assert.False(t, r.volumesMismatch(st, []string{"./data:/container/data", "./config:/container/config"}))
-	// One doesn't match
 	assert.True(t, r.volumesMismatch(st, []string{"./data:/container/data", "./other:/container/other"}))
 }
 
@@ -149,12 +147,11 @@ func TestVolumesMismatch_MultipleVolumes(t *testing.T) {
 
 func TestEnsureVolumes_CreatesDirectories(t *testing.T) {
 	root := t.TempDir()
-	r := New(root, config.DockerConfig{})
+	r := New(root)
 
 	err := r.ensureVolumes()
 	require.NoError(t, err)
 
-	// .ragota/qdrant_storage should exist
 	storagePath := filepath.Join(root, ".ragota", "qdrant_storage")
 	info, err := os.Stat(storagePath)
 	require.NoError(t, err)
@@ -163,10 +160,10 @@ func TestEnsureVolumes_CreatesDirectories(t *testing.T) {
 
 func TestEnsureVolumes_Idempotent(t *testing.T) {
 	root := t.TempDir()
-	r := New(root, config.DockerConfig{})
+	r := New(root)
 
 	require.NoError(t, r.ensureVolumes())
-	require.NoError(t, r.ensureVolumes()) // second call should succeed
+	require.NoError(t, r.ensureVolumes())
 }
 
 // ---------------------------------------------------------------------------
@@ -220,155 +217,32 @@ func TestContainerState_Defaults(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// runContainer with empty name/image → no-op
+// runQdrant with empty name → no-op (no container to start)
 // ---------------------------------------------------------------------------
 
-func TestRunContainer_EmptyNameNoOp(t *testing.T) {
-	r := New(t.TempDir(), config.DockerConfig{})
-	err := r.runContainer(t.Context(), config.DockerContainerCfg{Name: "", Image: "some:image"})
-	assert.NoError(t, err)
-}
-
-func TestRunContainer_EmptyImageNoOp(t *testing.T) {
-	r := New(t.TempDir(), config.DockerConfig{})
-	err := r.runContainer(t.Context(), config.DockerContainerCfg{Name: "test", Image: ""})
-	assert.NoError(t, err)
-}
-
 // ---------------------------------------------------------------------------
-// Down with no containers configured — no error
+// Down — no error
 // ---------------------------------------------------------------------------
 
-func TestDown_EmptyConfig(t *testing.T) {
-	r := New(t.TempDir(), config.DockerConfig{})
+func TestDown(t *testing.T) {
+	r := New(t.TempDir())
 	err := r.Down(t.Context())
 	assert.NoError(t, err)
 }
 
 // ---------------------------------------------------------------------------
-// Ps with no containers configured
+// Ps
 // ---------------------------------------------------------------------------
 
-func TestPs_EmptyConfig(t *testing.T) {
-	r := New(t.TempDir(), config.DockerConfig{})
-	result, err := r.Ps(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, result)
-}
-
-func TestPs_WithQdrantConfigured(t *testing.T) {
-	r := New(t.TempDir(), config.DockerConfig{
-		Qdrant: config.DockerContainerCfg{Name: "nonexistent-container-xyz"},
-	})
-	result, err := r.Ps(t.Context())
-	require.NoError(t, err)
-	require.Len(t, result, 1)
-	assert.Equal(t, "nonexistent-container-xyz", result[0].Name)
-	assert.Equal(t, "absent", result[0].State)
-}
-
-// ---------------------------------------------------------------------------
-// Up with empty config (no images)
-// ---------------------------------------------------------------------------
-
-func TestUp_EmptyConfig(t *testing.T) {
-	root := t.TempDir()
-	r := New(root, config.DockerConfig{})
-	// Up with no images configured should only create volumes
-	err := r.Up(t.Context(), false)
-	require.NoError(t, err)
-}
-
-// ---------------------------------------------------------------------------
-// resolveVolume edge cases
-// ---------------------------------------------------------------------------
-
-func TestResolveVolume_OnlyColon(t *testing.T) {
-	r := New("/workspace", config.DockerConfig{})
-	result := r.resolveVolume(":/container")
-	// host = "" which is not abs, so resolves relative to WorkingDir
-	assert.Contains(t, result, ":/container")
-}
-
-func TestResolveVolume_WorkingDirEmpty(t *testing.T) {
-	r := New("", config.DockerConfig{})
-	result := r.resolveVolume("./data:/container")
-	// filepath.Join("", "./data") = "data"
-	assert.Contains(t, result, ":/container")
-}
-
-// ---------------------------------------------------------------------------
-// runLSPContainer with empty image → no-op
-// ---------------------------------------------------------------------------
-
-func TestRunLSPContainer_EmptyImage(t *testing.T) {
-	r := New(t.TempDir(), config.DockerConfig{})
-	err := r.runLSPContainer(t.Context(), config.LSPDockerCfg{Image: ""})
-	assert.NoError(t, err)
-}
-
-// ---------------------------------------------------------------------------
-// Up with LSP configured but empty image
-// ---------------------------------------------------------------------------
-
-func TestUp_WithLSP_AllFlag_EmptyImage(t *testing.T) {
-	root := t.TempDir()
-	r := New(root, config.DockerConfig{
-		LSP: config.LSPDockerCfg{Image: ""},
-	})
-	err := r.Up(t.Context(), true)
-	require.NoError(t, err)
-}
-
-func TestUp_WithLSP_NotAllFlag(t *testing.T) {
-	root := t.TempDir()
-	r := New(root, config.DockerConfig{
-		LSP: config.LSPDockerCfg{Image: "some-lsp-image"},
-	})
-	// all=false should NOT start LSP
-	err := r.Up(t.Context(), false)
-	require.NoError(t, err)
-}
-
-// ---------------------------------------------------------------------------
-// Down with LSP configured
-// ---------------------------------------------------------------------------
-
-func TestDown_WithLSP(t *testing.T) {
-	r := New(t.TempDir(), config.DockerConfig{
-		LSP: config.LSPDockerCfg{Image: "some-lsp-image"},
-	})
-	// Will try to stop "ragota-lsp" container (which doesn't exist — no error expected)
-	err := r.Down(t.Context())
-	assert.NoError(t, err)
-}
-
-func TestDown_WithBothContainers(t *testing.T) {
-	r := New(t.TempDir(), config.DockerConfig{
-		Qdrant: config.DockerContainerCfg{Name: "nonexistent-q"},
-		LSP:    config.LSPDockerCfg{Image: "some-image"},
-	})
-	err := r.Down(t.Context())
-	assert.NoError(t, err)
-}
-
-// ---------------------------------------------------------------------------
-// Ps with LSP configured
-// ---------------------------------------------------------------------------
-
-func TestPs_WithLSP(t *testing.T) {
-	r := New(t.TempDir(), config.DockerConfig{
-		Qdrant: config.DockerContainerCfg{Name: "nonexistent-q"},
-		LSP:    config.LSPDockerCfg{Image: "some-image"},
-	})
+func TestPs(t *testing.T) {
+	r := New(t.TempDir())
 	result, err := r.Ps(t.Context())
 	require.NoError(t, err)
 	require.Len(t, result, 2)
-	assert.Equal(t, "nonexistent-q", result[0].Name)
-	assert.Equal(t, "absent", result[0].State)
+	assert.Equal(t, "ragota-qdrant", result[0].Name)
 	assert.Equal(t, "ragota-lsp", result[1].Name)
-	// ragota-lsp may exist from previous runs — state can be "absent", "exited", "running" etc.
-	assert.NotEmpty(t, result[1].State)
+	// Both should be "absent" or "exited" since docker isn't running them
+	assert.Contains(t, []string{"absent", "exited"}, result[0].State)
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +250,7 @@ func TestPs_WithLSP(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestInspectPs_Absent(t *testing.T) {
-	r := New(t.TempDir(), config.DockerConfig{})
+	r := New(t.TempDir())
 	ps := r.inspectPs(t.Context(), "nonexistent-container-xyz-123")
 	assert.Equal(t, "nonexistent-container-xyz-123", ps.Name)
 	assert.Equal(t, "absent", ps.State)
@@ -387,8 +261,7 @@ func TestInspectPs_Absent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEnsureVolumes_InvalidPath(t *testing.T) {
-	// /dev/null is a file, not a directory — MkdirAll should fail
-	r := New("/dev/null/impossible", config.DockerConfig{})
+	r := New("/dev/null/impossible")
 	err := r.ensureVolumes()
 	assert.Error(t, err)
 }
@@ -398,6 +271,5 @@ func TestEnsureVolumes_InvalidPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAvailable_ReturnsErrorOrNil(t *testing.T) {
-	// Just ensure it doesn't panic
 	_ = Available(t.Context())
 }

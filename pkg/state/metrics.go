@@ -79,6 +79,7 @@ func (b *Bus) Snapshot() Snapshot {
 		Recent:         append([]FileEntry(nil), b.recent...),
 		Docker:         b.docker,
 		LSP:            append([]LSPError(nil), b.lsp...),
+		Logs:           append([]LogEntry(nil), b.logs...),
 		IndexerMetrics: make(map[string]*IndexerMetrics, len(b.indexerMetrics)),
 		MCPCallHistory: append([]int(nil), b.mcpCallHistory...),
 		MCPErrHistory:  append([]int(nil), b.mcpErrorHistory...),

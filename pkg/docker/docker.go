@@ -6,14 +6,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
-	"ragota/pkg/config"
 	"ragota/pkg/logger"
 )
 
@@ -26,12 +27,12 @@ func withCLI(ctx context.Context) (context.Context, context.CancelFunc) {
 // Runner запускает контейнеры через docker CLI.
 type Runner struct {
 	WorkingDir string
-	Cfg        config.DockerConfig
+	QdrantPort int // динамически назначенный порт
 }
 
-// New создаёт нативный Runner.
-func New(workingDir string, cfg config.DockerConfig) *Runner {
-	return &Runner{WorkingDir: workingDir, Cfg: cfg}
+// New создаёт Runner.
+func New(workingDir string) *Runner {
+	return &Runner{WorkingDir: workingDir}
 }
 
 // Available проверяет, что docker доступен.
@@ -45,42 +46,118 @@ func Available(ctx context.Context) error {
 	return nil
 }
 
-// Up поднимает все сконфигурированные контейнеры.
-func (r *Runner) Up(ctx context.Context, all bool) error {
-	tCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+// findFreePort находит свободный TCP-порт на localhost.
+func findFreePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return port, nil
+}
+
+// getExistingPort читает host-порт из существующего контейнера.
+// Пробует два метода: docker port (быстрый, fallback) и docker inspect (детальный).
+func (r *Runner) getExistingPort(containerName string) (int, error) {
+	ctx, cancel := withCLI(context.Background())
 	defer cancel()
-	ctx = tCtx
-	if r.Cfg.Network != "" {
-		logger.Log().Debug().Str("network", r.Cfg.Network).Msg("docker: ensuring network")
-		if err := r.ensureNetwork(ctx, r.Cfg.Network); err != nil {
-			return err
+
+	// Метод 1: docker port — простой и надёжный
+	if port := r.getPortViaDockerPort(ctx, containerName); port > 0 {
+		return port, nil
+	}
+
+	// Метод 2: docker inspect --format — парсим JSON с маппингом портов
+	if port := r.getPortViaInspect(ctx, containerName); port > 0 {
+		return port, nil
+	}
+
+	return 0, fmt.Errorf("could not determine host port for container %s (6333/tcp)", containerName)
+}
+
+// getPortViaDockerPort использует `docker port` для получения host-порта.
+func (r *Runner) getPortViaDockerPort(ctx context.Context, containerName string) int {
+	out, err := exec.CommandContext(ctx, "docker", "port", containerName, "6333").Output()
+	if err != nil {
+		return 0
+	}
+	// Формат вывода: "127.0.0.1:PORT"
+	line := strings.TrimSpace(string(out))
+	idx := strings.LastIndex(line, ":")
+	if idx < 0 {
+		return 0
+	}
+	port, err := strconv.Atoi(line[idx+1:])
+	if err != nil {
+		return 0
+	}
+	return port
+}
+
+// getPortViaInspect использует `docker inspect --format` для получения host-порта.
+func (r *Runner) getPortViaInspect(ctx context.Context, containerName string) int {
+	format := `{{json .NetworkSettings.Ports}}`
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format", format, containerName).Output()
+	if err != nil {
+		return 0
+	}
+
+	var ports map[string][]struct {
+		HostIP   string `json:"HostIp"`
+		HostPort string `json:"HostPort"`
+	}
+	if err := json.Unmarshal(out, &ports); err != nil {
+		return 0
+	}
+
+	if bindings, ok := ports["6333/tcp"]; ok && len(bindings) > 0 {
+		port, err := strconv.Atoi(bindings[0].HostPort)
+		if err == nil {
+			return port
 		}
 	}
+	return 0
+}
+
+// Up поднимает все контейнеры.
+func (r *Runner) Up(ctx context.Context) error {
+	// Создаём сеть если нет
+	network := "ragota-net"
+	if err := r.ensureNetwork(ctx, network); err != nil {
+		return err
+	}
+
 	if err := r.ensureVolumes(); err != nil {
 		return fmt.Errorf("ensure volumes: %w", err)
 	}
-	if r.Cfg.Qdrant.Image != "" {
-		logger.Log().Info().Str("image", r.Cfg.Qdrant.Image).Msg("docker: starting qdrant")
-		if err := r.runContainer(ctx, r.Cfg.Qdrant); err != nil {
-			return fmt.Errorf("qdrant: %w", err)
-		}
+
+	// Запускаем Qdrant — порт определяется внутри runQdrant
+	if err := r.runQdrant(ctx, network); err != nil {
+		return fmt.Errorf("qdrant: %w", err)
 	}
-	if all && r.Cfg.LSP.Image != "" {
-		logger.Log().Info().Str("image", r.Cfg.LSP.Image).Msg("docker: starting lsp container")
-		if err := r.runLSPContainer(ctx, r.Cfg.LSP); err != nil {
-			return fmt.Errorf("lsp: %w", err)
-		}
+
+	// Guard: QdrantPort должен быть определён
+	if r.QdrantPort == 0 {
+		return fmt.Errorf("qdrant: host port not determined after startup")
 	}
+
+	// Запускаем LSP контейнер
+	if err := r.runLSPContainer(ctx, network); err != nil {
+		logger.Log().Warn().Err(err).Msg("docker: LSP container failed (non-fatal)")
+	}
+
 	return nil
+}
+
+// QdrantURL возвращает URL для подключения к Qdrant.
+func (r *Runner) QdrantURL() string {
+	return fmt.Sprintf("http://127.0.0.1:%d", r.QdrantPort)
 }
 
 // WaitQdrant блокируется, пока Qdrant не ответит на /readyz.
 func (r *Runner) WaitQdrant(ctx context.Context) error {
-	hostPort := extractHostPort(r.Cfg.Qdrant.Ports)
-	if hostPort == "" {
-		return nil
-	}
-	url := "http://" + hostPort + "/readyz"
+	url := r.QdrantURL() + "/readyz"
 	client := &http.Client{Timeout: 3 * time.Second}
 	for {
 		if ctx.Err() != nil {
@@ -102,33 +179,12 @@ func (r *Runner) WaitQdrant(ctx context.Context) error {
 	}
 }
 
-func extractHostPort(ports []string) string {
-	for _, p := range ports {
-		parts := strings.Split(p, ":")
-		if len(parts) >= 2 {
-			host := parts[0]
-			if host == "" {
-				host = "127.0.0.1"
-			}
-			if len(parts) == 3 {
-				return host + ":" + parts[1]
-			}
-			return "127.0.0.1:" + parts[0]
-		}
-	}
-	return ""
-}
-
 // Down останавливает контейнеры.
 func (r *Runner) Down(ctx context.Context) error {
 	dCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if r.Cfg.Qdrant.Name != "" {
-		_ = exec.CommandContext(dCtx, "docker", "stop", "-t", "3", r.Cfg.Qdrant.Name).Run()
-	}
-	if r.Cfg.LSP.Image != "" {
-		_ = exec.CommandContext(dCtx, "docker", "stop", "-t", "3", "ragota-lsp").Run()
-	}
+	_ = exec.CommandContext(dCtx, "docker", "stop", "-t", "3", "ragota-qdrant").Run()
+	_ = exec.CommandContext(dCtx, "docker", "stop", "-t", "3", "ragota-lsp").Run()
 	return nil
 }
 
@@ -139,16 +195,13 @@ type PsService struct {
 	Status string `json:"Status"`
 }
 
-// Ps возвращает статусы известных контейнеров.
+// Ps возвращает статусы контейнеров.
 func (r *Runner) Ps(ctx context.Context) ([]PsService, error) {
 	tCtx, cancel := withCLI(ctx)
 	defer cancel()
 	var result []PsService
-	if r.Cfg.Qdrant.Name != "" {
-		result = append(result, r.inspectPs(tCtx, r.Cfg.Qdrant.Name))
-	}
-	if r.Cfg.LSP.Image != "" {
-		result = append(result, r.inspectPs(tCtx, "ragota-lsp"))
+	for _, name := range []string{"ragota-qdrant", "ragota-lsp"} {
+		result = append(result, r.inspectPs(tCtx, name))
 	}
 	return result, nil
 }
@@ -226,7 +279,6 @@ func (r *Runner) ensureVolumes() error {
 	return nil
 }
 
-// resolveVolume превращает относительный host-путь в абсолютный.
 func (r *Runner) resolveVolume(v string) string {
 	parts := strings.SplitN(v, ":", 2)
 	if len(parts) != 2 {

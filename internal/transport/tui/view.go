@@ -62,6 +62,12 @@ func (m model) View() string {
 	// 6. Recent activity sparkline
 	sections = append(sections, renderRecentActivitySection(s.Recent, contentWidth))
 
+	// 6.5 Logs (warn/error) — максимум 15 строк
+	if len(s.Logs) > 0 {
+		sections = append(sections, "")
+		sections = append(sections, renderLogsSection(s.Logs, contentWidth))
+	}
+
 	// 7. LSP errors (компактно)
 	if len(s.LSP) > 0 {
 		sections = append(sections, "")

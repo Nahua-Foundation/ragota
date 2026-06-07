@@ -1,122 +1,48 @@
 // Package cli — cobra-команды бинаря ragota.
 // Подкоманды:
-//   - watch <dir>          — поднять docker (по флагу), проиндексировать, открыть TUI
-//   - run [-t -v -l -w]    — выбранные MCP-серверы и/или watch+TUI в одном процессе
-//   - clean                — почистить индексы и БД
-//   - current              — статистика файлов с учётом игнорирования
-//   - gen-config           — сгенерировать дефолтный YAML-конфиг рядом с бинарём
-//   - serve                — единый MCP ragota-code сервер (stdio)
+//   - up <dir>              — поднять docker, проиндексировать, открыть TUI + MCP SSE сервер
+//   - analyze <dir>         — анализ директории и выбор паттернов для .ragotaignore
+//   - configure             — интерактивная настройка: зависимости → конфиг → MCP в агенте
+//   - stats <dir>           — статистика файлов с учётом игнорирования
+//   - clean [dir]           — удалить все индексы и БД
+//   - clean cross-repo [dir] — удалить только cross-repo edges
 package cli
 
 import (
 	"fmt"
 	"os"
 	"runtime"
-	"strings"
 
 	"ragota/pkg/logger"
 
 	"github.com/spf13/cobra"
 )
 
-// configPath — глобальный путь к YAML-конфигу (--config / -c).
-// Если пустой — используется ./ai-tools/config.yaml.
-var configPath string
-
 var rootCmd = &cobra.Command{
-	Use:           "ai-tools",
-	Short:         "AI dev tool: tree-sitter + vector + LSP MCP servers with file watcher",
+	Use:           "ragota",
+	Short:         "AI dev tool: AST + vector + LSP MCP servers with live indexing",
 	SilenceErrors: true,
 	SilenceUsage:  true,
 }
 
 // Execute — точка входа CLI. Вызывается из cmd/ragota/main.go.
 func Execute() {
-	// Убеждаемся, что Go использует все доступные ядра CPU.
-	// В контейнерах/cgroup это может быть меньше физического числа ядер.
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	// Инициализируем логгер — пишем в .ragota/log/app.log
 	if f, path, err := logger.OpenLogFile("."); err == nil {
 		logger.InitLogger("info", false, f)
 		defer f.Close()
-		logger.Log().Info().Str("log_file", path).Msg("ragota: logging to file")
+		logger.Log().Info().Msgf("ragota: logging to %s", path)
 	}
 
-	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", "",
-		"path to YAML config (default search: ./.ai-tools/config.yaml or ~/.ai-tools/config.yaml)")
-
-	rootCmd.AddCommand(newWatchCmd())
-	rootCmd.AddCommand(newRunCmd())
-	rootCmd.AddCommand(newInstallCmd())
+	rootCmd.AddCommand(newUpCmd())
+	rootCmd.AddCommand(newAnalyzeCmd())
+	rootCmd.AddCommand(newConfigureCmd())
+	rootCmd.AddCommand(newStatsCmd())
 	rootCmd.AddCommand(newCleanCmd())
-	rootCmd.AddCommand(newCurrentCmd())
-	rootCmd.AddCommand(newGenConfigCmd())
-	rootCmd.AddCommand(newMcpConfigCmd())
-	rootCmd.AddCommand(newServeCmd())
-
-	// Поддержка слитной записи коротких флагов для run: `-tvlw`, `-tw`, `-lvt` и т.п.
-	// Разворачиваем такие токены в набор индивидуальных `-x` ДО передачи cobra.
-	os.Args = expandRunShortFlags(os.Args)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
-}
-
-// expandRunShortFlags ищет команду run и разворачивает слитные короткие
-// bool-флаги (-tvlw → -t -v -l -w). Любой порядок и состав букв из набора
-// {t,v,l,w} допустим. Незнакомые буквы оставляют токен как есть.
-func expandRunShortFlags(args []string) []string {
-	if len(args) < 2 {
-		return args
-	}
-	// Найти позицию подкоманды run (первый не-флаг аргумент после имени программы,
-	// пропуская глобальные --config/-c значения).
-	runIdx := -1
-	i := 1
-	for i < len(args) {
-		a := args[i]
-		if a == "run" {
-			runIdx = i
-			break
-		}
-		// Перешагиваем глобальные флаги, ожидающие значение.
-		if a == "--config" || a == "-c" {
-			i += 2
-			continue
-		}
-		if strings.HasPrefix(a, "--config=") || strings.HasPrefix(a, "-c=") {
-			i++
-			continue
-		}
-		// Любой иной токен — не run.
-		break
-	}
-	if runIdx < 0 {
-		return args
-	}
-	const known = "tvlws"
-	out := make([]string, 0, len(args)+4)
-	out = append(out, args[:runIdx+1]...)
-	for _, tok := range args[runIdx+1:] {
-		if len(tok) > 2 && tok[0] == '-' && tok[1] != '-' && isKnownLetters(tok[1:], known) {
-			for _, r := range tok[1:] {
-				out = append(out, "-"+string(r))
-			}
-			continue
-		}
-		out = append(out, tok)
-	}
-	return out
-}
-
-func isKnownLetters(s, known string) bool {
-	for _, r := range s {
-		if !strings.ContainsRune(known, r) {
-			return false
-		}
-	}
-	return true
 }

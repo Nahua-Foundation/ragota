@@ -41,11 +41,12 @@ const resolveChunkSize = 50000
 //   - Repo-граница (multi-repo workspace): функция Save в репо A никогда
 //     не должна резолвиться в Save из репо B — графы репо независимы.
 //
-// Алгоритм (4 pass, чанки по 50K, early termination):
+// Алгоритм (5 pass, чанки по 50K, early termination):
 //  1. Qualified-матч (dst.qualified = e.dst_name)
 //  2. Local name-матч (dst.name = e.dst_name, same file)
 //  3. Import-матч (LIKE file_path для relative paths)
 //  4. Global name-матч (fallback)
+//  5. receiver.method resolution (для всех языков: "obj.method" → method у типа obj)
 //
 // После каждого pass и чанка проверяется количество оставшихся unresolved edges —
 // если 0, оставшиеся pass пропускаются (early termination).
@@ -124,8 +125,11 @@ func (s *SQLite) ResolvePendingEdges(ctx context.Context, onProgress resolveProg
 	if err != nil {
 		return 0, err
 	}
-	// Early termination
+	// Early termination — но сначала нужно закоммитить транзакцию
 	if rem, _ := countUnresolved(); rem == 0 {
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
 		return int(total), nil
 	}
 
@@ -144,13 +148,16 @@ func (s *SQLite) ResolvePendingEdges(ctx context.Context, onProgress resolveProg
 		return 0, err
 	}
 	if rem, _ := countUnresolved(); rem == 0 {
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
 		return int(total), nil
 	}
 
 	// ── Pass 3: Import-матч (JS/TS) — relative path resolution.
 	// Нормализуем "./foo" → "foo", "../bar/baz" → "bar/baz" и ищем
 	// module unit, чей file_path содержит нормализованный путь.
-	// LIKE неизбеен, но chunking + early termination делают его терпимым.
+	// LIKE неизбежен, но chunking + early termination делают его терпимым.
 	q3 := `SELECT e.rowid, MIN(dst.id)
 		FROM edges e
 		JOIN ast_units src ON src.id = e.src_id
@@ -166,6 +173,9 @@ func (s *SQLite) ResolvePendingEdges(ctx context.Context, onProgress resolveProg
 		return 0, err
 	}
 	if rem, _ := countUnresolved(); rem == 0 {
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
 		return int(total), nil
 	}
 
@@ -182,6 +192,41 @@ func (s *SQLite) ResolvePendingEdges(ctx context.Context, onProgress resolveProg
 	if err != nil {
 		return 0, err
 	}
+	if rem, _ := countUnresolved(); rem == 0 {
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return int(total), nil
+	}
+
+	// ── Pass 5: receiver.method resolution (для всех языков).
+	// Для dst_name вида "receiver.method" (например, "ndm.loadEmission", "service.process"):
+	//   Ищем метод с именем method (часть после '.') в той же репе и языке.
+	//   receiver (часть до '.') игнорируется т.к. в Go это переменная, а не тип.
+	// Работает для: Go (ndm.loadEmission), TS/JS/Java (obj.method), Python (self.method).
+	q5 := `SELECT e.rowid, MIN(dst.id)
+		FROM edges e
+		JOIN ast_units src ON src.id = e.src_id
+		-- Извлекаем method (часть после '.')
+		JOIN ast_units dst ON dst.name = SUBSTR(e.dst_name, INSTR(e.dst_name, '.') + 1)
+		                  AND dst.kind = 'method'
+		                  AND dst.language = src.language
+		                  AND dst.repo = src.repo
+		WHERE e.dst_id = 0
+		  AND e.kind = 'call'
+		  AND e.dst_name LIKE '%.%'
+		  AND INSTR(e.dst_name, '.') > 0
+		GROUP BY e.rowid`
+	n5, err := resolvePass(q5, 5)
+	if err != nil {
+		return 0, err
+	}
+	if rem, _ := countUnresolved(); rem == 0 {
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return int(total), nil
+	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, err
@@ -191,6 +236,7 @@ func (s *SQLite) ResolvePendingEdges(ctx context.Context, onProgress resolveProg
 	_ = n2
 	_ = n3
 	_ = n4
+	_ = n5
 	return int(total), nil
 }
 

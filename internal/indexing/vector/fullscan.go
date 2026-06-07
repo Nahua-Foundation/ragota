@@ -58,11 +58,27 @@ func (v *Vector) FullScan(ctx context.Context) error {
 		return nil
 	}
 
+	// Сразу показываем FilesTotal — пользователь видит прогресс без ожидания Ollama
+	if v.bus != nil {
+		v.bus.SetIndexer("vector", func(i *state.Indexer) {
+			i.Status = "indexing"
+			i.FilesTotal = total
+			i.FilesIndexed = 0
+		})
+	}
+
 	needFullBM25Reindex := v.detectStaleHashes(ctx)
 
 	if v.writeSink() != nil && needFullBM25Reindex {
 		if err := v.writeSink().Clear(ctx); err != nil {
 			logger.Log().Warn().Err(err).Msg("vector: BM25 Clear")
+		}
+		// Сбрасываем vec_hashes чтобы prepareFile не пропускал файлы —
+		// иначе файлы с неизменным хэшем пропустятся и BM25 останется пустым
+		if v.store != nil {
+			if err := v.store.ResetVecHashes(ctx); err != nil {
+				logger.Log().Warn().Err(err).Msg("vector: ResetVecHashes for BM25 reindex")
+			}
 		}
 	}
 
@@ -95,6 +111,7 @@ func (v *Vector) FullScan(ctx context.Context) error {
 				pf, err := v.prepareFile(ctx, abs)
 				if err != nil {
 					lastErr.Store(err)
+					v.updateProgress(total)
 					continue
 				}
 				if pf != nil {
@@ -103,9 +120,9 @@ func (v *Vector) FullScan(ctx context.Context) error {
 					case <-ctx.Done():
 						return
 					}
-				} else {
-					v.updateProgress(total)
 				}
+				// Считаем каждый обработанный файл (skipped + prepared + error)
+				v.updateProgress(total)
 			}
 		}()
 	}

@@ -1,6 +1,6 @@
 package cli
 
-// Файл содержит общую логику bootstrap для команд run и watch:
+// Файл содержит общую логику bootstrap для команды up:
 // Docker, SQLite, repo discovery, watcher, vector indexer.
 
 import (
@@ -9,15 +9,16 @@ import (
 	"os"
 	"time"
 
+	"ragota/internal/indexing/embedder"
+	"ragota/internal/indexing/vector"
+	"ragota/internal/search/bm25"
+	"ragota/internal/store"
 	"ragota/pkg/config"
 	"ragota/pkg/docker"
-	"ragota/internal/indexing/embedder"
 	"ragota/pkg/fileutil"
-	"ragota/internal/indexing/vector"
 	"ragota/pkg/qdrant"
 	"ragota/pkg/repos"
 	"ragota/pkg/state"
-	"ragota/internal/store"
 	"ragota/pkg/watcher"
 )
 
@@ -36,19 +37,25 @@ func (b *bootEnv) cleanup() {
 	}
 }
 
-// createVectorIndexer создаёт и запускает vector indexer.
-func (b *bootEnv) createVectorIndexer(ctx context.Context, cfg *config.Config, bus *state.Bus) *vector.Vector {
-	qd := qdrant.New(fmt.Sprintf("http://%s:%d", cfg.Qdrant.Host, cfg.Qdrant.Port))
+// createVectorIndexer создаёт vector indexer и запускает wait+scan.
+// bm25Idx передаётся как параметр, чтобы SetBM25 вызвался ДО запуска FullScan
+// (избегаем race condition: FullScan идёт асинхронно).
+func (b *bootEnv) createVectorIndexer(ctx context.Context, cfg *config.Config, bus *state.Bus, bm25Idx bm25.Index) *vector.Vector {
+	qd := qdrant.New(b.runner.QdrantURL())
 	emb := embedder.New(cfg.Ollama.URL, cfg.Ollama.EmbedModel)
 	vIdx := vector.NewVector(cfg, qd, emb, b.st, bus)
 	vIdx.SetRepoResolver(b.resolver)
+	// Подключаем BM25 СИНХРОННО, до запуска FullScan goroutine
+	if bm25Idx != nil {
+		vIdx.SetBM25(bm25.AsWriteSink(bm25Idx))
+	}
 	go waitAndScanVector(ctx, qd, emb, vIdx, bus)
 	return vIdx
 }
 
-// createWatcher создаёт watcher и запускает его.
+// createWatcher создаёт и запускает watcher.
 func (b *bootEnv) createWatcher(ctx context.Context, cfg *config.Config) (*watcher.Watcher, error) {
-	matcher := fileutil.NewMatcher(cfg.Ignore)
+	matcher := fileutil.NewMatcher(cfg.IgnorePatterns)
 	w, err := watcher.New(cfg.Root, matcher, cfg.Extensions, 300*time.Millisecond)
 	if err != nil {
 		return nil, err
@@ -68,25 +75,39 @@ func (b *bootEnv) stopDocker(ctx context.Context) {
 	}
 	fmt.Fprintf(os.Stderr, "docker: stopping containers...\n")
 	_ = b.runner.Down(ctx)
-	fmt.Fprintf(os.Stderr, "docker: containers stopped\n")
 }
 
-// bootstrap выполняет общую инициализацию: Docker, store, repo discovery.
-func bootstrap(ctx context.Context, cfg *config.Config, bus *state.Bus, envMode string) (*bootEnv, error) {
-	startDockerAll := envMode == "docker"
-	startDockerQdrant := envMode == "" || envMode == "local" || startDockerAll
+// bootstrap выполняет инициализацию: Docker, store, repo discovery.
+// Docker запускается всегда.
+func bootstrap(ctx context.Context, cfg *config.Config, bus *state.Bus) (*bootEnv, error) {
+	runner := docker.New(cfg.Root)
 
-	var runner *docker.Runner
-	if startDockerQdrant || startDockerAll {
-		r, err := bootstrapDocker(ctx, cfg, bus, startDockerAll)
-		if err != nil {
-			return nil, err
-		}
-		runner = r
+	if err := docker.Available(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "docker: check failed: %v\n", err)
+		bus.SetDocker(state.DockerStatus{LastError: err.Error()})
+		return nil, fmt.Errorf("docker required but unavailable: %w", err)
 	}
-	if startDockerQdrant || startDockerAll {
-		cfg.Qdrant.Host = "localhost"
+
+	fmt.Fprintf(os.Stderr, "docker: starting containers...\n")
+	bus.SetDocker(state.DockerStatus{LastError: "starting..."})
+	if err := runner.Up(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "docker: error: %v\n", err)
+		bus.SetDocker(state.DockerStatus{LastError: err.Error()})
+		return nil, fmt.Errorf("docker containers failed to start: %w", err)
 	}
+
+	fmt.Fprintf(os.Stderr, "docker: waiting for Qdrant to become ready...\n")
+	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
+	if err := runner.WaitQdrant(waitCtx); err != nil {
+		fmt.Fprintf(os.Stderr, "docker: Qdrant not ready: %v (continuing anyway)\n", err)
+	}
+	waitCancel()
+	fmt.Fprintf(os.Stderr, "docker: all containers are up\n")
+
+	// Сохраняем URL для остального кода
+	cfg.QdrantURL = runner.QdrantURL()
+
+	go startDockerMonitor(ctx, runner, bus)
 
 	discovered, err := repos.Discover(cfg.Root)
 	if err != nil {

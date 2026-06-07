@@ -1,4 +1,4 @@
-// Команда ragota current: показывает статистику по файлам в текущей директории
+// Команда ragota stats: показывает статистику по файлам в текущей директории
 // с учётом настроек игнорирования из конфигурации.
 
 package cli
@@ -16,10 +16,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newCurrentCmd возвращает cobra-команду для вывода статистики по файлам.
-func newCurrentCmd() *cobra.Command {
+func newStatsCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "current [directory]",
+		Use:   "stats [directory]",
 		Short: "Show file statistics with ignore patterns applied",
 		Long: `Show file statistics for the current directory.
 
@@ -32,11 +31,16 @@ patterns (e.g., *.pb.go, *.md) within them.`,
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			cfg, err := config.Load(dir, configPath)
+			// Преобразуем в абсолютный путь ДО загрузки конфига
+			absDir, err := filepath.Abs(dir)
 			if err != nil {
 				return err
 			}
-			return runCurrent(cfg)
+			cfg, err := config.Load(absDir)
+			if err != nil {
+				return err
+			}
+			return runStats(cfg)
 		},
 	}
 	return c
@@ -50,28 +54,24 @@ type dirStats struct {
 	patterns  map[string]int
 }
 
-// runCurrent выполняет два прохода по файловой системе и выводит статистику.
-func runCurrent(cfg *config.Config) error {
+func runStats(cfg *config.Config) error {
 	root, err := filepath.Abs(cfg.Root)
 	if err != nil {
 		return fmt.Errorf("resolve root: %w", err)
 	}
 
-	matcher := fileutil.NewMatcher(cfg.Ignore)
+	matcher := fileutil.NewMatcher(cfg.IgnorePatterns)
 
-	// Первый проход: все файлы без игнорирования
 	allFiles, _, err := walkAll(root, nil)
 	if err != nil {
 		return fmt.Errorf("walk all files: %w", err)
 	}
 
-	// Второй проход: файлы с учётом игнорирования
 	filteredFiles, filteredDirs, err := walkAll(root, matcher)
 	if err != nil {
 		return fmt.Errorf("walk filtered files: %w", err)
 	}
 
-	// Вывод сводки
 	fmt.Printf("\nDirectory: %s\n", root)
 	fmt.Printf("Total files:         %d\n", len(allFiles))
 	fmt.Printf("Files after ignore:  %d\n", len(filteredFiles))
@@ -79,7 +79,6 @@ func runCurrent(cfg *config.Config) error {
 		len(allFiles)-len(filteredFiles),
 		100*float64(len(allFiles)-len(filteredFiles))/maxFloat(1, float64(len(allFiles))))
 
-	// Топ-10 крупнейших директорий
 	fmt.Printf("\nTop 10 largest directories:\n")
 	topDirs := topDirectories(filteredDirs, 10)
 	for i, d := range topDirs {
@@ -93,7 +92,6 @@ func runCurrent(cfg *config.Config) error {
 			topPattern)
 	}
 
-	// Топ-10 паттернов файлов
 	fmt.Printf("\nTop 10 file patterns:\n")
 	allPatterns := aggregatePatterns(filteredDirs)
 	for i, p := range topPatterns(allPatterns, 10) {
@@ -103,15 +101,13 @@ func runCurrent(cfg *config.Config) error {
 	return nil
 }
 
-// walkAll обходит дерево файлов и возвращает список файлов и статистику по директориям.
-// Если matcher не nil, применяется игнорирование.
 func walkAll(root string, matcher *fileutil.Matcher) ([]string, map[string]*dirStats, error) {
 	var files []string
 	dirs := make(map[string]*dirStats)
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // пропускаем ошибки доступа
+			return nil
 		}
 
 		rel, err := filepath.Rel(root, path)
@@ -123,7 +119,6 @@ func walkAll(root string, matcher *fileutil.Matcher) ([]string, map[string]*dirS
 			if matcher != nil && matcher.IsIgnored(rel, true) {
 				return filepath.SkipDir
 			}
-			// Инициализируем статистику для директории
 			if _, ok := dirs[rel]; !ok {
 				dirs[rel] = &dirStats{
 					path:     rel,
@@ -144,13 +139,11 @@ func walkAll(root string, matcher *fileutil.Matcher) ([]string, map[string]*dirS
 
 		files = append(files, rel)
 
-		// Определяем родительскую директорию
 		parentDir := filepath.Dir(rel)
 		if parentDir == "." {
 			parentDir = ""
 		}
 
-		// Обновляем статистику для всех родительских директорий
 		parts := strings.Split(parentDir, string(filepath.Separator))
 		for i := range parts {
 			dirPath := strings.Join(parts[:i+1], string(filepath.Separator))
@@ -169,7 +162,6 @@ func walkAll(root string, matcher *fileutil.Matcher) ([]string, map[string]*dirS
 			dirs[dirPath].patterns[pattern]++
 		}
 
-		// Корневая директория
 		if _, ok := dirs[""]; !ok {
 			dirs[""] = &dirStats{path: "", patterns: make(map[string]int)}
 		}
@@ -184,10 +176,7 @@ func walkAll(root string, matcher *fileutil.Matcher) ([]string, map[string]*dirS
 	return files, dirs, err
 }
 
-// filePattern извлекает паттерн из имени файла.
-// Примеры: "*.pb.go", "*.gen.go", "*_test.go", "*.go", "*.md"
 func filePattern(name string) string {
-	// Проверяем двухуровневые суффиксы (длинные перед короткими!)
 	twoLevel := []string{
 		"_grpc.pb.go", "_pb2_grpc.py",
 		".pb.go", ".gen.go", "_test.go",
@@ -199,22 +188,19 @@ func filePattern(name string) string {
 		}
 	}
 
-	// Простое расширение (пропускаем dotfiles — у них имя начинается с точки)
 	ext := filepath.Ext(name)
 	if ext != "" && !strings.HasPrefix(name, ".") {
 		return "*" + ext
 	}
 
-	// Dotfile или файл без расширения
 	return name
 }
 
-// topDirectories возвращает топ-N директорий по количеству файлов.
 func topDirectories(dirs map[string]*dirStats, n int) []*dirStats {
 	var list []*dirStats
 	for _, d := range dirs {
 		if d.path == "" {
-			continue // пропускаем корень
+			continue
 		}
 		list = append(list, d)
 	}
@@ -229,13 +215,11 @@ func topDirectories(dirs map[string]*dirStats, n int) []*dirStats {
 	return list
 }
 
-// patternCount представляет пару паттерн-количество.
 type patternCount struct {
 	name  string
 	count int
 }
 
-// aggregatePatterns собирает все паттерны из всех директорий.
 func aggregatePatterns(dirs map[string]*dirStats) map[string]int {
 	result := make(map[string]int)
 	for _, d := range dirs {
@@ -246,7 +230,6 @@ func aggregatePatterns(dirs map[string]*dirStats) map[string]int {
 	return result
 }
 
-// topPatterns возвращает топ-N паттернов по количеству.
 func topPatterns(patterns map[string]int, n int) []patternCount {
 	var list []patternCount
 	for name, count := range patterns {
@@ -263,7 +246,6 @@ func topPatterns(patterns map[string]int, n int) []patternCount {
 	return list
 }
 
-// mostCommonPattern возвращает самый частый паттерн из map.
 func mostCommonPattern(patterns map[string]int) string {
 	var best string
 	var bestCount int
@@ -279,7 +261,6 @@ func mostCommonPattern(patterns map[string]int) string {
 	return best
 }
 
-// truncatePath обрезает путь для вывода, заменяя начало на "..."
 func truncatePath(path, root string, maxLen int) string {
 	if path == "" {
 		return "(root)"
@@ -290,7 +271,6 @@ func truncatePath(path, root string, maxLen int) string {
 	return "..." + path[len(path)-maxLen+3:]
 }
 
-// humanSize форматирует размер в человекочитаемый вид.
 func humanSize(bytes int64) string {
 	const (
 		KB = 1024
@@ -309,7 +289,6 @@ func humanSize(bytes int64) string {
 	}
 }
 
-// maxFloat возвращает максимум из двух float64.
 func maxFloat(a, b float64) float64 {
 	if a > b {
 		return a

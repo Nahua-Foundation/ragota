@@ -717,6 +717,72 @@ func TestResolvePendingEdges_DoesNotCrossLanguages(t *testing.T) {
 	_ = idsPy
 }
 
+func TestResolvePendingEdges_ReceiverMethodResolution(t *testing.T) {
+	st := openMem(t)
+	ctx := context.Background()
+
+	// Создаём структуру и метод (как в Go/TS/Java)
+	ids := seedUnits(t, st, "/receiver.go", []ASTUnit{
+		{FilePath: "/receiver.go", Language: "go", Kind: "struct", Name: "NDM", Qualified: "token.NDM"},
+		{FilePath: "/receiver.go", Language: "go", Kind: "method", Name: "loadEmission", Qualified: "token.NDM.loadEmission", ParentID: sql.NullInt64{Int64: 1, Valid: true}},
+		{FilePath: "/receiver.go", Language: "go", Kind: "function", Name: "caller"},
+	})
+
+	// Создаём edge с receiver.method (как это делает tree-sitter/go/ast)
+	require.NoError(t, st.ReplaceEdges(ctx, "/receiver.go", []Edge{
+		{SrcID: ids["caller"], DstID: 0, Kind: "call", DstName: "NDM.loadEmission"},
+	}))
+
+	// Pass 5 должен разрешить этот edge
+	n, err := st.ResolvePendingEdges(ctx, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "receiver.method edge должен быть разрешён")
+
+	// Проверяем, что edge разрешён правильно (используем qualified name как ключ)
+	loadEmissionID := ids["token.NDM.loadEmission"]
+	edges, err := st.EdgesTo(ctx, loadEmissionID, "call")
+	require.NoError(t, err)
+	assert.Len(t, edges, 1)
+	assert.Equal(t, "NDM.loadEmission", edges[0].DstName)
+}
+
+func TestResolvePendingEdges_ReceiverMethod_DifferentFiles(t *testing.T) {
+	st := openMem(t)
+	ctx := context.Background()
+
+	// Структура в одном файле
+	ids1 := seedUnits(t, st, "/struct.go", []ASTUnit{
+		{FilePath: "/struct.go", Language: "go", Kind: "struct", Name: "Service", Qualified: "pkg.Service"},
+	})
+
+	// Метод в другом файле (но с правильным parent_id)
+	ids2 := seedUnits(t, st, "/method.go", []ASTUnit{
+		{FilePath: "/method.go", Language: "go", Kind: "method", Name: "process", Qualified: "pkg.Service.process", ParentID: sql.NullInt64{Int64: 1, Valid: true}},
+	})
+
+	// Вызывающая функция
+	ids3 := seedUnits(t, st, "/caller.go", []ASTUnit{
+		{FilePath: "/caller.go", Language: "go", Kind: "function", Name: "main"},
+	})
+
+	// Edge с receiver.method
+	require.NoError(t, st.ReplaceEdges(ctx, "/caller.go", []Edge{
+		{SrcID: ids3["main"], DstID: 0, Kind: "call", DstName: "Service.process"},
+	}))
+
+	n, err := st.ResolvePendingEdges(ctx, nil)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, n, 1, "receiver.method edge должен быть разрешён")
+
+	// Проверяем, что edge был разрешён
+	processID := ids2["pkg.Service.process"]
+	edges, err := st.EdgesTo(ctx, processID, "call")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(edges), 1, "должен быть хотя бы один edge к методу process")
+
+	_ = ids1
+}
+
 // ---------------------------------------------------------------------------
 // ExpandNeighbors
 // ---------------------------------------------------------------------------

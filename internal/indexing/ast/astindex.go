@@ -45,7 +45,7 @@ func New(cfg *config.Config, st *store.SQLite) *Indexer {
 		cfg:     cfg,
 		st:      st,
 		ts:      pkgparser.New(),
-		matcher: fileutil.NewMatcher(cfg.Ignore),
+		matcher: fileutil.NewMatcher(cfg.IgnorePatterns),
 	}
 }
 
