@@ -47,7 +47,7 @@ func run(args []string, stderr io.Writer) error {
 		showVersion = fs.Bool("version", false, "print the version and exit")
 	)
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, `ragota-mcp %s — MCP server over a running ragota.
+		_, _ = fmt.Fprintf(stderr, `ragota-mcp %s — MCP server over a running ragota.
 
 Usage: ragota-mcp [flags]
 
@@ -71,7 +71,7 @@ Flags:
 		return err
 	}
 	if *showVersion {
-		fmt.Fprintln(stderr, version)
+		_, _ = fmt.Fprintln(stderr, version)
 		return nil
 	}
 
@@ -111,12 +111,12 @@ Flags:
 	}
 
 	if *checkOnly {
-		fmt.Fprintf(stderr, "ok: ragota %s (api %s) at %s, %d tools\n",
+		_, _ = fmt.Fprintf(stderr, "ok: ragota %s (api %s) at %s, %d tools\n",
 			health.Version, health.APIVersion, cfg.BaseURL, len(server.ToolNames()))
 		return nil
 	}
 
-	fmt.Fprintf(stderr, "ragota-mcp %s serving %d tools over stdio: %s (ragota %s, api %s)\n",
+	_, _ = fmt.Fprintf(stderr, "ragota-mcp %s serving %d tools over stdio: %s (ragota %s, api %s)\n",
 		version, len(server.ToolNames()), cfg.Redacted(), health.Version, health.APIVersion)
 	return s.MCP(version).Run(ctx, &mcp.StdioTransport{})
 }
