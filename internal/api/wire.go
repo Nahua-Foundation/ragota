@@ -4,7 +4,7 @@ package api
 // rate limiter's per-caller bucket.
 import wire "github.com/Nahua-Foundation/ragota/pkg/client"
 
-// The HTTP contract is defined in ragota-core/pkg/client, which is the package
+// The HTTP contract is defined in ragota/pkg/client, which is the package
 // an external consumer imports, and aliased here.
 //
 // It used to be defined in this package, where nothing outside the module

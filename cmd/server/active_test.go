@@ -115,7 +115,7 @@ func TestSourceActivatesExactlyWhatItFound(t *testing.T) {
 	}
 }
 
-// A plain `ragota-core --config config.yaml` must not silently redefine a
+// A plain `ragota --config config.yaml` must not silently redefine a
 // working set the user chose. It was told nothing about what this run is about,
 // and "everything the database has ever seen" is not an answer it may pick.
 func TestNoSourceLeavesTheWorkingSetAlone(t *testing.T) {

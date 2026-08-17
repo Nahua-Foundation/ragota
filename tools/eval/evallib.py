@@ -861,7 +861,7 @@ def free_port():
 
 
 class Server:
-    """A ragota-core process with its own database, started and stopped by the
+    """A ragota process with its own database, started and stopped by the
     harness. Nothing it touches lives outside workdir, so a run can be thrown
     away by deleting one directory."""
 
@@ -936,7 +936,7 @@ def build_binary(repo_root, out_path):
 
 
 def binary_version(binary):
-    """`ragota-core -version`, so a result file names what produced it."""
+    """`ragota -version`, so a result file names what produced it."""
     try:
         proc = subprocess.run([binary, "-version"], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
@@ -1059,7 +1059,7 @@ def open_session(repo_root, args, needed, opts, label):
     if args.server:
         session = Session(EvalAPI(args.server, args.api_key), {}, "(external)", args.server)
     else:
-        binary = args.binary or build_binary(repo_root, os.path.join(args.work, "bin", "ragota-core"))
+        binary = args.binary or build_binary(repo_root, os.path.join(args.work, "bin", "ragota"))
         # compare.py --no-reindex pins both sides to one subdirectory so they
         # share an index; otherwise each label gets its own database.
         subdir = getattr(args, "work_subdir", None) or slugify(label)

@@ -73,7 +73,7 @@ indexes:
   # 0 = use the number of CPU cores; the effective value is capped at 32.
   # Negative values are rejected by config validation.
   workers: 0
-  # Distributed indexing: several ragota-core instances over one shared
+  # Distributed indexing: several ragota instances over one shared
   # PostgreSQL split indexing work via a job queue (SKIP LOCKED claim,
   # heartbeat + stale-job requeue). Off by default (single-instance mode).
   distributed: false
@@ -268,7 +268,7 @@ models:
 # volume-mounted at mount_root inside the containers.
 # host_root and mount_root must be set together and be absolute; a wrong
 # mapping makes the servers answer with empty results, which the pass now
-# reports as a failure instead of as success. When ragota-core itself runs in
+# reports as a failure instead of as success. When ragota itself runs in
 # a container next to the servers (deploy/docker-compose.yml), both are the
 # shared mount path and the mapping is the identity.
 #
@@ -345,7 +345,7 @@ repos:
   # Set this to false for a repository whose .gitignore hides something worth
   # indexing (a committed-elsewhere config, a generated client someone asks
   # questions about). RAGOTA_USE_GITIGNORE=0 does the same for a run with no
-  # config file, such as `ragota-core --source DIR`.
+  # config file, such as `ragota --source DIR`.
   use_gitignore: true
   # Paths excluded from indexing, applied to every repository. There is no
   # built-in default: omit this block and nothing is excluded. They are checked

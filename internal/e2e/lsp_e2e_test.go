@@ -38,7 +38,7 @@ func requireLSP(t *testing.T) {
 }
 
 // lspHostRoot returns the host directory mounted at /workspace: the
-// ragota-core repository root (RAGOTA_LSP_HOST_ROOT overrides).
+// ragota repository root (RAGOTA_LSP_HOST_ROOT overrides).
 func lspHostRoot(t *testing.T) string {
 	t.Helper()
 	if root := os.Getenv("RAGOTA_LSP_HOST_ROOT"); root != "" {

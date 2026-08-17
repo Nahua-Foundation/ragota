@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: ragota-core API
+  title: ragota API
   description: >
     RAG code indexer: repositories, hybrid search, code navigation,
     cross-service graph and LLM retrieval context.

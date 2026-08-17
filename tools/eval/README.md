@@ -115,7 +115,7 @@ lookup, which BM25 wins by construction and which is not what a user types.
 
 ## How the ground truth was established
 
-By reading the corpus source code — never by asking ragota-core what it
+By reading the corpus source code — never by asking ragota what it
 returns. Ground truth derived from the system under test proves nothing: it
 would make every change look like an improvement, because the answer key would
 move with the index.
@@ -288,7 +288,7 @@ and knowing where the memory actually goes, which is not where it looks:
   indexes anything; `--scope in-repo` avoids them entirely.
 - **Each run holds a server process with its indexes resident.** Two
   comparison sides run sequentially, but an abandoned run leaves its server
-  alive — `pgrep -f ragota-core` after a cancelled harness is worth a look.
+  alive — `pgrep -f ragota` after a cancelled harness is worth a look.
 
 ## Comparing two runs
 
@@ -354,7 +354,7 @@ nothing, and that is now checkable rather than arguable.
 ## Current baseline
 
 Measured on 2026-08-12 on an Apple-silicon laptop, binary
-`ragota-core dev (b76eb21) darwin/arm64 go1.26.5` built from `cmd/server` on
+`ragota dev (b76eb21) darwin/arm64 go1.26.5` built from `cmd/server` on
 `feat/graph-search-and-vector-eval` — the first run with the zapx chunk-table
 fix and the graph-backed callers intent in the binary.
 

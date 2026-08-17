@@ -142,7 +142,7 @@ func (c *chunkedIntCoder) Write(w io.Writer) (int, error) {
 	buf := c.buf
 
 	// RAGOTA-CORE LOCAL PATCH (backport of the upstream fix that first shipped
-	// in zapx v17.2.x; see the ragota-core go.mod replace directive).
+	// in zapx v17.2.x; see the ragota go.mod replace directive).
 	//
 	// The original v17.1.2 code converted chunkLens to end-offsets in place
 	// FIRST and then walked the chunks through the file callback, skipping

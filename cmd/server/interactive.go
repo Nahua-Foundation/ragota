@@ -19,7 +19,7 @@ import (
 // `tail -f` in another pane needs no argument hunting, and it is opened for
 // append so that starting a second run does not truncate the log the first one
 // is still writing.
-const interactiveLogName = "ragota-core.log"
+const interactiveLogName = "ragota.log"
 
 // logSink routes the process log at runtime. It starts on stderr, moves to a
 // file for as long as the dashboard owns the terminal, and returns to stderr —
@@ -101,7 +101,7 @@ func openInteractiveLog() (*os.File, string) {
 	}
 	// A run marker, so that an appended file reads as a sequence of sessions
 	// rather than as one log with jumps in it.
-	_, _ = fmt.Fprintf(f, "=== ragota-core %s started %s ===\n", version, time.Now().Format(time.RFC3339))
+	_, _ = fmt.Fprintf(f, "=== ragota %s started %s ===\n", version, time.Now().Format(time.RFC3339))
 	return f, path
 }
 

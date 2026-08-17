@@ -105,7 +105,7 @@ func listRepos(ctx context.Context, svc *service.Service) int {
 	}
 	if len(all) == 0 {
 		fmt.Println("no repositories registered")
-		fmt.Println("point a run at a directory to register some: ragota-core --source DIR run")
+		fmt.Println("point a run at a directory to register some: ragota --source DIR run")
 		return 0
 	}
 
@@ -226,7 +226,7 @@ func findRepo(all []*repos.Repo, ref string) (*repos.Repo, error) {
 			}
 		}
 	}
-	return nil, fmt.Errorf("no repository matches %q; `ragota-core %s %s` shows what is registered",
+	return nil, fmt.Errorf("no repository matches %q; `ragota %s %s` shows what is registered",
 		ref, commandRepos, reposList)
 }
 
@@ -241,6 +241,6 @@ func activeWord(active bool) string {
 // leave with. It writes to stderr so that a failed `repos list` cannot be
 // mistaken for an empty one by whatever is reading the pipe.
 func fail(format string, args ...any) int {
-	fmt.Fprintf(os.Stderr, "ragota-core: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "ragota: "+format+"\n", args...)
 	return exitFailure
 }

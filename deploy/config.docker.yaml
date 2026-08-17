@@ -1,6 +1,6 @@
 # Config used by the app container in deploy/docker-compose.yml.
 # Everything here refers to compose service names, not localhost.
-# Validate a change before deploying it:  ragota-core --check-config
+# Validate a change before deploying it:  ragota --check-config
 
 server:
   host: 0.0.0.0            # inside the container; the port is published on 127.0.0.1

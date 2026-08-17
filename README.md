@@ -1,10 +1,10 @@
-# ragota-core
+# ragota
 
 A configurable API service for code indexing, search and cross-service code graphs.
 
-## What is ragota-core?
+## What is ragota?
 
-`ragota-core` is an **API-first** code indexing service that:
+`ragota` is an **API-first** code indexing service that:
 - Accepts configuration via YAML (indexes, models, storage)
 - Accepts repositories via API (local paths, Git clone) and keeps them fresh
   via **push webhooks** (GitHub/GitLab)
@@ -92,9 +92,9 @@ path prefix.
 ### 1. Build
 
 ```bash
-cd ~/projects/ragota-core
-make binary                # -> bin/ragota-core, --version reports the git describe
-# or: go build -o ragota-core ./cmd/server
+cd ~/projects/ragota
+make binary                # -> bin/ragota, --version reports the git describe
+# or: go build -o ragota ./cmd/server
 # or: make install         # into $GOBIN
 ```
 
@@ -112,7 +112,7 @@ repos:
 ### 3. Check the config before running it
 
 ```bash
-./bin/ragota-core --config config.yaml --check-config
+./bin/ragota --config config.yaml --check-config
 ```
 
 `--check-config` loads and validates the file, prints the warnings, then probes
@@ -127,7 +127,7 @@ Qdrant, a dead reranker) before they reach production.
 
 ```bash
 make run                   # honours CONFIG=..., defaults to config.yaml
-# or: ./bin/ragota-core --config config.yaml
+# or: ./bin/ragota --config config.yaml
 ```
 
 Server starts on `http://127.0.0.1:8080`
@@ -138,9 +138,9 @@ Steps 2–4 are for a deployment. To index the code on your own machine there is
 nothing to configure and nothing to `curl`:
 
 ```bash
-./bin/ragota-core --source ~/projects run          # discover, register, index
-./bin/ragota-core --source ~/projects --watch run  # ...and keep it fresh
-./bin/ragota-core --source ~/projects --watch --interactive run  # ...and watch it work
+./bin/ragota --source ~/projects run          # discover, register, index
+./bin/ragota --source ~/projects --watch run  # ...and keep it fresh
+./bin/ragota --source ~/projects --watch --interactive run  # ...and watch it work
 ```
 
 `run` is optional: an invocation without a subcommand starts the server exactly
@@ -231,7 +231,7 @@ Four things about it are worth knowing:
 
 - **the log moves, it does not stop.** Records on stderr and a full-screen
   renderer on one terminal interleave into garbage, so for as long as the
-  dashboard is up the whole log goes to `~/.ragota-core/logs/ragota-core.log`
+  dashboard is up the whole log goes to `~/.ragota-core/logs/ragota.log`
   (appended, one marker line per run; the path is in the dashboard's footer, so
   `tail -f` it from another pane). Warnings and errors are on screen as well —
   they reach the dashboard through a slog handler that tees them, not through
@@ -255,10 +255,10 @@ The working set outlives the run that chose it, so there is a subcommand for
 reading and editing it without re-running `--source` and without `curl`:
 
 ```bash
-ragota-core repos list                 # every repository, marked active or dormant
-ragota-core repos deactivate beta      # take one out of the working set
-ragota-core repos activate  beta       # ...and put it back
-ragota-core repos deactivate .         # a path works too, so this means "this project"
+ragota repos list                 # every repository, marked active or dormant
+ragota repos deactivate beta      # take one out of the working set
+ragota repos activate  beta       # ...and put it back
+ragota repos deactivate .         # a path works too, so this means "this project"
 ```
 
 `list` prints every registered repository — dormant ones included, since this is
@@ -286,7 +286,7 @@ repositories at startup.
 | `--pprof HOST:PORT` | serve `net/http/pprof` on a separate listener; empty (default) disables it |
 | `--source DIR` | directory *holding* projects: discover, register and index the repositories under it on startup (added to `repos.sources.local.paths`), and make exactly those the working set |
 | `--watch` | keep the index in step with changes under the local repositories in the working set |
-| `--interactive` | draw the indexing status as a terminal dashboard; the log goes to `~/.ragota-core/logs/ragota-core.log` while it is on screen, and a non-terminal stdout falls back to plain logging |
+| `--interactive` | draw the indexing status as a terminal dashboard; the log goes to `~/.ragota-core/logs/ragota.log` while it is on screen, and a non-terminal stdout falls back to plain logging |
 
 Subcommands go after the flags (`--source ./dir run`). `run` starts the HTTP API
 and may be omitted; `repos` reads and edits the working set and exits.
@@ -299,7 +299,7 @@ loopback (a non-loopback bind is allowed but logged as a warning, since the
 endpoints dump heap contents, goroutine stacks and the process command line).
 
 ```bash
-./bin/ragota-core --config config.yaml --pprof 127.0.0.1:6060 &
+./bin/ragota --config config.yaml --pprof 127.0.0.1:6060 &
 curl -X POST localhost:8080/api/v1/repos/$ID/index -d '{"force":true}'
 
 go tool pprof -http :8081 http://127.0.0.1:6060/debug/pprof/profile?seconds=60   # where CPU goes
@@ -362,7 +362,7 @@ docker compose -f deploy/docker-compose.yml \
 The app container reads `deploy/config.docker.yaml`. Repositories live in the
 `repos` volume, mounted at `/workspace` in the app *and* in every language
 server, so `lsp.host_root` and `lsp.mount_root` are both `/workspace` — an
-identity mapping. When ragota-core runs on the host instead (`make lsp-up`),
+identity mapping. When ragota runs on the host instead (`make lsp-up`),
 `host_root` is the host directory and `mount_root` is `/workspace`; a wrong
 mapping is now reported instead of silently producing an empty LSP pass.
 
@@ -969,7 +969,7 @@ testdata/
 ## Configuration
 
 See `config.example.yaml` for full configuration options, and validate any
-change with `ragota-core --check-config` before deploying it.
+change with `ragota --check-config` before deploying it.
 
 Environment variables:
 
@@ -1154,7 +1154,7 @@ starting the containers. See the `lsp` section in `config.example.yaml`.
 
 ## Distributed indexing
 
-Multiple ragota-core instances can share one PostgreSQL database and split
+Multiple ragota instances can share one PostgreSQL database and split
 indexing work. With `indexes.distributed: true`, `POST /repos/{id}/index`
 enqueues a job into a shared queue instead of indexing in-process; each
 instance runs a worker that claims jobs atomically (`FOR UPDATE SKIP LOCKED`),
@@ -1202,7 +1202,7 @@ time answers 503 with code `index_damaged` rather than a bare 500.
 ## Development
 
 ```bash
-make binary            # bin/ragota-core, version-stamped from git describe
+make binary            # bin/ragota, version-stamped from git describe
 make install           # go install ./cmd/server
 make run               # run with CONFIG=config.yaml (override CONFIG=...)
 make check-config      # validate the config and probe its dependencies

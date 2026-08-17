@@ -1,4 +1,4 @@
-# ragota-core service stack: the app, PostgreSQL, Qdrant and the four LSP
+# ragota service stack: the app, PostgreSQL, Qdrant and the four LSP
 # servers. Requires Compose v2 (deploy.resources.limits, `include`).
 #
 #   docker compose -f deploy/docker-compose.yml up -d --build

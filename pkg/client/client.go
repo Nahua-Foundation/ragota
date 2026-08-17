@@ -27,7 +27,7 @@ const defaultTimeout = 120 * time.Second
 // mid-object decodes into nothing at all.
 const errorBodyLimit = 8 << 10
 
-// Client talks to a ragota-core server.
+// Client talks to a ragota server.
 //
 // It is safe for concurrent use. Build one per server and share it: it holds
 // the connection pool.

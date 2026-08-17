@@ -1,4 +1,4 @@
--- Final PostgreSQL schema for ragota-core metadata storage.
+-- Final PostgreSQL schema for ragota metadata storage.
 --
 -- This file is the sqlc source of truth and must always match the result of
 -- applying every migration in postgres.go (schema_migrations mechanism). At

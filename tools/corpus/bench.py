@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Index the benchmark corpus against a running ragota-core and dump, per
+"""Index the benchmark corpus against a running ragota and dump, per
 repository, what came out of it: files, AST units by kind, edges by kind, how
 many contract edges were resolved, and the coverage summary the server
 reports.

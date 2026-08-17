@@ -1,6 +1,6 @@
 package client
 
-// The wire types of the ragota-core HTTP API.
+// The wire types of the ragota HTTP API.
 //
 // They live here rather than beside the handlers because this is the package
 // another repository imports: an MCP server, a CLI, anything outside this

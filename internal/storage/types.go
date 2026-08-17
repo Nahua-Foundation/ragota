@@ -21,7 +21,7 @@ const (
 )
 
 // IndexJob is a queued repository task. In distributed mode several
-// ragota-core instances share one queue over a common database and claim jobs
+// ragota instances share one queue over a common database and claim jobs
 // atomically.
 type IndexJob struct {
 	ID          string `json:"id"`

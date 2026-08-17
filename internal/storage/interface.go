@@ -235,7 +235,7 @@ type EdgeResolutionBatcher interface {
 	BatchUpdateEdgeResolutions(ctx context.Context, res []EdgeResolution) ([]EdgeResolutionFailure, error)
 }
 
-// Storage is the main storage interface for ragota-core.
+// Storage is the main storage interface for ragota.
 // It handles metadata (files, AST units, edges) and delegates vector storage.
 type Storage interface {
 	Lifecycle

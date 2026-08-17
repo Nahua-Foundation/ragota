@@ -1,5 +1,5 @@
 // Package postgres implements storage.Storage on PostgreSQL. It is the
-// primary relational backend for ragota-core: static queries are compiled by
+// primary relational backend for ragota: static queries are compiled by
 // sqlc into the pgdb subpackage and executed over native pgx (pgxpool);
 // dynamic filtered queries (QueryOpts) are built with sqlutil. Schema and
 // semantics mirror the SQLite backend, which remains a lightweight

@@ -1,4 +1,4 @@
-# ragota-core service image.
+# ragota service image.
 # cgo is mandatory (the tree-sitter bindings are C), so this is a glibc build
 # on debian rather than a static alpine one.
 FROM golang:1.26-bookworm AS build
@@ -13,7 +13,7 @@ COPY . .
 
 ARG VERSION=dev
 ENV CGO_ENABLED=1
-RUN go build -ldflags "-X main.version=${VERSION}" -o /out/ragota-core ./cmd/server
+RUN go build -ldflags "-X main.version=${VERSION}" -o /out/ragota ./cmd/server
 
 FROM debian:bookworm-slim
 
@@ -33,11 +33,11 @@ RUN mkdir -p /workspace /var/lib/ragota && chown -R ragota:ragota /workspace /va
 
 USER ragota
 
-COPY --from=build /out/ragota-core /usr/local/bin/ragota-core
+COPY --from=build /out/ragota /usr/local/bin/ragota
 
 ENV RAGOTA_CONFIG=/etc/ragota/config.yaml
 EXPOSE 8080
 
 # --check-config exits non-zero when the config is invalid (1) or a
 # dependency is unreachable (2); compose healthchecks can use /health instead.
-ENTRYPOINT ["/usr/local/bin/ragota-core"]
+ENTRYPOINT ["/usr/local/bin/ragota"]

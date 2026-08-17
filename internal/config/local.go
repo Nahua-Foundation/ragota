@@ -20,7 +20,7 @@ func DefaultIgnorePatterns() []string {
 	}
 }
 
-// LocalDefault returns the configuration used by `ragota-core --source DIR`
+// LocalDefault returns the configuration used by `ragota --source DIR`
 // when there is no config file to read.
 //
 // It is the smallest profile that indexes something useful on a machine where

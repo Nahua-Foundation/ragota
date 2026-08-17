@@ -1,4 +1,4 @@
-# Retrieval evaluation set for ragota-core. One JSON object per line; blank
+# Retrieval evaluation set for ragota. One JSON object per line; blank
 # lines and lines starting with # are ignored, so this file can be read and
 # extended by hand.
 #
@@ -25,7 +25,7 @@
 #   why           how the answer was established, with file:line citations
 #
 # Every answer here was found by reading the corpus source code. None of it
-# came from asking ragota-core what it returns: ground truth taken from the
+# came from asking ragota what it returns: ground truth taken from the
 # system under test would make every measurement circular.
 
 # --- airflow -------------------------------------------------------------

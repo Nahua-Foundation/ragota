@@ -57,7 +57,7 @@ const (
 )
 
 // The subcommands. commandRun starts the server and is optional: every
-// invocation that predates it — `ragota-core --config config.yaml` — has no
+// invocation that predates it — `ragota --config config.yaml` — has no
 // subcommand at all and has to keep working, so an empty argument list means
 // run. commandRepos reads and edits the index's composition and exits.
 //
@@ -65,7 +65,7 @@ const (
 // non-flag argument, so `--source ./dir run` leaves the positional arguments
 // behind and flags-then-subcommand parses on its own. What is worth spending
 // code on is the other half: an unrecognized word is rejected rather than
-// ignored, because silently starting the server for `ragota-core --source .
+// ignored, because silently starting the server for `ragota --source .
 // rnu` is how a typo becomes a bug report about a flag that "did nothing".
 const (
 	commandRun   = "run"
@@ -88,7 +88,7 @@ func main() {
 
 	cmd, err := parseCommand(flag.Args())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ragota-core: %v\n\n", err)
+		fmt.Fprintf(os.Stderr, "ragota: %v\n\n", err)
 		flag.Usage()
 		os.Exit(exitUsage)
 	}
@@ -381,7 +381,7 @@ func parseCommand(args []string) (command, error) {
 
 // usage prints the invocation forms and the flags.
 func usage() {
-	_, _ = fmt.Fprintf(flag.CommandLine.Output(), `usage: ragota-core [flags] [command]
+	_, _ = fmt.Fprintf(flag.CommandLine.Output(), `usage: ragota [flags] [command]
 
   %[1]s                    start the HTTP API; the default, and may be omitted
   %[2]s list             every repository in the index, and which are active
@@ -389,11 +389,11 @@ func usage() {
   %[2]s deactivate REPO  take one out of it, keeping its index
 
 examples:
-  ragota-core --config config.yaml
-  ragota-core --source ./projects %[1]s
-  ragota-core --source ./projects --watch %[1]s
-  ragota-core --source ./projects --watch --interactive %[1]s
-  ragota-core %[2]s list
+  ragota --config config.yaml
+  ragota --source ./projects %[1]s
+  ragota --source ./projects --watch %[1]s
+  ragota --source ./projects --watch --interactive %[1]s
+  ragota %[2]s list
 
 flags:
 `, commandRun, commandRepos)
@@ -406,7 +406,7 @@ flags:
 //
 // A run with no --source changes nothing. The set is then whatever the user
 // last chose — through an earlier --source or through `repos activate` — and a
-// plain `ragota-core --config config.yaml` has been given no reason to redefine
+// plain `ragota --config config.yaml` has been given no reason to redefine
 // it. (--check-config never reaches this at all: it exits above.)
 //
 // A source that matched nothing changes nothing either. found is empty when
@@ -551,5 +551,5 @@ func versionString() string {
 			}
 		}
 	}
-	return fmt.Sprintf("ragota-core %s%s %s/%s %s", version, rev, runtime.GOOS, runtime.GOARCH, runtime.Version())
+	return fmt.Sprintf("ragota %s%s %s/%s %s", version, rev, runtime.GOOS, runtime.GOARCH, runtime.Version())
 }

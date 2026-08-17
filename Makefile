@@ -1,4 +1,4 @@
-# ragota-core — build & test automation.
+# ragota — build & test automation.
 # cgo is required (tree-sitter bindings).
 export CGO_ENABLED=1
 
@@ -37,7 +37,8 @@ LSP_COMPOSE := RAGOTA_LSP_HOST_ROOT=$(PWD) $(COMPOSE) -f deploy/lsp/docker-compo
 STACK_COMPOSE := $(COMPOSE) -f deploy/docker-compose.yml
 LSP_PORTS   := 7301 7302 7303 7304
 
-BIN        := ragota-core
+BIN        := ragota
+MCP_BIN    := ragota-mcp
 BIN_DIR    := bin
 VERSION    := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS    := -X main.version=$(VERSION)
@@ -61,13 +62,15 @@ CONFIG ?= config.yaml
 build:
 	go build ./...
 
-# Version-stamped binary (--version reports it).
+# Version-stamped binaries (--version reports it).
 binary:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BIN) ./cmd/server
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(MCP_BIN) ./cmd/mcp
 
 install:
-	go install -ldflags "$(LDFLAGS)" ./cmd/server
-	@echo "installed $(INSTALL_DIR)/server (rename to $(BIN) if you prefer)"
+	go build -ldflags "$(LDFLAGS)" -o $(INSTALL_DIR)/$(BIN) ./cmd/server
+	go build -ldflags "$(LDFLAGS)" -o $(INSTALL_DIR)/$(MCP_BIN) ./cmd/mcp
+	@echo "installed $(INSTALL_DIR)/$(BIN) and $(INSTALL_DIR)/$(MCP_BIN)"
 
 # Runs the server against $(CONFIG); RAGOTA_CONFIG still works.
 run: binary

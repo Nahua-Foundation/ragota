@@ -47,7 +47,7 @@ func sampleFrame() frame {
 		width: 100, height: 24,
 		now: testNow, home: "/home/dev",
 		source: "/home/dev/projects", addr: "127.0.0.1:8080",
-		logPath: "/tmp/ragota-core.log", watch: true,
+		logPath: "/tmp/ragota.log", watch: true,
 	}
 }
 
@@ -72,7 +72,7 @@ func TestRenderAnswersTheQuestions(t *testing.T) {
 		"up 2m14s",
 		"cannot read file: permission denied", // the recent warnings and errors
 		"index failed: walk: permission denied",
-		"q quit", "/tmp/ragota-core.log", // how to leave, and where the log went
+		"q quit", "/tmp/ragota.log", // how to leave, and where the log went
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("frame does not mention %q:\n%s", want, out)
@@ -280,7 +280,7 @@ func TestRenderEmptySnapshot(t *testing.T) {
 	}
 	// A terminal that reports no size at all never sends one later either, so
 	// the frame before the first size has to say something.
-	if got := render(frame{snap: status.Snapshot{}, width: 0, height: 24}); !strings.Contains(got, "ragota-core") {
+	if got := render(frame{snap: status.Snapshot{}, width: 0, height: 24}); !strings.Contains(got, "ragota") {
 		t.Errorf("render before the first window size = %q, want a line naming the process", got)
 	}
 }

@@ -61,7 +61,7 @@ func render(f frame) string {
 	// lasts forever on a terminal that reports 0 columns, which is why it says
 	// something rather than drawing an empty screen.
 	if f.width <= 0 {
-		return "ragota-core: waiting for the terminal size"
+		return "ragota: waiting for the terminal size"
 	}
 
 	repos := orderRepos(f.snap.Repos)
@@ -128,7 +128,7 @@ func budget(avail, repoWant, logWant int) (repoRows, logRows int) {
 
 // title is the "what is this process doing" line.
 func (f frame) title() string {
-	cells := []cell{{text: "ragota-core", style: headStyle}, f.activity()}
+	cells := []cell{{text: "ragota", style: headStyle}, f.activity()}
 	if !f.snap.StartedAt.IsZero() {
 		cells = append(cells, cell{text: "up " + uptime(f.now, f.snap.StartedAt)})
 	}

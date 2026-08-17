@@ -1,4 +1,4 @@
-# Model services for the ragota-core stack: Ollama (chat + embeddings) and a
+# Model services for the ragota stack: Ollama (chat + embeddings) and a
 # reranker. Kept separate from docker-compose.yml so they can run on a GPU host
 # while the service runs elsewhere.
 #

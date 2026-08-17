@@ -1,5 +1,5 @@
 """Shared plumbing for the corpus scripts: the repository list, the metadata
-database and the ragota-core API.
+database and the ragota API.
 
 Standard library only, on purpose: the corpus has to be runnable on a machine
 that has a checkout and nothing else installed.

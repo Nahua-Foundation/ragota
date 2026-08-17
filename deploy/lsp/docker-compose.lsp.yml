@@ -1,10 +1,10 @@
-# Per-language LSP servers for the ragota-core refinement pass.
+# Per-language LSP servers for the ragota refinement pass.
 #
 # Each container bridges a stdio language server to TCP with socat (fork mode:
 # one server process per connection, reconnect-safe). Indexed repositories
 # must live under RAGOTA_LSP_HOST_ROOT on the host; that directory is mounted
 # read-only at /workspace, matching lsp.host_root / lsp.mount_root in the
-# ragota-core config.
+# ragota config.
 #
 # Host ports: go 7301, typescript 7302, java 7303, csharp 7304 — published on
 # 127.0.0.1 only. These servers are unauthenticated and can read (for C#:

@@ -4,9 +4,9 @@
 *.dll
 *.so
 *.dylib
-ragota-core
+/ragota
+/ragota-mcp
 /server
-ragota
 
 # Test binary
 *.test

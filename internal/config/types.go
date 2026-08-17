@@ -1,6 +1,6 @@
 package config
 
-// Config is the main ragota-core configuration.
+// Config is the main ragota configuration.
 type Config struct {
 	Server    ServerConfig     `yaml:"server"`
 	Log       LogConfig        `yaml:"log"`
@@ -230,7 +230,7 @@ type IndexesConfig struct {
 	// Negative values are rejected by validation.
 	Workers int `yaml:"workers"`
 
-	// Distributed enables the shared indexing job queue: several ragota-core
+	// Distributed enables the shared indexing job queue: several ragota
 	// instances over one database (PostgreSQL in production) split indexing
 	// work by claiming jobs atomically. Off by default; in single-instance
 	// mode indexing runs in-process exactly as before.

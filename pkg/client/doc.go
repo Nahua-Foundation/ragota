@@ -1,4 +1,4 @@
-// Package client is the Go client for the ragota-core HTTP API.
+// Package client is the Go client for the ragota HTTP API.
 //
 // It exists so that a program outside this module — an MCP server, a CLI, an
 // evaluation harness — does not have to hand-roll requests and re-declare the
