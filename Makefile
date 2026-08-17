@@ -54,7 +54,7 @@ CONFIG ?= config.yaml
 .DEFAULT_GOAL := build
 
 .PHONY: build binary install run check-config vet fmt fmt-check lint lint-install sqlc \
-	test test-integration test-e2e test-postgres test-qdrant test-e2e-postgres ci \
+	test test-integration test-e2e e2e test-postgres test-qdrant test-e2e-postgres ci \
 	lsp-build lsp-up lsp-down test-e2e-lsp compose-check compose-up compose-down compose-logs help \
 	corpus-clone corpus-bench corpus-measure eval eval-fast eval-validate \
 	eval-compare eval-related eval-answers
@@ -119,6 +119,12 @@ test-integration:
 
 test-e2e:
 	go test ./internal/e2e/ -v
+
+# The whole product, from outside: builds bin-for-bin what a release ships,
+# starts the server on a fixture estate, and reads the answers back through
+# the HTTP API and through cmd/mcp over stdio — the same doors users use.
+e2e:
+	go test -tags e2e -count=1 -timeout 10m ./e2e/ -v
 
 # Spins up a throwaway Postgres in Docker, runs the postgres storage tests
 # against it, and always tears the container down afterwards.
