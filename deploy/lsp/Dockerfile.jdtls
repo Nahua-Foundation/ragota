@@ -1,0 +1,24 @@
+# Eclipse JDT language server (jdtls) exposed over TCP via socat.
+# socat's fork option starts one jdtls instance per connection (each with its
+# own writable configuration and workspace dirs), so reconnects always get a
+# fresh, working server.
+FROM eclipse-temurin:21-jdk
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends socat curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pinned to a milestone build: the "latest" snapshot alias moves under the
+# image and changes the server between two builds of the same commit. Version
+# and build stamp belong to the same tarball and must be bumped together.
+ARG JDTLS_VERSION=1.40.0
+ARG JDTLS_BUILD=202409261450
+RUN mkdir -p /opt/jdtls \
+    && curl -fsSL "https://download.eclipse.org/jdtls/milestones/${JDTLS_VERSION}/jdt-language-server-${JDTLS_VERSION}-${JDTLS_BUILD}.tar.gz" \
+    | tar -xz -C /opt/jdtls
+
+EXPOSE 2087
+# Each connection copies the read-only OSGi config to a temp dir and gets its
+# own -data workspace; the equinox launcher is invoked directly (no python
+# wrapper needed).
+CMD ["socat", "TCP-LISTEN:2087,reuseaddr,fork", "SYSTEM:cfg=$(mktemp -d) && cp -a /opt/jdtls/config_linux/. \"$cfg\" && exec java -Declipse.application=org.eclipse.jdt.ls.core.id1 -Dosgi.bundles.defaultStartLevel=4 -Declipse.product=org.eclipse.jdt.ls.core.product -Dlog.level=WARNING -Xmx1G --add-modules=ALL-SYSTEM --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED -jar /opt/jdtls/plugins/org.eclipse.equinox.launcher_*.jar -configuration \"$cfg\" -data $(mktemp -d)"]

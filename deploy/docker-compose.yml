@@ -1,0 +1,141 @@
+# ragota-core service stack: the app, PostgreSQL, Qdrant and the four LSP
+# servers. Requires Compose v2 (deploy.resources.limits, `include`).
+#
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# Models (Ollama for chat/embeddings, a reranker) live in
+# docker-compose.models.yml so a GPU host can run them separately:
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.models.yml up -d
+#
+# Repositories
+# ------------
+# Indexed repositories live in the named volume `repos`, mounted at /workspace
+# in the app *and* in every LSP container. Because both sides see the same
+# path, lsp.host_root and lsp.mount_root are both /workspace — an identity
+# mapping. This is the containerized case; when the app runs on the host
+# instead, host_root is the host directory that deploy/lsp mounts at
+# /workspace and the two differ.
+#
+# To index a repository that lives on your host, bind-mount it into the same
+# path in every container, e.g. add to the app and the lsp-* services:
+#   volumes:
+#     - /home/me/projects:/workspace/projects
+#
+# Ports are published on 127.0.0.1. Set RAGOTA_BIND=0.0.0.0 only behind a
+# firewall or a TLS terminator, and turn on server.auth first.
+
+name: ragota
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VERSION: ${RAGOTA_VERSION:-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      RAGOTA_CONFIG: /etc/ragota/config.yaml
+      # Secrets stay out of the config file; ${...} references in the YAML are
+      # resolved from this environment at startup.
+      RAGOTA_API_KEY: ${RAGOTA_API_KEY:-}
+      RAGOTA_WEBHOOK_SECRET: ${RAGOTA_WEBHOOK_SECRET:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+    ports:
+      - "${RAGOTA_BIND:-127.0.0.1}:8080:8080"
+    volumes:
+      - ./config.docker.yaml:/etc/ragota/config.yaml:ro
+      - repos:/workspace
+      - data:/var/lib/ragota
+    healthcheck:
+      # /health needs no auth and touches no backend.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ragota
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragota}
+      POSTGRES_DB: ragota
+    ports:
+      - "${RAGOTA_BIND:-127.0.0.1}:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ragota -d ragota"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports:
+      - "${RAGOTA_BIND:-127.0.0.1}:6333:6333"
+    volumes:
+      - qdrant:/qdrant/storage
+    restart: unless-stopped
+
+  # --- LSP servers -----------------------------------------------------------
+  # Same images as deploy/lsp/docker-compose.lsp.yml, wired to the shared
+  # `repos` volume instead of a host directory. They are not published on the
+  # host here: only the app talks to them, over the compose network.
+
+  lsp-go:
+    build:
+      context: ./lsp
+      dockerfile: Dockerfile.gopls
+    volumes:
+      - repos:/workspace:ro
+    restart: unless-stopped
+
+  lsp-typescript:
+    build:
+      context: ./lsp
+      dockerfile: Dockerfile.typescript
+    volumes:
+      - repos:/workspace:ro
+    restart: unless-stopped
+
+  lsp-java:
+    build:
+      context: ./lsp
+      dockerfile: Dockerfile.jdtls
+    volumes:
+      - repos:/workspace:ro
+    restart: unless-stopped
+
+  lsp-csharp:
+    build:
+      context: ./lsp
+      dockerfile: Dockerfile.csharp
+    # Read-write on purpose: MSBuild's design-time build writes obj/ next to
+    # each .csproj, and OmniSharp fails to load projects otherwise.
+    volumes:
+      - repos:/workspace
+    environment:
+      - DOTNET_gcServer=0
+    # Load-bearing, not protective: the .NET GC sizes its heap from the
+    # container limit and gets OOM-killed without one. Compose v2 only.
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+    restart: unless-stopped
+
+volumes:
+  repos:
+  data:
+  pgdata:
+  qdrant:

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <!-- No external PackageReferences on purpose: the LSP e2e loads this
+         project inside an offline container, and an unrestorable package
+         sends csharp-ls/MSBuild into a memory-ballooning retry loop. -->
+  </PropertyGroup>
+</Project>

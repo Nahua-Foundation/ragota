@@ -1,0 +1,43 @@
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - misspell
+  settings:
+    staticcheck:
+      # QF1001 (De Morgan) rewrites readable conditions into less readable
+      # ones; SA1019 fires on tree-sitter's Parse, whose ParseCtx replacement
+      # is not available in the pinned binding.
+      # ST1000/ST1003 are naming and package-comment conventions the tree does
+      # not follow uniformly and that carry no correctness signal.
+      checks: ["all", "-QF1001", "-SA1019", "-ST1000", "-ST1003"]
+  exclusions:
+    generated: lax
+    paths:
+      - testdata
+    rules:
+      # Closing a reader/response body or restoring an env var in a test can
+      # only fail in ways the test cannot act on.
+      - linters: [errcheck]
+        source: '^\s*(defer )?(_ = )?\w+\.(Close|Body\.Close)\(\)'
+      - linters: [errcheck]
+        path: _test\.go
+        text: "Error return value of `(os\\.Setenv|.*\\.Close|.*\\.Encode|.*\\.Write|json\\.Unmarshal)` is not checked"
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    paths:
+      - testdata

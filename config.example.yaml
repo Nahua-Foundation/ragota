@@ -1,0 +1,370 @@
+server:
+  host: 127.0.0.1
+  port: 8080
+
+  cors:
+    enabled: false
+    # "*" allows every origin (the middleware echoes the request's Origin back
+    # and sets "Vary: Origin"). List origins explicitly in production; each one
+    # must carry a scheme and no trailing slash, e.g. https://app.example.com.
+    origins: ["*"]
+
+  auth:
+    # Exactly "none" or "api_key" — a typo ("apikey", "API_KEY") used to
+    # disable authentication silently and is now a validation error.
+    type: none            # none | api_key
+    # A key may carry its scope as a prefix. "read:" reaches every retrieval
+    # and inspection route; "admin:" adds the mutating and administrative ones
+    # (add/delete/index/reset a repository, push commits, ingest a runtime
+    # graph, /admin/compact) and answers 403 `forbidden` for a read key. Give
+    # an MCP server or any client acting for a language model a read key: it
+    # then cannot be talked into a DELETE.
+    #
+    # A key with no prefix is admin, which is what every key granted before
+    # scopes existed — an existing config keeps working untouched. The prefix
+    # is configuration, not credential: the client still sends the key alone.
+    # api_keys: ["${RAGOTA_API_KEY}"]
+    # api_keys: ["read:${RAGOTA_MCP_KEY}", "admin:${RAGOTA_API_KEY}"]
+
+  rate_limit:
+    enabled: false
+    requests_per_minute: 120
+    burst: 20               # bucket capacity; defaults to requests_per_minute if not set
+
+  # X-Forwarded-For is only believed for requests coming from these networks.
+  # RAGOTA_TRUSTED_PROXIES (comma-separated) overrides the list.
+  # trusted_proxies: ["10.0.0.0/8", "192.168.1.1"]
+
+  # HTTP timeouts. write_timeout_seconds also bounds handler time: /context
+  # (retrieval + graph expansion + reranking) and the synchronous clone in
+  # POST /repos both outlive the 15s this used to be hardcoded to.
+  read_timeout_seconds: 30
+  write_timeout_seconds: 120
+  idle_timeout_seconds: 60
+  shutdown_timeout_seconds: 10
+
+  # Request body caps in bytes. Commit ingestion carries file contents and has
+  # its own. RAGOTA_MAX_BODY_BYTES / RAGOTA_MAX_COMMIT_BODY_BYTES override them.
+  # max_body_bytes: 1048576          # 1 MiB
+  # max_commit_body_bytes: 67108864  # 64 MiB
+
+log:
+  level: info             # debug | info | warn | error — the LSP pass and the
+                          # linker log their per-file diagnostics at debug
+  format: text            # text | json
+
+storage:
+  postgres:                 # primary backend (sqlc + native pgx); takes precedence over sqlite
+    dsn: postgres://user:pass@localhost:5432/ragota
+    pool_size: 10
+   # sqlite:                 # lightweight embedded/dev option
+   #   path: ~/.ragota-core/data/ragota.db   # this is also the built-in default
+   #   pool_size: 10
+   # qdrant:                 # required whenever indexes.vector is enabled
+   #   url: http://localhost:6333
+   #   api_key: ""
+   #   collection_prefix: "ragota_"
+   #   # docker_embedded (default): a local instance, api_key optional.
+   #   # cloud: a managed instance — api_key is then required.
+   #   mode: docker_embedded   # docker_embedded | cloud
+
+indexes:
+  # Number of parallel indexing workers (file read/hash stage and AST parse stage).
+  # 0 = use the number of CPU cores; the effective value is capped at 32.
+  # Negative values are rejected by config validation.
+  workers: 0
+  # Distributed indexing: several ragota-core instances over one shared
+  # PostgreSQL split indexing work via a job queue (SKIP LOCKED claim,
+  # heartbeat + stale-job requeue). Off by default (single-instance mode).
+  distributed: false
+  job_poll_seconds: 3       # worker poll & heartbeat interval
+  stale_job_seconds: 120    # requeue running jobs whose heartbeat is older than this
+  ast:
+    enabled: true
+    # Only the parsers listed here are registered; files of every other
+    # language are skipped. Omit the key entirely to register all of them.
+    # Code: go, java, kotlin, csharp, typescript, javascript, python
+    # Contracts & schema: proto, sql (migrations), yaml/json (config + OpenAPI), properties (.env)
+    languages: [go, java, kotlin, csharp, typescript, javascript, python, proto, sql, yaml, json, properties]
+  bm25:
+    enabled: true
+    # On-disk Bleve index (default ~/.ragota-core/data/bm25).
+    # RAGOTA_BM25_PATH overrides it for one process.
+    # path: ~/.ragota-core/data/bm25
+    # A full index pass ends by merging the index into a single segment, which
+    # is what makes a score depend on the indexed content rather than on the
+    # segment layout the pass happened to leave behind. It costs ~4% of the
+    # pass and transiently needs room for a second copy of the index; setting
+    # this skips it, and two passes over the same sources then disagree.
+    # no_compact: false
+   # vector:
+   #   enabled: true
+   #   embedder:
+   #     provider: ollama      # ollama | openai
+   #     model: nomic-embed-text
+   #     # Endpoint override for embeddings only; honoured for both providers.
+   #     # Empty falls back to models.providers.<provider>.base_url.
+   #     base_url: ""
+   #     batch_size: 64
+   #     dimensions: 768       # required for models not in built-in table (override detected embedding size)
+   #     # Per-chunk input budget in bytes (default 4096: stays under a
+   #     # 2048-token context for any script; servers meter tokens, and dense
+   #     # scripts run ~2 bytes/token where code runs ~4). On a rejected
+   #     # input the indexer halves the budget and retries before failing
+   #     # that one file.
+   #     max_chars: 4096
+   #     # In-flight embed requests (default 2). Small files are also packed
+   #     # together into full batches so a GPU endpoint never idles.
+   #     concurrency: 2
+   #   chunking:
+   #     # window | semantic | hybrid | cards
+   #     # "cards" = symbol cards (semantic v2): one embedding document per AST
+   #     # unit (kind + qualified name + signature + doc + body head); files
+   #     # without units fall back to window chunking.
+   #     # "semantic" and "hybrid" are implemented for Go only — every other
+   #     # language silently falls back to window chunking.
+   #     #
+   #     # Prefer "cards": measured on tools/eval it beats window chunking on
+   #     # every question shape but one (routes 0.765 -> 0.941 recall@10,
+   #     # overall 0.712 -> 0.780) and indexes faster, because one document per
+   #     # symbol is both fewer documents and a better-formed one.
+   #     method: cards
+   #     window_lines: 60
+   #     overlap: 10
+   #   # Keep paths out of the vector channel (case-insensitive substrings of
+   #   # the repo-relative path). Embedding is the expensive channel and test
+   #   # scaffolding or generated doc sites can be half a repository; excluded
+   #   # files remain searchable through BM25 and AST. Empty by default.
+   #   exclude: ["/test/", "/tests/", "_test.", "/vendor/", "/node_modules/"]
+
+# Retrieval pipeline tuning (optional).
+#
+# The reranker is the largest single quality lever measured on tools/eval —
+# larger than the vector index it reorders. It is also the only stage that
+# costs the request, so top_n is the dial, and a bigger model is not the
+# upgrade it looks like. Two cross-encoders over one shared index of symbol
+# cards, 59 questions, nine repositories, one contended laptop GPU:
+#
+#   model                       top_n  recall@1  recall@10   MRR   median /search
+#   off                             -     0.339      0.864  0.506        579 ms
+#   BAAI/bge-reranker-base 278M    10     0.508      0.881  0.628        858 ms
+#   BAAI/bge-reranker-base 278M    25     0.542      0.932  0.669       1048 ms  <- recommended
+#   BAAI/bge-reranker-base 278M    50     0.525      0.915  0.652       1965 ms
+#   BAAI/bge-reranker-v2-m3 568M   10     0.492      0.881  0.616       1511 ms
+#   BAAI/bge-reranker-v2-m3 568M   25     0.475      0.915  0.632       1663 ms
+#   BAAI/bge-reranker-v2-m3 568M   50     0.508      0.881  0.650       5133 ms
+#
+# 25 is the peak, not a plateau: 50 retrieves and reranks twice as much and
+# scores WORSE (one answer leaves the top ten) at twice the latency. And
+# doubling the model loses on every metric while costing 1.6x-2.6x — the 278M
+# cross-encoder is the recommendation, not a compromise. See
+# tools/eval/README.md for the one condition under which the larger model wins.
+# Measure your own numbers before changing either.
+# search:
+#   # Query-intent detection: "what calls X" / "who uses X" is answered from
+#   # the code graph (call sites first) instead of text ranking alone. "auto"
+#   # (the default) detects the intent from the phrasing; "off" disables
+#   # detection — an explicit "intent" in a request is always honoured.
+#   intent: auto
+#   rerank:
+#     enabled: true
+#     # Rerank service: POST {base_url}{path} with
+#     # {"query": ..., "documents": [...], "model": ...}. Both response shapes
+#     # are accepted: TEI ([{"index","score"}]) and Cohere/Jina/vLLM
+#     # ({"results":[{"index","relevance_score"}]}). On any reranker failure
+#     # search falls back to the original result order.
+#     #
+#     # Reranking is NOT part of the OpenAI API, so an "OpenAI-compatible"
+#     # server still publishes it as /v1/rerank rather than under
+#     # /v1/chat/completions — include /v1 in base_url for vLLM, Cohere and Jina,
+#     # and leave it out for a bare TEI or Infinity container.
+#     base_url: http://localhost:8090
+#     model: ""               # optional for TEI; required by vLLM and Cohere
+#     top_n: 25               # leading candidates fed to the reranker (see the table above)
+#     # api_key: "${RERANK_API_KEY}"   # sent as "Authorization: Bearer <key>"
+#     # path: /rerank                  # override the endpoint path
+#     # timeout_seconds: 30            # raise it for large top_n on a big model
+#     #
+#     # Instruction-aware rerankers (Qwen3-Reranker) take their task description
+#     # inside the query text — the rerank request has no field for it. Setting
+#     # an instruction renders the query as
+#     # "<Instruct>: {instruction}\n<Query>: {query}"; query_template and
+#     # document_template override that when a model needs its full prompt,
+#     # including chat special tokens.
+#     # instruction: "Given a code search query, retrieve the most relevant code"
+#     # query_template: "<Instruct>: {instruction}\n<Query>: {query}"
+#     # document_template: "<Document>: {doc}"
+#
+# Example: Qwen3-Reranker-4B served by vLLM. The model is a causal LM scored
+# from its yes/no logits, so it needs the sequence-classification override:
+#   vllm serve Qwen/Qwen3-Reranker-4B --port 8000 --hf_overrides \
+#     '{"architectures":["Qwen3ForSequenceClassification"],
+#       "classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
+# search:
+#   rerank:
+#     enabled: true
+#     base_url: http://vllm-reranker:8000/v1
+#     model: Qwen/Qwen3-Reranker-4B
+#     top_n: 50
+#     timeout_seconds: 60
+#     instruction: "Given a code search query, retrieve the most relevant code"
+
+models:
+  providers:
+    ollama:
+      base_url: http://localhost:11434
+    # The openai provider covers any OpenAI-compatible endpoint (vLLM, LiteLLM,
+    # a corporate gateway): chat goes to {base_url}/v1/chat/completions and
+    # embeddings to {base_url}/v1/embeddings. A trailing "/v1" in base_url is
+    # accepted and not doubled, so both forms below work. An api_key is
+    # required only for the public api.openai.com endpoint; a self-hosted
+    # gateway works with base_url alone.
+    # openai:
+    #   base_url: https://api.openai.com
+    #   api_key: "${OPENAI_API_KEY}"
+
+  # Auxiliary assistant LLM (optional). Used for:
+  #   - recon: a one-time pre-index pass per repo — the assistant looks at the
+  #     directory tree, README and build manifests and suggests services the
+  #     heuristics might miss (stored as a "recon" unit; hints get
+  #     detected_by=llm and never override heuristic detection);
+  #   - disambiguate: when the linker sees several near-equal candidates for
+  #     an http_call/rpc_call edge, the assistant picks one (edge meta gets
+  #     source=llm; at most 20 LLM calls per linking run);
+  #   - query_rewrite: rewrite natural-language queries before retrieval
+  #     in /api/v1/context. MEASURED HARMFUL — leave it off. On tools/eval it
+  #     cost /context recall@10 0.613 -> 0.512, and it fails two ways at once:
+  #     the model drops the one literal token that could match ("rows inserted
+  #     into the login_attempt table" -> "SQL, MySQL, ORM"), and it rephrases
+  #     questions into keywords, which is the form the intent detector cannot
+  #     read. Questions the detector does recognise now skip the rewrite
+  #     outright, so the damage is bounded, but the remaining trade is still
+  #     negative. If you want an LLM to close the vocabulary gap, put it on
+  #     the index side (see `summaries` below) where the cost is paid once.
+  # assistant:
+  #   provider: ollama        # ollama | openai (default ollama; openai also
+  #                           # covers OpenAI-compatible endpoints via base_url)
+  #   base_url: http://localhost:11434
+  #   # api_key: "${OPENAI_API_KEY}"
+  #   model: qwen2.5
+  #   # Feature toggles (all default true when the assistant is configured):
+  #   # recon: true           # pre-index repo structure pass
+  #   # disambiguate: true    # low-confidence edge resolution
+  #   query_rewrite: false    # measured harmful; see above
+
+# LLM-generated file and service summaries (optional; stored as units of
+# kind "summary", searchable via /nav/symbol)
+# summaries:
+#   enabled: true
+#   provider: ollama        # ollama | openai
+#   model: qwen2.5
+#   max_files: 30           # file summaries per repo per index run
+
+# LSP precision pass (optional): refines the tree-sitter graph with
+# language-server data — adds the symbols the heuristic parsers missed. Each
+# language runs its own LSP server in Docker, bridged to TCP (see
+# deploy/lsp/docker-compose.lsp.yml; `make lsp-up`).
+# Indexed repositories must live under host_root on the host, which is
+# volume-mounted at mount_root inside the containers.
+# host_root and mount_root must be set together and be absolute; a wrong
+# mapping makes the servers answer with empty results, which the pass now
+# reports as a failure instead of as success. When ragota-core itself runs in
+# a container next to the servers (deploy/docker-compose.yml), both are the
+# shared mount path and the mapping is the identity.
+#
+# lsp.calls (optional, off by default) additionally corrects the CALL graph:
+# where the tree-sitter pass records a callee's name and the linker resolves it
+# by name, the language server is asked who really references the definition.
+# The answer confirms an edge, moves it to the definition the server names,
+# adds a call site the parser missed, or drops a resolution the server denies.
+# It cannot ask about every symbol — that is tens of thousands of requests per
+# repository — so `scope` bounds it to the callees where name resolution is
+# weakest. Budget it: measured cost is a per-repository language-server warm-up
+# (seconds for Go, minutes for Java/C#) plus ~5-600 ms per symbol. See
+# tools/eval/README.md for the numbers this was measured at.
+# lsp:
+#   enabled: true                    # requires a non-empty servers map below
+#   host_root: /home/user/projects   # host prefix of indexed repos
+#   mount_root: /workspace           # where host_root is mounted in containers
+#   timeout_seconds: 30              # per-request timeout (default 30)
+#   calls:
+#     enabled: false                 # correct call edges (costs a session per repo)
+#     scope: both                    # boundary | ambiguous | both (default both)
+#     max_symbols: 4000              # references requests per repo
+#     max_refs_per_symbol: 200       # skip symbols used more often than this
+#   servers:
+#     go:         { addr: "localhost:7301" }
+#     typescript:
+#       addr: "localhost:7302"
+#       # tsserver lives in the container's global node_modules:
+#       init_options:
+#         tsserver: { path: "/usr/local/lib/node_modules/typescript/lib" }
+#     java:       { addr: "localhost:7303" }
+#     csharp:     { addr: "localhost:7304" }
+
+repos:
+  sources:
+    local:
+      enabled: true
+      # paths is an allowlist: only directories at or under one of these roots
+      # may be indexed, so an API caller cannot point the indexer at an
+      # arbitrary host directory and read it back through search. An empty or
+      # absent list allows anything.
+      #
+      # --source DIR appends DIR here and enables this source, then discovers
+      # the repositories under DIR (a .git marker, depth 3), registers them and
+      # indexes them. Note the consequence: a run with --source has an
+      # allowlist even when this list was empty. Nothing else about such a
+      # repository differs from a configured one — same ignore patterns, same
+      # .ragota.yaml handling, same indexers.
+      #
+      # With no config file at all, --source falls back to a built-in local
+      # profile: sqlite plus the ast and bm25 indexes, and the ignore list
+      # below. The vector index is not in it (it needs an embedder and Qdrant),
+      # which is the main reason to write a config file for local use.
+      # paths: ["/path/to/repos"]
+    git:
+      enabled: false
+      work_dir: ~/.ragota-core/repos
+      # Each token falls back to the matching environment variable
+      # (GITHUB_TOKEN / GITLAB_TOKEN) when left empty. An auth block needs at
+      # least one non-empty value; omit it entirely to rely on the environment.
+      # auth:
+      #   github_token: "${GITHUB_TOKEN}"
+  # Each checkout's own .gitignore (and .git/info/exclude) applies on top of
+  # the list below, with git's rules: nested files, negation, anchoring,
+  # directory-only patterns. Nobody expects a build directory, a virtualenv or
+  # a vendored tree to be searchable code, and the alternative is listing every
+  # one of them a second time here.
+  #
+  # A file git has in its index is never excluded by this, however its own
+  # .gitignore reads — a force-added file is code the user can see in the
+  # checkout, and hiding it would answer questions about the repository wrongly.
+  # The list below has no such exception: it is the operator's word.
+  #
+  # Set this to false for a repository whose .gitignore hides something worth
+  # indexing (a committed-elsewhere config, a generated client someone asks
+  # questions about). RAGOTA_USE_GITIGNORE=0 does the same for a run with no
+  # config file, such as `ragota-core --source DIR`.
+  use_gitignore: true
+  # Paths excluded from indexing, applied to every repository. There is no
+  # built-in default: omit this block and nothing is excluded. They are checked
+  # first and they are final — a .gitignore may exclude more, never less.
+  #
+  # Prefer the "**/dir/**" form. "dir/**" is a string-prefix match anchored at
+  # the repository root, so it misses web/node_modules and catches
+  # node_modules_old; "**/dir/**" matches whole path components at any depth.
+  # A repository can add its own patterns in .ragota.yaml (see README).
+  #
+  # --watch obeys this list too, and not only to agree with the index: an
+  # excluded directory is never even watched. On the platforms where a watch
+  # costs a file descriptor per entry, following node_modules is how a watcher
+  # runs out of them.
+  ignore:
+    - "**/node_modules/**"
+    - "**/vendor/**"
+    - "**/dist/**"
+    - "**/*.min.js"
+    - "**/*.bundle.js"
+    - "**/*.map"
+    - ".git/**"

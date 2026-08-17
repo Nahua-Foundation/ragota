@@ -1,0 +1,123 @@
+# Config used by the app container in deploy/docker-compose.yml.
+# Everything here refers to compose service names, not localhost.
+# Validate a change before deploying it:  ragota-core --check-config
+
+server:
+  host: 0.0.0.0            # inside the container; the port is published on 127.0.0.1
+  port: 8080
+  # An API key is strongly recommended as soon as the port leaves the host.
+  auth:
+    type: none             # none | api_key
+    # type: api_key
+    # api_keys: ["${RAGOTA_API_KEY}"]
+  cors:
+    enabled: false
+    origins: ["*"]         # "*" allows every origin; list them explicitly in production
+  rate_limit:
+    enabled: true
+    requests_per_minute: 300
+    burst: 60
+  # /context and a first index run legitimately outlive the old 15s deadline.
+  read_timeout_seconds: 30
+  write_timeout_seconds: 120
+  idle_timeout_seconds: 60
+  shutdown_timeout_seconds: 15
+  # trusted_proxies: ["10.0.0.0/8"]   # only then is X-Forwarded-For believed
+
+log:
+  level: info              # debug shows the LSP and linker diagnostics
+  format: json
+
+storage:
+  postgres:
+    dsn: postgres://ragota:${POSTGRES_PASSWORD}@postgres:5432/ragota?sslmode=disable
+    pool_size: 10
+  # Required as soon as indexes.vector is enabled.
+  # qdrant:
+  #   url: http://qdrant:6333
+  #   collection_prefix: "ragota_"
+  #   mode: docker_embedded
+
+indexes:
+  workers: 0
+  distributed: false
+  ast:
+    enabled: true
+    languages: [go, java, kotlin, csharp, typescript, javascript, python, proto, sql, yaml, json, properties]
+  bm25:
+    enabled: true
+    path: /var/lib/ragota/bm25
+  # Needs storage.qdrant and the models stack:
+  # vector:
+  #   enabled: true
+  #   embedder:
+  #     provider: ollama
+  #     model: nomic-embed-text
+  #     base_url: http://ollama:11434
+  #     batch_size: 64
+  #   chunking:
+  #     # Symbol cards beat line windows on every question shape but one and
+  #     # index faster (tools/eval).
+  #     method: cards
+  #     window_lines: 60
+  #     overlap: 10
+
+# Needs the models stack (docker-compose.models.yml):
+# search:
+#   rerank:
+#     enabled: true
+#     base_url: http://reranker:80
+#     # 25 is where quality flattens and latency is still a third of top_n 50
+#     # — see the table in config.example.yaml.
+#     top_n: 25
+#     timeout_seconds: 30
+
+models:
+  providers:
+    ollama:
+      base_url: http://ollama:11434
+  # assistant:
+  #   provider: ollama
+  #   base_url: http://ollama:11434
+  #   model: qwen2.5
+
+# The app and the language servers share one volume mounted at the same path,
+# so the mapping is the identity. When the app runs on the host instead, set
+# host_root to the host directory and mount_root to /workspace.
+lsp:
+  enabled: false
+  host_root: /workspace
+  mount_root: /workspace
+  timeout_seconds: 30
+  servers:
+    go: { addr: "lsp-go:2087" }
+    typescript:
+      addr: "lsp-typescript:2087"
+      init_options:
+        tsserver: { path: "/usr/local/lib/node_modules/typescript/lib" }
+    java: { addr: "lsp-java:2087" }
+    csharp: { addr: "lsp-csharp:2087" }
+
+repos:
+  sources:
+    local:
+      enabled: true
+      paths: ["/workspace"]
+    git:
+      enabled: true
+      work_dir: /workspace
+      # Tokens fall back to GITHUB_TOKEN / GITLAB_TOKEN in the environment,
+      # which is how compose passes them; an auth block with two empty values
+      # is a validation error, so it stays commented out here.
+      # auth:
+      #   github_token: "${GITHUB_TOKEN}"
+  # "**/dir/**", not "dir/**": the latter is a prefix match anchored at the
+  # repository root and misses nested copies. See config.example.yaml.
+  ignore:
+    - "**/node_modules/**"
+    - "**/vendor/**"
+    - "**/dist/**"
+    - "**/*.min.js"
+    - "**/*.bundle.js"
+    - "**/*.map"
+    - ".git/**"

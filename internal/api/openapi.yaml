@@ -1,0 +1,2510 @@
+openapi: 3.0.3
+info:
+  title: ragota-core API
+  description: >
+    RAG code indexer: repositories, hybrid search, code navigation,
+    cross-service graph and LLM retrieval context.
+
+    `version` below is the wire contract, not the build. GET /health reports
+    both: `api_version` is this number, `version` is the binary that answered.
+  version: 0.2.0
+servers:
+  - url: /
+tags:
+  - name: system
+  - name: repos
+  - name: search
+  - name: nav
+  - name: graph
+  - name: services
+  - name: context
+
+security:
+  - ApiKeyAuth: []
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness check
+      description: >
+        Cheap liveness probe. It touches no dependency on purpose, so a
+        database or vector-store blip never causes healthy instances to be
+        restarted. Use /ready to decide whether to route traffic.
+
+        It also reports what the caller is talking to: `version` is the
+        binary's build version (stamped at link time; "dev" when it was not),
+        and `api_version` is the `info.version` of this document — the number a
+        client with its own release cycle can log or refuse.
+      security: []
+      responses:
+        "200":
+          description: Process is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version, api_version]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  version:
+                    type: string
+                    example: v0.4.1-3-gacf3b5f
+                  api_version:
+                    type: string
+                    example: 0.2.0
+
+  /ready:
+    get:
+      tags: [system]
+      summary: Readiness check (probes dependencies)
+      description: >
+        Probes the metadata store and, when configured, the vector store.
+        Answers 503 while any dependency is unavailable.
+      security: []
+      responses:
+        "200":
+          description: Dependencies reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+        "503":
+          description: A dependency is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /metrics:
+    get:
+      tags: [system]
+      summary: Prometheus metrics (text format, no external dependencies)
+      security: []
+      responses:
+        "200":
+          description: Metrics in Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /openapi.yaml:
+    get:
+      tags: [system]
+      summary: This OpenAPI specification
+      security: []
+      responses:
+        "200":
+          description: OpenAPI 3.0 spec
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  /webhooks/git:
+    post:
+      tags: [repos]
+      summary: Git push webhook (GitHub/GitLab)
+      description: >
+        Finds the repository matching the payload and triggers update + reindex.
+        Repositories are matched on the normalized clone URL, then on the exact
+        name, then on the final path segment — never on a substring, so a push
+        to "gateway" cannot reindex "gateway-v2".
+
+        Outside API-key auth (CI systems cannot set one), so RAGOTA_WEBHOOK_SECRET
+        (X-Webhook-Token header or ?token=) is mandatory: with the secret unset
+        the endpoint is disabled and answers 503. The route is still rate
+        limited and body capped.
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitWebhookPayload"
+      responses:
+        "202":
+          description: Reindex triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: indexing
+                  repo_id:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Missing or invalid webhook token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          description: Webhooks are disabled (RAGOTA_WEBHOOK_SECRET is not configured)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/repos:
+    get:
+      tags: [repos]
+      summary: List repositories
+      description: >
+        Every registered repository with its indexing state. Start here to learn
+        the repository ids that `repos` and `repo` parameters elsewhere take,
+        and to check `status` and `indexed_at` before reading anything into an
+        empty retrieval answer. /stats says whether the indexes hold anything at
+        all; /repos/{id}/coverage says whether what they hold is complete.
+
+
+        `active` is the other field to read before believing an empty answer.
+        /search and /context with no `repos` selector answer from the active
+        repositories only, so code in a repository listed here with `active:
+        false` is indexed and reachable and still will not appear until a
+        request names that repository. This endpoint is the only way to tell
+        that case from code the index does not hold.
+      responses:
+        "200":
+          description: All known repositories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Repo"
+    post:
+      tags: [repos]
+      summary: Add a repository (idempotent)
+      description: >
+        The repository id is derived from name+path, so re-posting the same
+        repository is idempotent: only its definition (name, source, url, path,
+        branch) is updated. Lifecycle state — status, indexed_at, last_commit
+        and any in-progress indexing claim — is preserved.
+
+        Requires the admin scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddRepoRequest"
+      responses:
+        "201":
+          description: Repository created or re-registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repo"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/repos/{id}:
+    get:
+      tags: [repos]
+      summary: Get a repository
+      parameters:
+        - $ref: "#/components/parameters/RepoID"
+      responses:
+        "200":
+          description: Repository
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repo"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [repos]
+      summary: Delete a repository and all its indexed data
+      description: Requires the admin scope.
+      parameters:
+        - $ref: "#/components/parameters/RepoID"
+      responses:
+        "204":
+          description: Deleted
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/repos/{id}/index:
+    post:
+      tags: [repos]
+      summary: Start background indexing of a repository
+      description: >
+        In single-instance mode indexing has already started when this returns
+        (`status: indexing`). With indexes.distributed enabled the request is
+        only queued (`status: queued`) and the response carries the job id and
+        its queue state; any instance's worker may execute it. At most one
+        pending job per repository exists, and a queued job absorbs later
+        requests — its force flag is the OR of all of them.
+
+        Requires the admin scope.
+      parameters:
+        - $ref: "#/components/parameters/RepoID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IndexRequest"
+      responses:
+        "202":
+          description: Indexing started or job queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexAck"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/RepoBusy"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/repos/{id}/reset:
+    post:
+      tags: [repos]
+      summary: Clear a stuck indexing claim
+      description: >
+        Returns a repository stuck in the `indexing` status to `idle`, releasing
+        its claim. Claims carry an owner and an expiry and are also released at
+        startup; this is the manual escape hatch for a claim whose holder died
+        between recoveries.
+
+        Requires the admin scope.
+      parameters:
+        - $ref: "#/components/parameters/RepoID"
+      responses:
+        "200":
+          description: Repository after the reset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repo"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/repos/{id}/jobs:
+    get:
+      tags: [repos]
+      summary: List the repository's queue entries
+      description: >
+        POST /index and, with indexes.distributed enabled, POST /commits both
+        answer 202 whether the work started or was only queued. This endpoint
+        is where a client tells those apart: each entry reports its kind
+        (`index` or `commits`), its status (`pending`, `running`, `done`,
+        `error`), the worker holding it, when it was created, claimed and last
+        heartbeated, and the error a failed job recorded. Newest first. Commit
+        payloads are never returned.
+      parameters:
+        - $ref: "#/components/parameters/RepoID"
+        - name: limit
+          in: query
+          required: false
+          description: Page size, newest first (default 50, capped at 200)
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Queue entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/repos/{id}/jobs/{job_id}:
+    get:
+      tags: [repos]
+      summary: Get one queue entry
+      description: >
+        Follows the `job_id` returned by POST /index in distributed mode. A job
+        belonging to a different repository is reported as `not_found`.
+      parameters:
+        - $ref: "#/components/parameters/RepoID"
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Queue entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexJob"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/repos/{id}/commits:
+    post:
+      tags: [repos]
+      summary: Push commits for incremental indexing
+      description: |
+        Ingests a batch of commits (with per-file diff statuses) from an
+        external client — the source of truth about the repository history.
+        Only the affected paths are re-indexed. When the repo already has a
+        commit cursor, the first pushed commit must reference it in `parents`;
+        otherwise the request is rejected with 409 and the current cursor, and
+        nothing is indexed (the client decides to resend the missing range or
+        request a full reindex via /index).
+
+        A batch that continues the one still being applied is answered with
+        `repo_busy` (retry), not `commit_gap`: the cursor only advances once
+        the running batch lands, and `/sync-state.pending_commit` shows what it
+        is applying.
+
+        With indexes.distributed enabled the accepted batch is queued as a
+        `commits` job (visible under /jobs) instead of being applied by the
+        instance that received the request, so an instance that dies after
+        answering 202 does not take the batch with it: another worker claims
+        it. Batches are applied in the order they were accepted. The gap check
+        above still runs before the batch is accepted.
+
+        Ingested paths are subject to the same `repos.ignore` patterns as a
+        full index pass, so a push and a full index produce the same result.
+        Files the server cannot read are skipped and reported, and the commit
+        cursor only advances when the whole batch landed.
+
+        This endpoint carries file contents and therefore has its own, much
+        larger body limit (default 64 MiB, `RAGOTA_MAX_COMMIT_BODY_BYTES`)
+        instead of the 1 MiB default; an oversized body is a 413 naming the
+        limit, not a 400.
+
+        Requires the admin scope.
+      parameters:
+        - $ref: "#/components/parameters/RepoID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitsRequest"
+      responses:
+        "202":
+          description: Commits accepted; partial indexing started or queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitAck"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: >
+            Commit gap (code `commit_gap`) — the first commit does not continue
+            the stored cursor — or the repository is busy (code `repo_busy`),
+            in which case Retry-After is set.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying (repo_busy only)
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/repos/{id}/sync-state:
+    get:
+      tags: [repos]
+      summary: Get the repo's commit cursor, in-flight batch and indexing status
+      description: >
+        `pending_commit` is the SHA of the batch the system is holding —
+        queued or being applied — which is what distinguishes "in flight" from
+        "lost". Combine it with `indexed_at` and `last_error` to decide whether
+        to resend, and with /jobs to see whether a queued batch has been picked
+        up yet.
+      parameters:
+        - $ref: "#/components/parameters/RepoID"
+      responses:
+        "200":
+          description: Sync state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncState"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+
+  /api/v1/repos/{id}/coverage:
+    get:
+      tags: [repos]
+      summary: Contract coverage of the last full index pass
+      description: >
+        How much of the repository's outbound contract surface the indexer
+        actually resolved, per contract kind: `candidates` counts call sites
+        that look like an outbound contract, `edges` counts those that produced
+        one.
+
+
+        It answers the question the graph alone cannot: a CMS that genuinely
+        makes 42 HTTP calls and a workflow engine that makes thousands through
+        its own helper both look complete when the second one yields 104 edges,
+        because a call site that produced no edge leaves nothing behind to
+        count. Equal counts mean there was nothing more to find; a large gap
+        means the indexer does not understand this project's way of calling
+        out, and results built on the graph are incomplete.
+
+
+        `reported: false` means no coverage-reporting pass has run for this
+        repo — the counters are then meaningless rather than zero. Only a full
+        index pass writes the summary; a commit-driven partial pass describes
+        the files it touched, not the repository. Compare `updated_at` with
+        `indexed_at` to spot a summary that predates the current index.
+      parameters:
+        - $ref: "#/components/parameters/RepoID"
+      responses:
+        "200":
+          description: Coverage summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Coverage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+
+  /api/v1/search:
+    post:
+      tags: [search]
+      summary: Search indexed code (semantic, keyword or hybrid)
+      description: >
+        Ranked code locations for a question asked in prose — "where does POST
+        /cart/checkout go in the frontend", "how is the retry budget
+        configured". This and /nav/symbol are the two ways in, and they have
+        opposite strengths; choosing the wrong one is the largest avoidable loss
+        of answer quality here.
+
+
+        Measured over 21 benchmark questions against one corpus: this endpoint
+        answers a natural-language question at recall@1 0.524, recall@10 0.714,
+        MRR 0.587, while /nav/symbol answers a caller that already holds the
+        identifier at recall@1 0.667, MRR 0.721 — through its `symbol` field,
+        one term matched against a symbol's name or its qualified name. So a
+        sentence comes here; an identifier lifted out of a stack trace, a diff
+        or a previous answer goes to /nav/symbol. When the answer needs the
+        callers of what matched, or the far side of a contract, /context is this
+        endpoint with the code graph expanded around every hit.
+
+
+        `mode` is `hybrid` (the default: both indexes retrieved and fused),
+        `keyword` (BM25 alone) or `semantic` (embeddings alone, and only where
+        an embedding model is configured). An unrecognized mode is rejected with
+        400, never quietly downgraded. The `mode` in the response is the mode
+        that ran, so a request that omitted it reads `hybrid` back rather than
+        an empty string.
+
+
+        `repos` decides which repositories answer, and it changes what an empty
+        result means. Sent nothing, this endpoint answers from the repositories
+        the deployment currently has active, so zero hits means either the index
+        does not hold the answer or the repository holding it is not active —
+        /repos shows which, and naming that repository in `repos` reads it
+        whether it is active or not. Sent a list, zero hits is what those
+        repositories have to say and asking again the same way will not change
+        it. The code graph is never scoped this way: /services, /topics and the
+        /graph endpoints see every indexed repository, so they can name a
+        service whose code an unscoped search here will not return.
+
+
+        `diagnostics` asks the response to carry how the answer was produced:
+        which indexes contributed, and whether one of them was unavailable. It
+        is off by default and worth sending when a thin or empty result would
+        otherwise be taken as the corpus's answer — `diagnostics.degraded` is
+        what separates a real zero from a retrieval backend that was down.
+
+
+        `limit` defaults to 10 and is clamped to at most 100 — an out-of-range
+        value is clamped, not rejected. `total` counts what this response
+        retrieved rather than corpus-wide matches, so it equals the length of
+        `hits` unless `truncated` reports that `max_bytes` dropped some.
+
+
+        `intent` decides whether the query describes code to find or asks what
+        uses it; see the field in SearchRequest. `filter` narrows by language,
+        kind and path prefix before ranking. `snippet` and `max_bytes` bound the
+        response, and nothing else does: a limit of 20 has measured 34 KB, most
+        of it snippet, which is a large bite out of the context window of the
+        model that asked.
+
+
+        Ranking is by retrieval score. Unlike /nav/symbol, this endpoint applies
+        no exact-over-substring tiering and does not demote generated or test
+        files — a query whose answer is a known identifier will meet the
+        generated stubs that share its name, which is the other reason to send
+        such a query to /nav/symbol.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Search hits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/nav/definition:
+    post:
+      tags: [nav]
+      summary: Find the definition at a file position
+      description: >
+        The symbol defined at a point in a file: the innermost unit whose line
+        range contains `position.line`. Reach for it when a file and a line are
+        already in hand — a stack frame, a diff hunk, a hit from /search. When
+        an identifier is in hand and the file is not, /nav/symbol is the call:
+        it needs no position.
+
+
+        Lines are 1-based. Line 0 always answers empty, so a caller converting
+        from a 0-based editor position must add one. `position.character` is
+        accepted and ignored — resolution is by line. Nothing defined at that
+        line is an answer rather than an error: 200 with an empty object.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DefinitionRequest"
+      responses:
+        "200":
+          description: Definition (empty object when not found)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  definition:
+                    $ref: "#/components/schemas/ASTSymbol"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/nav/references:
+    post:
+      tags: [nav]
+      summary: Find references to the symbol at a file position
+      description: >
+        Where the symbol at a file position is used. The position resolves the
+        same way as /nav/definition — the innermost unit containing
+        `position.line`, 1-based — and the answer is the code graph edges that
+        point at that unit. Any edge kind can appear, not only direct calls:
+        imports, HTTP and RPC calls, produces and consumes.
+
+
+        Two lookups are concatenated: edges already resolved to this unit, and
+        edges in the same repository that name it but were never resolved
+        (`target` is then empty). `limit` is the size of the whole answer, not
+        of each lookup — it defaults to 50 and is clamped to at most 500. The
+        resolved edges are taken first and up to the full budget; the
+        unresolved ones only fill what is left, so a hot symbol's near misses
+        can never crowd out a reference that actually points at it.
+
+
+        `word` is what the edge names — a callee name, or a contract key such as
+        `topic:orders.created` — not a token read at the cursor. `kind` is the
+        edge kind, and `repo_id`/`file_path`/`line` locate the referencing site,
+        not the definition.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReferencesRequest"
+      responses:
+        "200":
+          description: References
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  references:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ASTReference"
+                  total:
+                    type: integer
+                    description: Length of `references`, not a corpus-wide count
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/nav/symbol:
+    post:
+      tags: [nav]
+      summary: Search symbols by name/kind/qualified
+      description: >
+        Symbols by identifier. This is the call for a name the caller already
+        holds — out of a stack trace, a diff, or an earlier answer — and it
+        outperforms /search on exactly that: recall@1 0.667 and MRR 0.721 with
+        `symbol`, against 0.524 and 0.587 for the same questions phrased as
+        prose and sent to /search. A question in prose belongs there; a bare
+        identifier belongs here.
+
+
+        At least one of `repo_id`, `name`, `kind`, `qualified` or `symbol` is
+        required — an unfiltered query would page through the whole symbol
+        table. `limit` defaults to 50 and is clamped to at most 500. `total` is
+        the number of symbols in this response, not a corpus-wide count.
+
+
+        `repo_id` decides which repositories answer, and it is read exactly as
+        /search reads `repos`: left out, this endpoint answers from the
+        repositories the deployment currently has active and from no others, so
+        an empty result may mean the repository holding the symbol is out of the
+        way rather than that nothing carries the name — /repos says which
+        repositories those are. Given, the repository named answers whether it
+        is active or not, which is how a caller reaches one that is out of the
+        way. This endpoint and /search are two ways of asking one question, so
+        they answer from the same repositories; the code graph is what is never
+        scoped this way (see RepoScope), and /services or /graph/neighbors can
+        therefore name a unit neither of these endpoints will return.
+
+
+        Prefer `symbol` when you hold one identifier and do not know whether it
+        is the bare name or the qualified one: it matches either, where `name`
+        and `qualified` narrow together when both are given.
+
+
+        Matching is case-insensitive. Symbols that match the term exactly (up to
+        case) are returned first and in full, and only the remaining room is
+        filled with substring matches, so an exact match is never pushed out by
+        a longer name that merely contains the term. Within each of those two
+        groups, generated and test files rank below hand-written code — a query
+        for `ShipOrder` returns the implementation before the generated stubs
+        that share its name. The demoted paths are one bucket: `.pb.go`,
+        `.proto` and the other generated markers alongside `/test/`, `_test.`,
+        `/mocks/`, `/vendor/` and `/node_modules/`. After that, the shorter name
+        wins, which is what separates the substring matches from each other.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SymbolRequest"
+      responses:
+        "200":
+          description: Matching symbols
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbols:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ASTSymbol"
+                  total:
+                    type: integer
+                    description: Length of `symbols`, not a corpus-wide count
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/graph/neighbors:
+    post:
+      tags: [graph]
+      summary: Edges around a code unit (in/out, with far-side units)
+      description: >
+        The edges immediately around one unit: `out` is what it calls, produces
+        or writes, `in` is what points at it. Each hop carries the unit on the
+        far side when the edge resolved; `unit` is absent for an edge naming
+        something not indexed here, which is the normal shape of a call into a
+        third-party library.
+
+
+        `unit_id` comes from another answer — a /context item's `unit`, a
+        /nav/symbol result, a service's `unit_id`. There is no way to name a
+        unit by hand, and ids do not survive a reindex, so they are worth
+        following rather than storing. An unknown id is 404.
+
+
+        Neither list is capped: a unit that everything calls returns every edge
+        it has. When the question is about code rather than about one unit's
+        wiring, /context expands the graph around search hits instead and
+        bounds what it returns.
+
+
+        Edges are followed across every indexed repository. The active set that
+        scopes an unscoped /search does not scope this, so a far-side `unit` may
+        sit in a repository that search would not have answered from.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [unit_id]
+              properties:
+                unit_id:
+                  type: string
+      responses:
+        "200":
+          description: Center node with incoming and outgoing edges
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NeighborsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/graph/path:
+    post:
+      tags: [graph]
+      summary: Directed path between two code units
+      description: >
+        Whether one unit reaches another, and how. Use it to confirm a
+        connection between two units already identified; /graph/trace is the
+        call for following a *value*, and /context for finding the units in the
+        first place.
+
+
+        The search is directed and follows resolved out-edges only, with one
+        exception: a gRPC method unit is also expanded to its server
+        implementations, so a path can cross a service boundary. It also crosses
+        repository boundaries freely: the active set that scopes an unscoped
+        /search does not scope this, and a path may run through repositories
+        search would not have answered from.
+
+
+        `max_depth` bounds the hops and defaults to 10; there is no maximum. The
+        first step is the starting unit and carries neither `edge` nor `via`, so
+        a path holds at most `max_depth` + 1 steps and `length` counts steps
+        rather than hops. On every further step `via` is the kind of the edge
+        that led there.
+
+
+        200 with an empty `steps` is the answer both when no path exists and
+        when `from_unit_id` names nothing at all; neither is a 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from_unit_id, to_unit_id]
+              properties:
+                from_unit_id:
+                  type: string
+                to_unit_id:
+                  type: string
+                max_depth:
+                  type: integer
+      responses:
+        "200":
+          description: Path steps
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  steps:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PathStep"
+                  length:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/graph/trace:
+    post:
+      tags: [graph]
+      summary: Trace a function parameter through calls and service contracts
+      description: >
+        Where one parameter of one function ends up: the chain of calls, gRPC
+        and HTTP requests, Kafka messages and table writes that carry the value,
+        across service boundaries. Reach for it for "where does this id go".
+        /graph/path answers whether two units are connected and
+        /nav/references answers who touches a symbol; neither follows a value
+        through the renames it picks up on the way.
+
+
+        `symbol` is matched case-insensitively against the exact name, and
+        against the exact qualified name only if that found nothing — it is not
+        a substring search, and a symbol matching nothing is 404. `repo_id`
+        narrows the search and may be omitted; omitted, it searches every
+        indexed repository rather than the active set an unscoped /search reads,
+        and the chain then runs wherever the value goes.
+
+
+        `param` is the identifier to start from and is never checked against the
+        function's real parameter list. Matching ignores case and underscores
+        and aligns on word boundaries, so `user_id` follows `userId`,
+        `order.UserID` and `req.GetUserId()`, while `user` follows neither
+        `username` nor `user_agent`.
+
+
+        In the response, `tracked` is what the value is called at that step,
+        `via` the edge kind that led there, `line` the call site in the previous
+        unit, and `note` a phrase naming the hop ("passed as argument ...",
+        "published to Kafka topic ..."). `confidence` is cumulative — the
+        product of the edge confidences along the chain, discounted at each hop
+        matched only heuristically — so it falls with length and a long chain is
+        a lead, not a fact. The best chain is `steps`, up to four more are in
+        `alternatives`, and `chains` counts every chain found, including those
+        neither field carries.
+
+
+        `max_depth` defaults to 16, and a value above 24 is reset to 16 rather
+        than clamped: `max_depth: 100` searches less deeply than `max_depth:
+        24`. A chain cut short by the depth limit or by the global expansion
+        budget says so in its last step's `note`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [symbol, param]
+              properties:
+                repo_id:
+                  type: string
+                symbol:
+                  type: string
+                param:
+                  type: string
+                max_depth:
+                  type: integer
+      responses:
+        "200":
+          description: Best chain plus alternatives
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraceResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/context:
+    post:
+      tags: [context]
+      summary: Graph-expanded retrieval package for an LLM
+      description: >
+        /search plus the code graph expanded around every hit: for each result,
+        the unit it lands in, the service that unit belongs to, and the units
+        the graph reaches from it — its callers, the handler behind a route, the
+        consumers of a topic it publishes.
+
+
+        Reach for it when the answer is not in one file: "what breaks if this
+        endpoint changes", "who consumes this event", "what does this handler
+        call". When a file path and a line would do, /search is the cheaper call
+        by a wide margin — a default call here has measured over ten thousand
+        tokens, and limit 20 with hops 3 has measured 57 KB. That is what
+        `max_bytes` and `snippet: none` are for: items are dropped whole and
+        best-first, so each surviving hit keeps the expansion that explains it.
+
+
+        `limit` (default 5) bounds the items and `hops` (default 1) the
+        expansion depth; both are clamped rather than rejected, to 20 and 3.
+        `mode` defaults to `keyword` here, not to hybrid, and `intent` behaves as
+        it does on /search. Unlike /search, the `mode` in the response is the
+        effective one.
+
+
+        Retrieval fetches four times `limit` hits before expansion (and never
+        more than the 100 /search allows), so a hit that would have fallen
+        outside a /search of the same size can still surface here. Each item's `related` holds at most 24 units, nearest first;
+        `distance` is how many hops away the unit was first reached and `via` is
+        the edge kind of the hop that reached it. A unit appears at most once
+        per item, at its shortest distance. A hit that could not be resolved to
+        a unit still appears, with no `unit`, no `service` and no `related`.
+
+
+        `repos` scopes the retrieval half exactly as it scopes /search: omitted,
+        the hits come from the repositories the deployment currently has active
+        and an empty answer may only mean the repository holding it is out of
+        the active set (see /repos); named, the repositories listed answer
+        whether they are active or not. The expansion is not scoped at all, so
+        an item's `related` can reach units in repositories the retrieval half
+        would not have returned — which is the point of asking here.
+
+
+        `service` on an item or a related unit is the detected service owning
+        that file, and falls back to the repository id where no service root
+        matches — it is never empty. `rewritten_query` appears only where an
+        assistant model is configured with query rewriting enabled, the rewrite
+        differed from the question, and searching the rewrite actually returned
+        hits; a query recognised as a callers-question skips rewriting
+        altogether.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContextRequest"
+      responses:
+        "200":
+          description: Search hits enriched with the surrounding code graph
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContextResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/services:
+    get:
+      tags: [services]
+      summary: Detected services and aggregated cross-service links
+      description: >
+        The deployables the indexer found and what they call. This is the map
+        of the estate: reach for it to learn which services exist and which talk
+        to which, before asking /context or /search about the code inside one of
+        them. /topics is the same question for messaging, and
+        /services/export renders this graph as a diagram to show rather than to
+        walk.
+
+
+        A service is detected per repository, `detected_by` naming the evidence:
+        `ragota.yaml` (an explicit declaration, which wins outright), then
+        `docker-compose`, then `cmd` (a `cmd/<name>/main.go`), then `manifest`
+        (a per-directory build manifest), else `root` — one service named after
+        the repository. `llm` marks one added by the assistant recon pass.
+        Service names are made unique within a repository, not across them, so
+        two repositories may each have an "api".
+
+
+        A link aggregates every call site sharing the same source service,
+        destination service, `kind` and `via`. `kind` is `http_call`,
+        `rpc_call`, `kafka_flow` or `runtime_call` (the last observed in tracing
+        data, not in code). `via` is the contract key the two ends agree on —
+        `http:GET /orders`, `grpc:...`, `topic:...`. `count` is how many call
+        sites were collapsed and `confidence` is the highest among them, not an
+        average. Links inside one service are dropped; a unit whose file matches
+        no service root is attributed to the repository id.
+
+
+        The graph grows with every repository indexed, so both parameters exist
+        to keep one call bounded. `repo` narrows it; a link is kept when
+        *either* end is in the selection, because the far side of a
+        cross-service call lives in another repository by definition and is
+        usually the reason for asking. `limit` caps each list independently and
+        sets `truncated` when it cuts.
+
+
+        Omitted, `repo` means every indexed repository — not the active set that
+        /search and /context fall back to. This endpoint therefore names
+        services whose code an unscoped /search will not return; when that
+        happens, /repos says which repositories are inactive and naming one in
+        /search's `repos` reads it.
+      parameters:
+        - name: repo
+          in: query
+          required: false
+          description: >
+            Repository id. Repeatable, and a single value may be a
+            comma-separated list: ?repo=a&repo=b and ?repo=a,b are the same
+            request. Omitted means every repository.
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+        - name: limit
+          in: query
+          required: false
+          description: Maximum services and maximum links; omitted means no cap
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Service graph
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServicesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/services/export:
+    get:
+      tags: [services]
+      summary: Service graph as a Mermaid or DOT diagram
+      description: >
+        The same graph as /services, rendered as diagram text for a human to
+        look at. Ask /services instead for a graph to reason over: this answers
+        `text/plain`, and the edge labels carry neither `count` nor
+        `confidence`.
+
+
+        One node per repository-and-service pair, labelled with the bare service
+        name, or `repo/service` where several repositories share the name. Edges
+        are labelled by contract — `kafka <topic>`, `gRPC <method>`,
+        `<METHOD> /path`, or `runtime`. There is no grouping by repository in
+        either format.
+
+
+        `format` is `mermaid` (the default) or `dot`; any other value renders
+        Mermaid. Unlike /services this endpoint takes no `repo` or `limit`, so
+        it always renders the whole estate.
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [mermaid, dot]
+            default: mermaid
+      responses:
+        "200":
+          description: Diagram text
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/v1/topics:
+    get:
+      tags: [services]
+      summary: Kafka topics with producers and consumers
+      description: >
+        Messaging contracts with the code on both ends: for each topic, the
+        units that publish to it and the units that read it, each with the
+        service it belongs to. It is the asynchronous half of what /services
+        answers for calls — reach for it for "who consumes this event", where
+        /search would only find the string.
+
+
+        `service` selects the topics one service is on either end of, matched
+        against the detected service name exactly (a unit whose file matches no
+        service root carries the repository id instead). Topics are aggregated
+        across every indexed repository — not over the active set that /search
+        and /context fall back to — and there is no limit parameter. So a
+        producer or consumer listed here may sit in a repository an unscoped
+        /search will not answer from; /repos says which those are, and naming
+        one in /search's `repos` reads its code.
+
+
+        `declared` and `description` come from an AsyncAPI channel declaration:
+        a declared topic that no indexed code produces or consumes is still
+        listed, with both lists empty. That distinguishes "nothing publishes
+        this" from "we did not find the publisher".
+      parameters:
+        - name: service
+          in: query
+          required: false
+          description: Only topics this service produces or consumes
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Topic list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicsResponse"
+
+  /api/v1/otel/service-graph:
+    post:
+      tags: [services]
+      summary: Ingest a runtime service graph observed in tracing
+      description: Requires the admin scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [edges]
+              properties:
+                edges:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/RuntimeServiceEdge"
+      responses:
+        "200":
+          description: Ingest result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stored:
+                    type: integer
+                  received:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/compact:
+    post:
+      tags: [system]
+      summary: Settle the index layout now
+      description: >
+        Compacts every index that has a layout to settle. A finished pass does
+        this on its own unless indexes.bm25.no_compact turns that off, which is
+        what a bulk loader wants: compaction rewrites the whole index, so
+        loading many repositories would pay one whole-index rewrite per
+        repository to reach the layout the last one produces alone. Such a
+        loader indexes everything and calls this once. Scores depend on the
+        final layout, so an index left uncompacted scores differently between
+        runs.
+
+        Requires the admin scope.
+      responses:
+        "200":
+          description: How long each indexer took, in milliseconds
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  compacted_ms:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                    example: {bm25: 6753}
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/stats:
+    get:
+      tags: [system]
+      summary: Indexer statistics
+      description: >
+        Per-indexer counters, keyed by indexer type: `ast`, `bm25`, `vector` and
+        `custom`, each present only when that indexer is configured. Use it to
+        confirm that an empty retrieval answer is a ranking result and not an
+        empty index.
+
+
+        Only the vector indexer fills all three counters. `ast` and `bm25`
+        report `documents` alone — units and indexed documents respectively,
+        across every repository — and leave `size_bytes` and `repos` at 0, and
+        `custom` reports zeros throughout. For a Qdrant vector store `repos`
+        counts collections rather than repositories, and `size_bytes` is 0
+        because Qdrant does not report one. An indexer whose own statistics call
+        fails is omitted from the map rather than reported as zero.
+      responses:
+        "200":
+          description: Per-indexer statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  indexers:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      properties:
+                        documents:
+                          type: integer
+                          format: int64
+                        size_bytes:
+                          type: integer
+                          format: int64
+                        repos:
+                          type: integer
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >
+        Applied to /api/v1 routes when server.auth.type is api_key.
+
+        A key carries a scope, written as a prefix in server.auth.api_keys:
+        "read:<key>" may call the retrieval and inspection routes, "admin:<key>"
+        may also call every mutating and administrative one (marked "requires
+        the admin scope" below). A key with no prefix is admin, which is what
+        every key granted before scopes existed — an existing config keeps
+        working unchanged, and restricting a key is an edit that opts in. The
+        prefix is not part of the credential: a client sends the key itself.
+
+        A key without the scope a route needs gets 403 `forbidden`. When
+        server.auth.type is none there are no keys and no scope checks.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: "Alternative to X-API-Key (Authorization: Bearer <key>)."
+
+  parameters:
+    RepoID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request (code `validation_failed` or `invalid_path`)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Not found (code `not_found`)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: >
+        The API key is valid but does not carry the scope this route requires
+        (code `forbidden`). Prefix the key with "admin:" in
+        server.auth.api_keys to grant it, and keep the retrieval client on a
+        "read:" key.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RepoBusy:
+      description: >
+        The repository is already being indexed (code `repo_busy`). This is a
+        retry condition, not a malformed request.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PayloadTooLarge:
+      description: >
+        The request body exceeds the limit for this endpoint (code
+        `payload_too_large`). `limit_bytes` reports the accepted size. The
+        default limit is 1 MiB (`RAGOTA_MAX_BODY_BYTES`); POST
+        /api/v1/repos/{id}/commits accepts 64 MiB
+        (`RAGOTA_MAX_COMMIT_BODY_BYTES`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TooManyRequests:
+      description: >
+        Rate limit exceeded (code `rate_limited`). Buckets are keyed on the
+        authenticated API key when authentication is enabled and on the client
+        IP otherwise; `X-Forwarded-For` is honoured only from proxies listed in
+        RAGOTA_TRUSTED_PROXIES. Tokens refill continuously with elapsed time.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      description: Body of every non-2xx JSON response.
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          description: Human-readable message; may change between releases
+        code:
+          type: string
+          description: Stable machine-readable error code
+          enum:
+            - repo_busy
+            - commit_gap
+            - payload_too_large
+            - invalid_path
+            - not_found
+            - validation_failed
+            - rate_limited
+            - unauthorized
+            - forbidden
+            - internal_error
+            - not_ready
+            - index_damaged
+        last_commit:
+          type: string
+          description: Current commit cursor (code `commit_gap`)
+        limit_bytes:
+          type: integer
+          format: int64
+          description: Accepted request body size (code `payload_too_large`)
+        retry_after_seconds:
+          type: integer
+          description: Suggested backoff (codes `repo_busy`, `rate_limited`)
+
+    IndexJob:
+      type: object
+      description: >
+        One entry of the shared queue. Commit payloads are never serialized
+        here — they can be tens of megabytes.
+      properties:
+        id:
+          type: string
+        repo_id:
+          type: string
+        kind:
+          type: string
+          enum: [index, commits]
+          description: >
+            "index" — a full pass over the repository;
+            "commits" — a pushed commit batch waiting to be applied
+        force:
+          type: boolean
+          description: Reindex unchanged files (index jobs only)
+        status:
+          type: string
+          enum: [pending, running, done, error]
+        error:
+          type: string
+          description: Failure recorded by the job, if any
+        created_at:
+          type: integer
+          format: int64
+          description: Unix seconds the job was enqueued
+        claimed_at:
+          type: integer
+          format: int64
+          description: Unix seconds a worker claimed it; 0 if never claimed
+        heartbeat_at:
+          type: integer
+          format: int64
+          description: >
+            Unix seconds of the last heartbeat; a running job whose heartbeat
+            is older than indexes.stale_job_seconds is requeued
+        claimed_by:
+          type: string
+          description: Worker holding the job
+
+    JobList:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/IndexJob"
+        total:
+          type: integer
+
+    IndexAck:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [indexing, queued]
+          description: >
+            "indexing" — the pass has started in this instance;
+            "queued" — distributed mode, a worker will pick the job up
+        queued:
+          type: boolean
+        job_id:
+          type: string
+          description: Queue entry id (distributed mode)
+        job_status:
+          type: string
+          enum: [pending, running]
+        force:
+          type: boolean
+          description: Effective force flag, merged with an already queued job
+        queued_at:
+          type: integer
+          format: int64
+        claimed_by:
+          type: string
+          description: Worker that already picked the job up, if any
+        repo_status:
+          type: string
+          enum: [idle, indexing, error]
+
+    Repo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        source:
+          type: string
+          enum: [local, git]
+        url:
+          type: string
+        path:
+          type: string
+        branch:
+          type: string
+        indexed_at:
+          type: integer
+          format: int64
+          description: Unix timestamp of last successful index
+        status:
+          type: string
+          enum: [idle, indexing, error]
+        created_at:
+          type: integer
+          format: int64
+        last_error:
+          type: string
+        last_commit:
+          type: string
+          description: SHA of the last commit applied via the commit ingestion API
+        pending_commit:
+          type: string
+          description: SHA a currently running commit batch is applying
+        active:
+          type: boolean
+          description: >
+            The repository is in the working set this deployment is currently
+            about. Retrieval defaults to that set: /search and /context with no
+            `repos` selector do not read a repository whose `active` is false,
+            while naming it in `repos` reads it whether it is active or not. The
+            graph endpoints ignore the flag entirely.
+
+
+            It is a view, not a lifecycle state. An inactive repository keeps
+            its index, its edges, its coverage and its commit cursor, and going
+            active again restores it unchanged — false here means out of the
+            way, not gone. A repository is active when first registered and
+            re-registering it leaves the flag alone.
+
+    AddRepoRequest:
+      type: object
+      required: [name, source]
+      properties:
+        name:
+          type: string
+        source:
+          type: string
+          enum: [local, git]
+        url:
+          type: string
+          description: Required for git source
+        path:
+          type: string
+          description: Required for local source
+        branch:
+          type: string
+
+    IndexRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          description: Reindex files even when their content hash is unchanged
+
+    CommitFile:
+      type: object
+      required: [path, status]
+      properties:
+        path:
+          type: string
+          description: File path after the change (repo-relative)
+        old_path:
+          type: string
+          description: Previous path, for renames (status R)
+        status:
+          type: string
+          enum: [A, M, D, R]
+          description: Added, modified, deleted or renamed
+        content:
+          type: string
+          description: New file content; omitted means "read from the working tree on disk"
+
+    Commit:
+      type: object
+      required: [sha]
+      properties:
+        sha:
+          type: string
+        parents:
+          type: array
+          items:
+            type: string
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommitFile"
+
+    CommitsRequest:
+      type: object
+      required: [commits]
+      properties:
+        commits:
+          type: array
+          description: Commits in history order (oldest first)
+          items:
+            $ref: "#/components/schemas/Commit"
+
+    CommitAck:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [indexing, queued]
+          description: >
+            "indexing" — this instance is applying the batch;
+            "queued" — distributed mode, a worker will pick it up
+        queued:
+          type: boolean
+        job_id:
+          type: string
+          description: Queue entry to follow under /jobs (distributed mode)
+        pending_commit:
+          type: string
+          description: SHA this batch advances the cursor to; mirrored by /sync-state
+        last_commit_before:
+          type: string
+          description: Commit cursor before this batch
+
+    SyncState:
+      type: object
+      properties:
+        repo_id:
+          type: string
+        last_commit:
+          type: string
+          description: Commit cursor; empty until commits are pushed
+        status:
+          type: string
+          enum: [idle, indexing, error]
+        pending_commit:
+          type: string
+          description: >
+            SHA of the batch the system is holding — queued or being applied —
+            and empty once it lands. It is what distinguishes "in flight" from
+            "lost": in distributed mode it is set as soon as the batch is
+            durably queued, so a batch waiting for a worker still reads as in
+            flight while the repo is still `idle`. /jobs says which of the two
+            it is.
+        indexed_at:
+          type: integer
+          format: int64
+          description: Unix time of the last successful index (0 if never)
+        last_error:
+          type: string
+          description: Failure recorded by the last attempt, if any
+
+
+    Coverage:
+      type: object
+      properties:
+        repo_id:
+          type: string
+        reported:
+          type: boolean
+          description: >
+            False when no coverage-reporting index pass has run for this repo;
+            the counters below are then meaningless rather than zero.
+        updated_at:
+          type: integer
+          format: int64
+          description: Unix time the summary was written (absent when never)
+        indexed_at:
+          type: integer
+          format: int64
+          description: >
+            Unix time of the last successful index. A summary older than this
+            describes a previous pass.
+        kinds:
+          type: array
+          description: >
+            One entry per contract kind. Every known kind is present even when
+            the pass saw none of it, so "no messaging in this repo" and "we do
+            not look for messaging" are not served as the same empty answer.
+          items:
+            $ref: "#/components/schemas/CoverageKind"
+        totals:
+          $ref: "#/components/schemas/CoverageKind"
+
+    CoverageKind:
+      type: object
+      properties:
+        kind:
+          type: string
+          description: Contract kind; `all` on the totals entry
+          example: http
+        candidates:
+          type: integer
+          description: Call sites that look like an outbound contract of this kind
+        edges:
+          type: integer
+          description: Candidates that produced an edge
+        ratio:
+          type: number
+          format: double
+          description: >
+            edges/candidates, and 1 when there were no candidates — a repo with
+            nothing of this kind to find is fully covered, not uncovered.
+
+
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        repos:
+          $ref: "#/components/schemas/RepoScope"
+        mode:
+          type: string
+          enum: [semantic, keyword, hybrid]
+          default: hybrid
+        limit:
+          type: integer
+          default: 10
+          minimum: 0
+          maximum: 100
+          description: >
+            Hits to retrieve. 0 or absent means the default of 10, and anything
+            above 100 is clamped to 100 — an out-of-range value is never
+            rejected.
+        filter:
+          type: object
+          description: >
+            Narrow results by attribute, before ranking. Each value is a string
+            or a list of strings; a value of any other type is dropped, as is a
+            blank string. Values within one category are OR-ed and the
+            categories are AND-ed, so `{languages: [go, java], kind: function}`
+            means "a function, in Go or Java".
+
+
+            `language`/`languages` and `kind`/`kinds` are the same category
+            under two spellings and their values are combined. Language and kind
+            are compared case-insensitively; a hit whose language or kind is
+            unknown never satisfies such a filter. `path`/`path_prefix` is a
+            case-sensitive prefix of the file path and takes a single value —
+            send one spelling or the other, never both, because they overwrite
+            each other in an unspecified order.
+
+
+            Unknown keys are ignored rather than silently narrowing the result
+            set.
+          properties:
+            language:
+              description: Alias of "languages"
+            languages: {}
+            kind:
+              description: Alias of "kinds"
+            kinds: {}
+            path:
+              description: Alias of "path_prefix"
+            path_prefix: {}
+          additionalProperties: true
+          example:
+            languages: [go, java]
+            kind: function
+            path_prefix: services/orders
+        intent:
+          $ref: "#/components/schemas/Intent"
+        max_bytes:
+          $ref: "#/components/schemas/MaxBytes"
+        snippet:
+          $ref: "#/components/schemas/SnippetMode"
+        diagnostics:
+          type: boolean
+          default: false
+          description: >
+            Ask for the `diagnostics` object in the response. Off by default:
+            the server computes it either way, but it costs bytes on every
+            response that carries it, so only a caller that will act on it
+            pays. See SearchDiagnostics.
+
+
+            Sent together with `max_bytes`, the diagnostics are part of what has
+            to fit and are never the thing dropped — they are why the caller
+            asked, and a trimmed answer with no account of itself is the case
+            this field exists to prevent. Hits are dropped around them, so the
+            two together buy fewer hits than `max_bytes` alone would.
+
+    RepoScope:
+      type: array
+      items:
+        type: string
+      description: >
+        Which repositories answer this request, by repository id. /repos lists
+        the ids, and each repository's `active` flag.
+
+
+        Omitted, the request is answered from the active repositories — the
+        working set this deployment is currently about — and from no others.
+        Given, it is answered from exactly the repositories named, active or
+        not: naming a repository is how a client reads one that is out of the
+        way, and the default is the only thing an inactive repository is out of.
+
+
+        So an empty result has two readings and the selector decides which. With
+        no selector, either the index does not hold the answer or the repository
+        holding it is not active; those need opposite responses, and /repos
+        separates them — re-asking with the repository named settles it. With a
+        selector, the named repositories do not hold the answer, and re-asking
+        the same way cannot change that.
+
+
+        The extreme is worth recognising: where repositories are registered and
+        none of them are active, every request without a selector answers empty
+        whatever it asks. A run of empty answers that a named repository then
+        answers is that, not a broken index.
+
+
+        Only retrieval is scoped. The code graph is not: /graph/neighbors,
+        /graph/path, /graph/trace, /services and /topics follow edges into
+        inactive repositories whatever this field says, which is why /services
+        can name a service whose code an unscoped /search will not return. The
+        one exception runs the other way: the call sites and contract far sides
+        the graph adds to a /search result are search hits, so they obey this
+        field like the rest of them.
+
+
+        /nav/symbol is retrieval and is scoped the same way, through its own
+        `repo_id` rather than through this field: it and /search are two ways of
+        asking one question — a sentence goes to one, an identifier to the other
+        — and one question cannot answer from two different sets of
+        repositories. /nav/definition and /nav/references are addressed by a
+        repository and a file path, so nothing is left for a default scope to
+        decide.
+
+    Intent:
+      type: string
+      enum: [auto, callers, none]
+      default: auto
+      description: >
+        What the query is asking for. "callers" reads the query as a question
+        about the code that calls or uses something, resolves that something
+        through the code graph and answers with its call sites — which plain
+        retrieval cannot do, because a call site is one line inside a function
+        whose own name and documentation are about something else.
+
+
+        "auto", the default, decides from the phrasing alone: interrogative
+        forms built on a closed list of action verbs — "what calls X", "who uses
+        X", "callers of X", "where is X registered" — and never on anything
+        project-specific. A copular phrasing ("what is X", "where is X defined")
+        stays plain retrieval. "none" forces plain retrieval whatever the
+        wording. A client that knows what it wants should say so rather than
+        rely on detection.
+
+
+        An unrecognized value is rejected with 400. Note that "callers"
+        retrieves on the *described symbol* with the interrogative scaffolding
+        stripped, and ranks on the question as sent.
+
+    MaxBytes:
+      type: integer
+      minimum: 0
+      default: 0
+      description: >
+        Cap on the response body in bytes; 0 (the default) does not cap it.
+        Whole elements are dropped from the end of the ranked list until the
+        encoding fits, so the best answers survive and the JSON still parses,
+        and `truncated` is then true. The budget is measured over the encoded
+        response including that flag. A budget smaller than the empty response
+        yields an empty list, not an error.
+
+    SnippetMode:
+      type: string
+      enum: [chunk, line, none]
+      default: chunk
+      description: >
+        How much code body each hit carries. "chunk" is the indexed chunk (the
+        default and the historical behaviour), "line" is the snippet's first
+        line — the line the hit is anchored at — and "none" omits the body,
+        leaving repo_id/file_path/line for a caller that will read the file
+        itself. Locations are unaffected in every mode. An unknown value is
+        rejected with `validation_failed`.
+
+    SearchResponse:
+      type: object
+      properties:
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchHit"
+        total:
+          type: integer
+          description: >
+            Hits the query retrieved. With `truncated` true this is larger than
+            the length of `hits`.
+        query:
+          type: string
+        mode:
+          type: string
+          enum: [semantic, keyword, hybrid]
+          description: >
+            The mode that ran, not the one that was requested: a request that
+            omitted `mode` reads `hybrid` back.
+        truncated:
+          type: boolean
+          description: max_bytes dropped hits that were retrieved
+        diagnostics:
+          $ref: "#/components/schemas/SearchDiagnostics"
+
+    SearchDiagnostics:
+      type: object
+      description: >
+        How the answer was produced. Present only when the request set
+        `diagnostics: true`; absent otherwise, and nothing else in the response
+        changes either way.
+
+
+        It answers the one question a hit list cannot: whether a thin or empty
+        result is what the corpus has to say, or what a broken backend had left
+        to say. Nothing here affects ranking — it describes the run that
+        produced it.
+      required: [degraded, reranked]
+      properties:
+        degraded:
+          type: boolean
+          description: >
+            A configured searcher could not answer, so these hits came from
+            fewer indexes than this deployment has. This is the field to branch
+            on: with `degraded` true, zero hits is not evidence that the corpus
+            lacks the answer. A rerank failure is not degradation — retrieval
+            was whole and only the ordering stage was skipped; see
+            `rerank_error`.
+        searchers:
+          type: array
+          items:
+            type: string
+            enum: [vector, bm25]
+          description: >
+            The indexes that contributed candidates, in fusion order. Only
+            `hybrid` fuses, so a single-index mode reports none.
+        failed_searchers:
+          type: array
+          items:
+            type: string
+            enum: [vector, bm25]
+          description: Indexes that were configured and did not answer
+        searcher_errors:
+          type: object
+          additionalProperties:
+            type: string
+          description: What each failed searcher reported, keyed by index
+        reranked:
+          type: boolean
+          description: >
+            The rerank stage scored the leading candidates and the order served
+            is its order. False with no `rerank_error` means the stage did not
+            run — no reranker configured, or too few hits to reorder; false with
+            one means it ran, failed, and retrieval order stands. Search never
+            fails because of the reranker.
+        rerank_candidates:
+          type: integer
+          description: How many leading hits the reranker was shown
+        rerank_error:
+          type: string
+          description: Why the rerank stage did not apply
+
+    SearchHit:
+      type: object
+      properties:
+        repo_id:
+          type: string
+        file_path:
+          type: string
+          description: Path within the repository
+        line:
+          type: integer
+          description: First line of the matched range (1-based)
+        end_line:
+          type: integer
+        symbol:
+          type: string
+        kind:
+          type: string
+          description: function, method, class, ...
+        language:
+          type: string
+        score:
+          type: number
+          format: float
+        snippet:
+          type: string
+          description: Code body, at the size the request's `snippet` mode asked for
+        reason:
+          type: string
+          description: >
+            Why this result is here. For a hit found by retrieval it is the
+            contributing indexes joined with "+" ("keyword", "semantic",
+            "semantic+keyword"), with "+rerank" appended when the rerank stage
+            scored it. A hit the code graph contributed instead carries what the
+            graph knows about it, as a phrase naming the relationship and its
+            other end — "calls ShipOrder", "handles GET /api/orders",
+            "publishes to topic:orders.created", "declares the rpc method".
+
+    ContextResponse:
+      type: object
+      properties:
+        query:
+          type: string
+          description: The query as sent by the client
+        rewritten_query:
+          type: string
+          description: >
+            Set when the assistant LLM rewrote the query into a keyword-style
+            search query before retrieval; this is what was actually searched.
+        mode:
+          type: string
+          enum: [semantic, keyword, hybrid]
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContextItem"
+        truncated:
+          type: boolean
+          description: max_bytes dropped items that were retrieved
+
+    ContextItem:
+      type: object
+      properties:
+        hit:
+          $ref: "#/components/schemas/SearchHit"
+        unit:
+          $ref: "#/components/schemas/Unit"
+        service:
+          type: string
+          description: >
+            Detected service the unit belongs to, falling back to the
+            repository id when no service root matches the file. Never empty
+            for a resolved unit.
+        related:
+          type: array
+          description: >
+            Units reached from the hit through the code graph, nearest first
+            and at most 24. A unit appears once, at its shortest distance.
+          items:
+            $ref: "#/components/schemas/RelatedUnit"
+
+    Unit:
+      type: object
+      description: >
+        A code symbol as the API presents it. Storage bookkeeping the indexer
+        keeps for itself — byte offsets, the content hash, the raw meta blob —
+        is not part of the contract and is not returned.
+      properties:
+        id:
+          type: string
+        repo_id:
+          type: string
+        file_path:
+          type: string
+        language:
+          type: string
+        kind:
+          type: string
+          description: function, method, class, http_route, rpc_method, db_table, ...
+        name:
+          type: string
+        qualified:
+          type: string
+          description: Fully qualified name, or the contract key for contract units
+        parent_id:
+          type: string
+        start_line:
+          type: integer
+        end_line:
+          type: integer
+        signature:
+          type: string
+        doc:
+          type: string
+        summary:
+          type: string
+          description: One-line description written by the assistant LLM, when enabled
+        service:
+          type: string
+          description: Detected service the symbol belongs to, when resolved
+
+    GraphEdge:
+      type: object
+      description: >
+        A relationship between two units. The contract the edge names is
+        decoded into topic/path/method; the rest of the edge meta describes how
+        the linker derived it and is not returned.
+      properties:
+        id:
+          type: string
+        repo_id:
+          type: string
+        src_id:
+          type: string
+        dst_id:
+          type: string
+          description: Empty while the edge is unresolved
+        dst_repo_id:
+          type: string
+        kind:
+          type: string
+          description: call, http_call, rpc_call, produces, consumes, writes_to, ...
+        dst_name:
+          type: string
+          description: Contract key or callee name the edge joins on
+        file_path:
+          type: string
+        line:
+          type: integer
+        confidence:
+          type: number
+          format: float
+        topic:
+          type: string
+        path:
+          type: string
+        method:
+          type: string
+
+    RelatedUnit:
+      type: object
+      description: A unit the code graph reached from a search hit.
+      properties:
+        unit:
+          $ref: "#/components/schemas/Unit"
+        service:
+          type: string
+          description: >
+            As on the item: the detected service, or the repository id when no
+            service root matches.
+        via:
+          type: string
+          description: >
+            Edge kind of the hop that reached this unit — the last hop of the
+            walk, not the first one out of the hit.
+        direction:
+          type: string
+          enum: [in, out]
+          description: >
+            "out" — the hit reaches this unit; "in" — this unit reaches the hit.
+        distance:
+          type: integer
+          description: Hops from the hit's own unit, 1..hops
+
+    EdgeHop:
+      type: object
+      description: One edge together with the unit on its far side, when it resolved.
+      properties:
+        edge:
+          $ref: "#/components/schemas/GraphEdge"
+        unit:
+          $ref: "#/components/schemas/Unit"
+
+    NeighborsResponse:
+      type: object
+      properties:
+        center:
+          $ref: "#/components/schemas/Unit"
+        out:
+          type: array
+          items:
+            $ref: "#/components/schemas/EdgeHop"
+        in:
+          type: array
+          items:
+            $ref: "#/components/schemas/EdgeHop"
+
+    PathStep:
+      type: object
+      properties:
+        edge:
+          $ref: "#/components/schemas/GraphEdge"
+        unit:
+          $ref: "#/components/schemas/Unit"
+        via:
+          type: string
+
+    TraceStep:
+      type: object
+      properties:
+        unit:
+          $ref: "#/components/schemas/Unit"
+        service:
+          type: string
+        tracked:
+          type: array
+          items:
+            type: string
+          description: Identifiers the value is carried in at this step
+        via:
+          type: string
+          description: Edge kind that led here
+        note:
+          type: string
+        line:
+          type: integer
+        confidence:
+          type: number
+          format: float
+
+    TraceResponse:
+      type: object
+      properties:
+        param:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/TraceStep"
+        alternatives:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: "#/components/schemas/TraceStep"
+        chains:
+          type: integer
+
+    Position:
+      type: object
+      properties:
+        line:
+          type: integer
+          description: 1-based. Line 0 resolves to nothing.
+        character:
+          type: integer
+          description: Accepted and ignored; resolution is by line.
+
+    DefinitionRequest:
+      type: object
+      required: [repo_id, file_path, position]
+      properties:
+        repo_id:
+          type: string
+        file_path:
+          type: string
+        position:
+          $ref: "#/components/schemas/Position"
+
+    ReferencesRequest:
+      type: object
+      required: [repo_id, file_path, position]
+      properties:
+        repo_id:
+          type: string
+        file_path:
+          type: string
+        position:
+          $ref: "#/components/schemas/Position"
+        limit:
+          type: integer
+          default: 50
+          minimum: 0
+          maximum: 500
+          description: >
+            References to return in total, across both of the lookups the
+            endpoint makes. 0 or absent means the default of 50, and anything
+            above 500 is clamped to 500 — an out-of-range value is never
+            rejected. Resolved references draw on the budget first; unresolved
+            ones fill only what is left.
+
+    SymbolRequest:
+      type: object
+      description: >
+        No single property is required, but at least one selector must be
+        present; the handler rejects a request carrying none of repo_id, name,
+        kind, qualified or symbol.
+      properties:
+        repo_id:
+          type: string
+          description: >
+            Which repository answers. Omitted, the answer comes from the active
+            repositories only — this endpoint is retrieval and is scoped like
+            /search, see RepoScope; named, that repository answers whether it is
+            active or not.
+        name:
+          type: string
+          description: Exact symbol name. Narrows together with `qualified`.
+        kind:
+          type: string
+          description: function, method, class, rpc_method, db_table, config_key, ...
+        qualified:
+          type: string
+          description: Exact qualified name. Narrows together with `name`.
+        symbol:
+          type: string
+          description: >
+            One term matched against the name *or* the qualified name — what a
+            caller holding a single identifier out of a question has. Prefer
+            this over guessing which of the two fields the identifier is.
+        limit:
+          type: integer
+
+    ASTSymbol:
+      type: object
+      properties:
+        id:
+          type: string
+        repo_id:
+          type: string
+        file_path:
+          type: string
+        language:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        qualified:
+          type: string
+        start_line:
+          type: integer
+        end_line:
+          type: integer
+        doc:
+          type: string
+
+    ASTReference:
+      type: object
+      properties:
+        repo_id:
+          type: string
+        file_path:
+          type: string
+        line:
+          type: integer
+        kind:
+          type: string
+        word:
+          type: string
+        target:
+          type: string
+
+    ContextRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        repos:
+          $ref: "#/components/schemas/RepoScope"
+        mode:
+          type: string
+          enum: [semantic, keyword, hybrid]
+          default: keyword
+        limit:
+          type: integer
+          default: 5
+          maximum: 20
+          description: Items to return; clamped to 20 rather than rejected
+        hops:
+          type: integer
+          default: 1
+          maximum: 3
+          description: >
+            Graph expansion depth around each hit; clamped to 3 rather than
+            rejected. Cost grows quickly with it — see the endpoint description.
+        intent:
+          $ref: "#/components/schemas/Intent"
+        max_bytes:
+          $ref: "#/components/schemas/MaxBytes"
+        snippet:
+          $ref: "#/components/schemas/SnippetMode"
+
+    ServicesResponse:
+      type: object
+      properties:
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/ServiceInfo"
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/ServiceLink"
+        truncated:
+          type: boolean
+          description: "`limit` cut one of the two lists short"
+
+    ServiceInfo:
+      type: object
+      properties:
+        repo_id:
+          type: string
+        name:
+          type: string
+        root:
+          type: string
+        detected_by:
+          type: string
+        unit_id:
+          type: string
+
+    ServiceLink:
+      type: object
+      properties:
+        src_repo:
+          type: string
+        src_service:
+          type: string
+        dst_repo:
+          type: string
+        dst_service:
+          type: string
+        kind:
+          type: string
+          description: rpc_call | http_call | kafka_flow | runtime_call
+        via:
+          type: string
+          description: "Contract key: grpc:..., http:..., topic:..."
+        count:
+          type: integer
+        confidence:
+          type: number
+          format: float
+
+    TopicsResponse:
+      type: object
+      properties:
+        topics:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopicInfo"
+
+    TopicInfo:
+      type: object
+      properties:
+        topic:
+          type: string
+          description: Topic name, with any `topic:` contract prefix removed
+        producers:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopicNode"
+        consumers:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopicNode"
+        description:
+          type: string
+          description: From an AsyncAPI channel declaration, when one exists
+        declared:
+          type: boolean
+          description: >
+            The topic is declared in an AsyncAPI spec. A declared topic with
+            empty producer and consumer lists is a contract nothing indexed
+            here is on either end of.
+
+    TopicNode:
+      type: object
+      description: One end of a topic — the code, and the service it belongs to.
+      properties:
+        unit:
+          $ref: "#/components/schemas/Unit"
+        service:
+          type: string
+
+    RuntimeServiceEdge:
+      type: object
+      required: [client, server]
+      properties:
+        client:
+          type: string
+        server:
+          type: string
+        calls:
+          type: integer
+          format: int64
+
+    GitWebhookPayload:
+      type: object
+      description: GitHub or GitLab push event (only repository identifiers are used)
+      properties:
+        repository:
+          type: object
+          properties:
+            name:
+              type: string
+            full_name:
+              type: string
+            clone_url:
+              type: string
+            git_http_url:
+              type: string
+            ssh_url:
+              type: string
+        project:
+          type: object
+          properties:
+            name:
+              type: string
+            path_with_namespace:
+              type: string
+            git_http_url:
+              type: string
+            git_ssh_url:
+              type: string

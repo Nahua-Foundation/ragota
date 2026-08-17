@@ -1,0 +1,27 @@
+# TypeScript language server exposed over TCP via socat.
+# socat's fork option starts one server process per connection, so the server
+# survives client reconnects.
+FROM node:20-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends socat \
+    && rm -rf /var/lib/apt/lists/*
+
+# typescript is pinned to 5.x: 6+/7+ ship a native tsserver without the
+# lib/tsserver.js entry point that typescript-language-server requires.
+# Both are pinned: an unpinned language server changes behaviour between two
+# builds of the same commit.
+ARG TYPESCRIPT_VERSION=5.6.3
+ARG TS_LANGUAGE_SERVER_VERSION=4.3.3
+RUN npm install -g typescript@${TYPESCRIPT_VERSION} typescript-language-server@${TS_LANGUAGE_SERVER_VERSION}
+
+# Workspaces mounted at /workspace usually have no node_modules/typescript;
+# point module resolution at the global install so tsserver is always found.
+ENV NODE_PATH=/usr/local/lib/node_modules
+
+EXPOSE 2087
+# Mounted workspaces have no local node_modules/typescript; clients must point
+# the server at the global install via initializationOptions:
+#   {"tsserver": {"path": "/usr/local/lib/node_modules/typescript/lib"}}
+# (the lsp.servers.typescript.init_options config default does exactly that).
+CMD ["socat", "TCP-LISTEN:2087,reuseaddr,fork", "EXEC:'typescript-language-server --stdio'"]
