@@ -934,9 +934,9 @@ refuse to talk to. A test keeps the two spellings of it from drifting apart.
 ```
 cmd/server/main.go       — flags, the `run`/`repos` subcommands, config, setup.Build, http.Server
 cmd/server/checkconfig.go — --check-config validation + dependency dry-run
-cmd/waitport/            — tiny TCP readiness probe used by the Makefile
-cmd/lspprobe/            — what one language server can answer for a repo, and what it costs
-cmd/lspcalls/            — run the LSP call-edge pass over an existing index (no reindex)
+tools/waitport/            — tiny TCP readiness probe used by the Makefile
+tools/lspprobe/            — what one language server can answer for a repo, and what it costs
+tools/lspcalls/            — run the LSP call-edge pass over an existing index (no reindex)
 deploy/                  — service image, compose stacks, LSP server images
 internal/
   api/                   — HTTP handlers, routes, auth, ratelimit, types
@@ -1188,7 +1188,7 @@ writer, not what is already on disk. After upgrading:
 
 ```bash
 # 1. check an index on disk; it exits non-zero and names the affected terms
-go run ./cmd/zapcheck ~/.ragota-core/data/bm25
+go run ./tools/zapcheck ~/.ragota-core/data/bm25
 
 # 2. if it reports damage, force a full reindex of every repository
 curl -X POST http://localhost:8080/api/v1/repos/{id}/index -d '{"force": true}'

@@ -849,7 +849,7 @@ whose postings skip a full chunk mid-range — for this corpus, repo_id and
 language terms in segments merged across repositories. The visible overflow was
 the rare case; most affected terms silently return wrong results. The fix is
 the patched module under `third_party/zapx-v17` (see its RAGOTA-PATCH.md), the
-regression tests live in `internal/zapverify`, and `cmd/zapcheck` verifies an
+regression tests live in `internal/zapverify`, and `tools/zapcheck` verifies an
 index on disk. Indexes written before the fix remain corrupt and need a forced
 reindex; a clean baseline should be re-measured after rebuilding them, since
 "the run above is clean" only means the queries asked did not cross a poisoned
@@ -1028,7 +1028,7 @@ and applies the answer to the edges that already exist (see the README section
 
 Measured as a pure A/B on **one** index: 59 questions, nine repositories,
 `cards+rerank/hybrid`, binary `dev (e9eac7f)`. The A side was scored, the call
-pass was then run over that same database with `cmd/lspcalls`, and the B side
+pass was then run over that same database with `tools/lspcalls`, and the B side
 was scored without reindexing — so BM25, the vector collection and the reranker
 saw byte-identical inputs and the only difference is the graph.
 

@@ -26,7 +26,7 @@ from silently wrong search results to `memUvarintReader overflow` errors and
 index-out-of-range panics during search — the intermittent BM25 corruption the
 retrieval eval recorded. `internal/zapverify` holds the regression tests
 (`chunktable_regression_test.go`) that reproduce the corruption
-deterministically against the unpatched module, and `cmd/zapcheck` verifies
+deterministically against the unpatched module, and `tools/zapcheck` verifies
 existing indexes.
 
 Indexes written before the fix stay corrupt on disk; they need a forced

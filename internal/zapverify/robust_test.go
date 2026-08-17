@@ -8,7 +8,7 @@ import (
 
 // TestSegmentDoesNotPanicOnCorruptInput pins the recover added to Segment: a
 // file that is not a readable zap segment must come back as an OpenErr, never a
-// panic that takes the caller (cmd/zapcheck, cmd/bm25stress, an ops cron) down.
+// panic that takes the caller (tools/zapcheck, cmd/bm25stress, an ops cron) down.
 func TestSegmentDoesNotPanicOnCorruptInput(t *testing.T) {
 	cases := map[string][]byte{
 		"empty":     {},

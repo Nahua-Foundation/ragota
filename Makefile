@@ -220,7 +220,7 @@ test-e2e-lsp: lsp-up
 	@for p in $(LSP_PORTS); do \
 		ok=0; \
 		for i in $$(seq 1 60); do \
-			if go run ./cmd/waitport 127.0.0.1:$$p >/dev/null 2>&1; then ok=1; break; fi; \
+			if go run ./tools/waitport 127.0.0.1:$$p >/dev/null 2>&1; then ok=1; break; fi; \
 			sleep 1; \
 		done; \
 		if [ "$$ok" -ne 1 ]; then \
