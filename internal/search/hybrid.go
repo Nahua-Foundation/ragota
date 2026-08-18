@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Nahua-Foundation/ragota/internal/indexing"
 	"github.com/Nahua-Foundation/ragota/internal/llm"
@@ -494,6 +495,30 @@ func (s *Service) KeywordSearch(ctx context.Context, query *indexing.SearchQuery
 	return s.singleSearch(ctx, indexing.IndexTypeBM25, query)
 }
 
+// rerankMaxDocBytes caps one document sent to the rerank service, cut on a
+// rune boundary. Two reasons, both observed rather than theoretical. A strict
+// server errors past its batch: llama.cpp answers HTTP 500 for any pair over
+// its physical batch, and one oversized snippet then costs the whole query its
+// reranking (TEI hides the same limit by truncating silently — which is also
+// why the eval stack never showed it). And an unbounded document is memory on
+// the serving side: a llama-server fed whole snippets grew from 1.1 GB to
+// 4.3 GB resident over one eval's worth of queries. 4 KB is ~1k tokens of
+// code — a cross-encoder scores the head of a document, and a 60-line snippet
+// rarely exceeds it, so the cap trims pathological lines, not real evidence.
+const rerankMaxDocBytes = 4096
+
+// truncateRerankDoc enforces rerankMaxDocBytes on a rune boundary.
+func truncateRerankDoc(doc string) string {
+	if len(doc) <= rerankMaxDocBytes {
+		return doc
+	}
+	cut := rerankMaxDocBytes
+	for cut > 0 && !utf8.RuneStart(doc[cut]) {
+		cut--
+	}
+	return doc[:cut]
+}
+
 // applyRerank reorders the first min(rerankTopN, len(hits)) hits by reranker
 // scores; the tail keeps its original order. Reranked hits keep scores in the
 // fusion range (see blendRerankScores) and get "+rerank" appended to Reason.
@@ -518,7 +543,7 @@ func (s *Service) applyRerank(ctx context.Context, query string, hits []*indexin
 		if doc == "" {
 			doc = h.FilePath
 		}
-		docs[i] = doc
+		docs[i] = truncateRerankDoc(doc)
 	}
 
 	start := time.Now()

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Nahua-Foundation/ragota/internal/indexing"
 )
@@ -179,5 +180,44 @@ func TestRerankSingleHitSkipped(t *testing.T) {
 	}
 	if rr.seen != nil {
 		t.Errorf("reranker must not be called for a single hit")
+	}
+}
+
+// A document longer than rerankMaxDocBytes reaches the rerank service cut to
+// the cap on a rune boundary. One oversized snippet used to cost the whole
+// query its reranking on a strict server (llama.cpp answers HTTP 500 past its
+// physical batch), and unbounded documents were measured as serving-side
+// memory growth; the cap is the contract that neither can happen.
+func TestRerankTruncatesOversizedDocuments(t *testing.T) {
+	ctx := context.Background()
+	long := strings.Repeat("если б", 2000) // multi-byte runes, ~22 KB
+	hits := []*indexing.Hit{
+		{RepoID: "r1", FilePath: "/big.go", Path: "/big.go", Line: 1, Score: 0.9, Snippet: long, Reason: "keyword"},
+		{RepoID: "r1", FilePath: "/small.go", Path: "/small.go", Line: 2, Score: 0.8, Snippet: "tiny", Reason: "keyword"},
+	}
+	svc := New(map[indexing.IndexType]indexing.Searcher{
+		indexing.IndexTypeBM25: &mockSearcher{name: indexing.IndexTypeBM25, hits: hits},
+	}, nil)
+	rr := &fakeReranker{}
+	svc.SetReranker(rr, 50)
+
+	if _, err := svc.KeywordSearch(ctx, &indexing.SearchQuery{Query: "test", Limit: 10}); err != nil {
+		t.Fatalf("KeywordSearch() error = %v", err)
+	}
+	if len(rr.seen) != 2 {
+		t.Fatalf("reranker saw %d documents, want 2", len(rr.seen))
+	}
+	got := rr.seen[0]
+	if len(got) > rerankMaxDocBytes {
+		t.Fatalf("document reached the reranker at %d bytes, cap is %d", len(got), rerankMaxDocBytes)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("truncation split a rune")
+	}
+	if !strings.HasPrefix(long, got) {
+		t.Fatal("truncated document is not a prefix of the original")
+	}
+	if rr.seen[1] != "tiny" {
+		t.Fatalf("small document was altered: %q", rr.seen[1])
 	}
 }
