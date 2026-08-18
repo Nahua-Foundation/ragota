@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -318,3 +319,18 @@ func (s *Service) SetReconAssistant(gen llm.Generator, recon, disambiguate bool)
 // (or never calling it, which is what the server does) turns every publish
 // into a no-op; nothing in the indexing path may depend on a bus existing.
 func (s *Service) SetStatusBus(b *status.Bus) { s.bus = b }
+
+// ErrRepoBusy is returned when a repository is already being indexed. It is a
+// retry condition, not a malformed request: callers map it to 409/503.
+var ErrRepoBusy = errors.New("repo is already indexing")
+
+// terminalWriteTimeout bounds the detached status/bookkeeping writes made
+// after a run finishes, including during shutdown.
+const terminalWriteTimeout = 15 * time.Second
+
+// terminalCtx derives a context for the writes that record how a run ended.
+// They must survive cancellation of the run's own context — Close cancels it,
+// and a dropped terminal write is exactly what leaves a repo claimed forever.
+func terminalCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), terminalWriteTimeout)
+}

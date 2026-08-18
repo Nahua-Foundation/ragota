@@ -489,3 +489,43 @@ func (s *Service) ApplyLocalChanges(ctx context.Context, repoID string, files []
 	}
 	return nil
 }
+
+// clearPendingCommit retracts the in-flight SHA of a batch that is not going
+// to be applied by this job. Leaving it set is exactly the "in flight" answer
+// /sync-state must not give about a batch nobody holds any more.
+func (s *Service) clearPendingCommit(ctx context.Context, repo *repos.Repo, target string) {
+	if repo.PendingCommit != target {
+		return
+	}
+	bookCtx, cancel := terminalCtx(ctx)
+	defer cancel()
+	if err := s.storage.SetRepoPendingCommit(bookCtx, repo.ID, ""); err != nil {
+		slog.Warn("clear pending commit failed", "repo_id", repo.ID, "err", err)
+	}
+}
+
+// commitBatchOrder says how a claimed commit batch relates to the repo's
+// cursor.
+type commitBatchOrder int
+
+const (
+	commitBatchNext     commitBatchOrder = iota // continues the cursor: apply it
+	commitBatchApplied                          // the cursor already covers it
+	commitBatchTooEarly                         // an earlier batch has to land first
+)
+
+// commitJobOrder re-checks at claim time what ApplyCommits checked at accept
+// time. The queue is ordered but claiming is not: with two batches queued for
+// one repo, two workers can claim both at once, and only the cursor says which
+// one may run.
+func commitJobOrder(repo *repos.Repo, commits []CommitEvent) commitBatchOrder {
+	if repo.LastCommit == "" || hasParent(commits[0].Parents, repo.LastCommit) {
+		return commitBatchNext
+	}
+	for _, c := range commits {
+		if c.SHA == repo.LastCommit {
+			return commitBatchApplied
+		}
+	}
+	return commitBatchTooEarly
+}
