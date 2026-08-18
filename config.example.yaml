@@ -178,6 +178,15 @@ indexes:
 #     # server still publishes it as /v1/rerank rather than under
 #     # /v1/chat/completions — include /v1 in base_url for vLLM, Cohere and Jina,
 #     # and leave it out for a bare TEI or Infinity container.
+#     #
+#     # llama.cpp (llama-server --rerank) needs its physical batch sized to
+#     # the largest query+document pair: the default of 512 tokens answers
+#     # HTTP 500 "input is too large to process" for any code snippet past
+#     # ~500 tokens, search logs "rerank failed; keeping original order" per
+#     # query, and every result keeps its pre-rerank rank. TEI never shows
+#     # the problem because it silently truncates instead. Start it as
+#     #   llama-server -hf <model> --rerank -c 8192 -b 4096 -ub 4096
+#     # and the whole top_n reranks; -ub is the ceiling that matters.
 #     base_url: http://localhost:8090
 #     model: ""               # optional for TEI; required by vLLM and Cohere
 #     top_n: 25               # leading candidates fed to the reranker (see the table above)
