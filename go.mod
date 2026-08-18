@@ -5,10 +5,10 @@ go 1.26.4
 require (
 	github.com/RoaringBitmap/roaring/v2 v2.14.5
 	github.com/blevesearch/bleve/v2 v2.6.0
-	github.com/blevesearch/bleve_index_api v1.3.11
+	github.com/blevesearch/bleve_index_api v1.3.12
 	github.com/blevesearch/scorch_segment_api/v2 v2.4.7
 	github.com/blevesearch/vellum v1.2.0
-	github.com/blevesearch/zapx/v17 v17.1.2
+	github.com/blevesearch/zapx/v17 v17.1.9
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -28,7 +28,7 @@ require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
 	github.com/blevesearch/geo v0.2.5 // indirect
-	github.com/blevesearch/go-faiss v1.1.0 // indirect
+	github.com/blevesearch/go-faiss v1.1.5 // indirect
 	github.com/blevesearch/go-porterstemmer v1.0.3 // indirect
 	github.com/blevesearch/gtreap v0.1.1 // indirect
 	github.com/blevesearch/mmap-go v1.2.0 // indirect
@@ -84,5 +84,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/blevesearch/zapx/v17 => ./third_party/zapx-v17

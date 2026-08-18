@@ -847,10 +847,11 @@ That failure has since been traced to its root cause: zapx v17.1.2 (the segment
 writer bleve v2.6.0 pins) corrupts the postings chunk-offset table of any term
 whose postings skip a full chunk mid-range — for this corpus, repo_id and
 language terms in segments merged across repositories. The visible overflow was
-the rare case; most affected terms silently return wrong results. The fix is
-the patched module under `third_party/zapx-v17` (see its RAGOTA-PATCH.md), the
-regression tests live in `internal/zapverify`, and `tools/zapcheck` verifies an
-index on disk. Indexes written before the fix remain corrupt and need a forced
+the rare case; most affected terms silently return wrong results. The fix
+shipped upstream in zapx v17.1.9, which go.mod now requires directly (an
+interim local patch under `third_party/zapx-v17` carried the same fix until
+then); the regression tests live in `internal/zapverify`, and `tools/zapcheck`
+verifies an index on disk. Indexes written before the fix remain corrupt and need a forced
 reindex; a clean baseline should be re-measured after rebuilding them, since
 "the run above is clean" only means the queries asked did not cross a poisoned
 chunk boundary.
