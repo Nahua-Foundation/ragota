@@ -10,8 +10,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/Nahua-Foundation/ragota/internal/service/promote"
 	wire "github.com/Nahua-Foundation/ragota/client"
+	"github.com/Nahua-Foundation/ragota/internal/service/promote"
 )
 
 // The embedded spec is the contract an external repository generates its client

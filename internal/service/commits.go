@@ -40,12 +40,12 @@ type CommitEvent struct {
 // modes exactly as IndexAck does: the batch has either started applying in
 // this instance or is only queued, and a queued batch is followed by job id.
 type CommitAck struct {
-	Accepted bool   `json:"-"`                  // false = commit gap; nothing was queued or applied
-	Status   string `json:"status"`             // indexing | queued
-	Queued   bool   `json:"queued"`             // true when the batch is only enqueued
-	JobID    string `json:"job_id,omitempty"`   // distributed mode
-	Target   string `json:"pending_commit"`     // SHA the batch advances the cursor to
-	Before   string `json:"last_commit_before"` // cursor before this batch
+	Accepted bool   // false = commit gap; nothing was queued or applied
+	Status   string // indexing | queued
+	Queued   bool   // true when the batch is only enqueued
+	JobID    string // distributed mode
+	Target   string // SHA the batch advances the cursor to
+	Before   string // cursor before this batch
 }
 
 // ApplyCommits incrementally indexes a batch of commits pushed by an external

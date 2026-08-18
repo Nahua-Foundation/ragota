@@ -405,7 +405,7 @@ func (s *Server) HandleRepoCommits(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, ack)
+	writeJSON(w, http.StatusAccepted, commitAckPayload(ack))
 }
 
 // defaultJobsLimit is the page size of a job listing when the caller does not
@@ -663,7 +663,7 @@ func (s *Server) HandleReady(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	writeJSON(w, http.StatusOK, StatusPayload{Status: "ready"})
 }
 
 // --- Graph handlers ---
@@ -871,7 +871,7 @@ func (s *Server) HandleGitWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "indexing", "repo_id": repo.ID})
+	writeJSON(w, http.StatusAccepted, StatusPayload{Status: "indexing", RepoID: repo.ID})
 }
 
 // authorizeWebhook reports whether a webhook request proves knowledge of the
@@ -952,12 +952,18 @@ func (s *Server) HandleOTelServiceGraph(w http.ResponseWriter, r *http.Request) 
 		writeError(w, fmt.Errorf("%w: edges are required", service.ErrBadRequest))
 		return
 	}
-	res, err := s.svc.IngestRuntimeServiceGraph(r.Context(), req.Edges)
+	edges := make([]service.RuntimeServiceEdge, len(req.Edges))
+	for i, e := range req.Edges {
+		edges[i] = service.RuntimeServiceEdge{Client: e.Client, Server: e.Server, Calls: e.Calls}
+	}
+	res, err := s.svc.IngestRuntimeServiceGraph(r.Context(), edges)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusOK, IngestResultPayload{
+		Received: res.Received, Stored: res.Stored, Unmatched: res.Unmatched, Known: res.Known,
+	})
 }
 
 // HandleCompact settles the index layout on demand.
@@ -970,5 +976,5 @@ func (s *Server) HandleOTelServiceGraph(w http.ResponseWriter, r *http.Request) 
 // indexes.bm25.no_compact and calls this once when it is done.
 func (s *Server) HandleCompact(w http.ResponseWriter, r *http.Request) {
 	took := s.svc.CompactIndexes(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{"compacted_ms": took})
+	writeJSON(w, http.StatusOK, CompactPayload{CompactedMS: took})
 }

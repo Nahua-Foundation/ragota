@@ -141,9 +141,9 @@ func (s *Service) FindRepoByHints(ctx context.Context, hints []string) (*repos.R
 
 // RuntimeServiceEdge is one observed client->server link from tracing data.
 type RuntimeServiceEdge struct {
-	Client string `json:"client"`
-	Server string `json:"server"`
-	Calls  int64  `json:"calls,omitempty"`
+	Client string
+	Server string
+	Calls  int64
 }
 
 // RuntimeIngestResult reports what an ingest actually did. A tracing backend
@@ -153,10 +153,10 @@ type RuntimeServiceEdge struct {
 // it could not place is unusable: the caller has no way to tell a
 // configuration mistake from an empty graph.
 type RuntimeIngestResult struct {
-	Received  int      `json:"received"`
-	Stored    int      `json:"stored"`
-	Unmatched []string `json:"unmatched,omitempty"` // service names with no detected service
-	Known     []string `json:"known,omitempty"`     // detected service names, when nothing matched
+	Received  int
+	Stored    int
+	Unmatched []string // service names with no detected service
+	Known     []string // detected service names, when nothing matched
 }
 
 // IngestRuntimeServiceGraph replaces runtime_call edges with links observed in
