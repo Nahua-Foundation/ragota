@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Nahua-Foundation/ragota/pkg/client"
+	"github.com/Nahua-Foundation/ragota/client"
 )
 
 // explain turns a failure into the sentence a model should read.

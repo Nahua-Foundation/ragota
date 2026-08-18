@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/Nahua-Foundation/ragota/internal/service/promote"
-	wire "github.com/Nahua-Foundation/ragota/pkg/client"
+	wire "github.com/Nahua-Foundation/ragota/client"
 )
 
 // The embedded spec is the contract an external repository generates its client
@@ -115,7 +115,7 @@ func TestEveryServedCodeHasAClientSentinel(t *testing.T) {
 	for code := range documented {
 		sentinel, ok := sentinels[code]
 		if !ok {
-			t.Errorf("error code %q is served but pkg/client has no sentinel for it", code)
+			t.Errorf("error code %q is served but client has no sentinel for it", code)
 			continue
 		}
 		// The value must actually match an error carrying that code, which is
@@ -127,7 +127,7 @@ func TestEveryServedCodeHasAClientSentinel(t *testing.T) {
 	}
 	for code := range sentinels {
 		if !documented[code] {
-			t.Errorf("pkg/client has a sentinel for %q, which nothing serves", code)
+			t.Errorf("client has a sentinel for %q, which nothing serves", code)
 		}
 	}
 }
@@ -386,7 +386,7 @@ func pathDescription(t *testing.T, path, method string) string {
 }
 
 // TestSpecMatchesTheRepoType: /repos is where a client learns what a repository
-// is, and the type it reads back is pkg/client.Repo. A field served and not
+// is, and the type it reads back is client.Repo. A field served and not
 // documented is one a generated client drops — which is how `active` could be
 // served while every scoping rule that depends on it stayed invisible.
 func TestSpecMatchesTheRepoType(t *testing.T) {

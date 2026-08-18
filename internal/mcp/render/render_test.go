@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nahua-Foundation/ragota/pkg/client"
+	"github.com/Nahua-Foundation/ragota/client"
 )
 
 func TestSearchLocationsCarryTheRangeAndTheRepo(t *testing.T) {

@@ -34,7 +34,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Nahua-Foundation/ragota/pkg/client"
+	"github.com/Nahua-Foundation/ragota/client"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 

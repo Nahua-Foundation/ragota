@@ -8,7 +8,7 @@ title: HTTP API
 The full contract lives in
 [`internal/api/openapi.yaml`](https://github.com/Nahua-Foundation/ragota/blob/v2/internal/api/openapi.yaml);
 Go callers get the same surface typed in
-[`pkg/client`](https://github.com/Nahua-Foundation/ragota/tree/v2/pkg/client).
+[`client`](https://github.com/Nahua-Foundation/ragota/tree/v2/client).
 This page is the map.
 
 Everything is under `/api/v1`, JSON in, JSON out. `GET /health` (no auth,

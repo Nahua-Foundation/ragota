@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nahua-Foundation/ragota/pkg/client"
+	"github.com/Nahua-Foundation/ragota/client"
 )
 
 // coreStub answers just enough for the startup check, which is all this file is

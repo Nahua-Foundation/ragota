@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nahua-Foundation/ragota/pkg/client"
+	"github.com/Nahua-Foundation/ragota/client"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Nahua-Foundation/ragota/internal/mcp/config"

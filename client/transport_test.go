@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nahua-Foundation/ragota/pkg/client"
+	"github.com/Nahua-Foundation/ragota/client"
 )
 
 // The retry behaviour is about what the transport does between answers, which

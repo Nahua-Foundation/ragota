@@ -13,7 +13,7 @@ import (
 	"github.com/Nahua-Foundation/ragota/internal/config"
 	"github.com/Nahua-Foundation/ragota/internal/setup"
 	"github.com/Nahua-Foundation/ragota/internal/testutil"
-	"github.com/Nahua-Foundation/ragota/pkg/client"
+	"github.com/Nahua-Foundation/ragota/client"
 )
 
 // The client exists to encode a contract, so it is checked against the server

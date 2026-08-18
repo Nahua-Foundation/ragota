@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nahua-Foundation/ragota/pkg/client"
+	"github.com/Nahua-Foundation/ragota/client"
 )
 
 // relatedPerItem bounds how many graph neighbours one /context item renders.

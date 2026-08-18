@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Nahua-Foundation/ragota/pkg/client"
+	"github.com/Nahua-Foundation/ragota/client"
 )
 
 // repoCacheTTL is how long a repository listing is reused.
