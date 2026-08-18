@@ -15,8 +15,15 @@ var knownDims = map[string]int{
 	"bge-small-en-v1.5":      384,
 	"all-minilm":             384,
 	"all-MiniLM-L6-v2":       384,
-	"qwen3-embedding:0.6b":   1536,
-	"qwen3-embedding":        1536,
+	// Qwen3-Embedding sizes each carry their own dimension and none of them
+	// is 1536 — the 0.6b entry used to say 1536, and a config without an
+	// explicit dimensions override then created a vector collection nothing
+	// could ever be inserted into. 1024 is what a live /api/embed answers.
+	// The bare "qwen3-embedding" tag is deliberately absent: which size it
+	// resolves to is Ollama's choice, so it has to set dimensions explicitly.
+	"qwen3-embedding:0.6b":   1024,
+	"qwen3-embedding:4b":     2560,
+	"qwen3-embedding:8b":     4096,
 	"text-embedding-3-small": 1536,
 	"text-embedding-3-large": 3072,
 	"text-embedding-ada-002": 1536,
