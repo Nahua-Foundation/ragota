@@ -31,7 +31,7 @@ func coreStub(t *testing.T, apiVersion string) *httptest.Server {
 
 func TestVersionFlagPrintsAndStops(t *testing.T) {
 	var out bytes.Buffer
-	if err := run([]string{"-version"}, &out); err != nil {
+	if err := runMCP([]string{"-version"}, &out); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if strings.TrimSpace(out.String()) != version {
@@ -45,7 +45,7 @@ func TestCheckFlagVerifiesAndExitsWithoutServing(t *testing.T) {
 	t.Setenv("RAGOTA_MCP_KEY", "k")
 
 	var out bytes.Buffer
-	if err := run([]string{"-check"}, &out); err != nil {
+	if err := runMCP([]string{"-check"}, &out); err != nil {
 		t.Fatalf("run -check: %v", err)
 	}
 	// -check must not fall through into serving, which would block on stdin.
@@ -63,7 +63,7 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	t.Setenv("RAGOTA_URL", "http://127.0.0.1:1")
 
 	var out bytes.Buffer
-	if err := run([]string{"-check", "-url", srv.URL}, &out); err != nil {
+	if err := runMCP([]string{"-check", "-url", srv.URL}, &out); err != nil {
 		t.Fatalf("run -check: %v", err)
 	}
 	if !strings.Contains(out.String(), srv.URL) {
@@ -76,7 +76,7 @@ func TestAnUnreachableServerFailsBeforeServing(t *testing.T) {
 	t.Setenv("RAGOTA_TIMEOUT", "1s")
 
 	var out bytes.Buffer
-	err := run([]string{"-check"}, &out)
+	err := runMCP([]string{"-check"}, &out)
 	if err == nil {
 		t.Fatal("run accepted an unreachable server")
 	}
@@ -90,7 +90,7 @@ func TestAnIncompatibleContractFailsBeforeServing(t *testing.T) {
 	t.Setenv("RAGOTA_URL", srv.URL)
 
 	var out bytes.Buffer
-	err := run([]string{"-check"}, &out)
+	err := runMCP([]string{"-check"}, &out)
 	if err == nil {
 		t.Fatal("run accepted a server on another major version")
 	}
@@ -105,7 +105,7 @@ func TestABadEnvironmentIsRejectedWithoutDialling(t *testing.T) {
 	t.Setenv("RAGOTA_TIMEOUT", "soon")
 
 	var out bytes.Buffer
-	err := run([]string{"-check"}, &out)
+	err := runMCP([]string{"-check"}, &out)
 	if err == nil || !strings.Contains(err.Error(), "RAGOTA_TIMEOUT") {
 		t.Fatalf("wanted a message naming RAGOTA_TIMEOUT, got %v", err)
 	}

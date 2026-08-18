@@ -40,7 +40,7 @@ One Go module, two binaries:
 | Binary | Role |
 |---|---|
 | `ragota` | The server: discovers, indexes and watches repositories; serves the HTTP API; optional terminal dashboard |
-| `ragota-mcp` | A thin, **read-only** MCP server over a running `ragota`, exposing ten tools to any MCP client |
+| `ragota mcp` | A thin, **read-only** MCP server over a running `ragota` — the same binary, exposing ten tools to any MCP client |
 
 Around them, in this repository:
 
@@ -54,7 +54,7 @@ Around them, in this repository:
 
 - [Getting started](./getting-started.md) — build, index a directory, ask
   the first question.
-- [Connecting an agent](./mcp.md) — wire `ragota-mcp` into Claude Code or
+- [Connecting an agent](./mcp.md) — wire `ragota mcp` into Claude Code or
   any MCP client.
 - [Quality](./quality.md) — what is measured, what the numbers are, and
   what they mean for trusting answers.

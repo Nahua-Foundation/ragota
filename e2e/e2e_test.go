@@ -1,7 +1,7 @@
 //go:build e2e
 
 // Package e2e proves the two shipped binaries against each other: cmd/server
-// built and started on a real corpus, cmd/mcp launched over stdio the way an
+// built and started on a real corpus, the mcp subcommand launched over stdio the way an
 // MCP client launches it, and the answers read back through both doors.
 //
 // The three phases follow the working-set lifecycle, because that is where an
@@ -32,7 +32,7 @@ import (
 // comments and nowhere in the gateway, so the right answer names payments.
 const chargeQuestion = "where is the charge captured and withdrawn from the card"
 
-// Every tool cmd/mcp serves. This is the public contract an agent's config
+// Every tool `ragota mcp` serves. This is the public contract an agent's config
 // relies on, so the test spells the set out rather than importing it from the
 // package under test. tools/list reports them sorted by name, which is what
 // this list is — the order tools are registered in is not part of the wire.
@@ -108,7 +108,7 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	t.Run("mcp serves the tool set and answers through it", func(t *testing.T) {
-		sess := connectMCP(t, bins.mcp, port)
+		sess := connectMCP(t, bins.server, port)
 
 		tools, err := sess.ListTools(ctx, nil)
 		if err != nil {
@@ -174,7 +174,7 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	t.Run("mcp reports the narrowed working set", func(t *testing.T) {
-		sess := connectMCP(t, bins.mcp, port)
+		sess := connectMCP(t, bins.server, port)
 
 		status := callText(t, sess, "ragota_status", nil)
 		if !strings.Contains(status, "1 in the working set") {
@@ -214,25 +214,21 @@ func TestEndToEnd(t *testing.T) {
 
 type binaries struct {
 	server string
-	mcp    string
 }
 
-// buildBinaries compiles both shipped commands the way a release would, so
-// the test exercises the artifacts and not just the packages.
+// buildBinaries compiles the one shipped command the way a release would, so
+// the test exercises the artifact and not just the packages. The MCP server
+// is the same binary's mcp subcommand, which is exactly what makes this one
+// build the whole install story.
 func buildBinaries(t *testing.T) binaries {
 	t.Helper()
 	dir := t.TempDir()
 	root := repoRoot(t)
-	b := binaries{
-		server: filepath.Join(dir, "ragota"),
-		mcp:    filepath.Join(dir, "ragota-mcp"),
-	}
-	for out, pkg := range map[string]string{b.server: "./cmd/server", b.mcp: "./cmd/mcp"} {
-		cmd := exec.Command("go", "build", "-o", out, pkg)
-		cmd.Dir = root
-		if msg, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("go build %s: %v\n%s", pkg, err, msg)
-		}
+	b := binaries{server: filepath.Join(dir, "ragota")}
+	cmd := exec.Command("go", "build", "-o", b.server, "./cmd/server")
+	cmd.Dir = root
+	if msg, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./cmd/server: %v\n%s", err, msg)
 	}
 	return b
 }
@@ -428,11 +424,12 @@ func describeHits(hits []*client.SearchHit) string {
 
 // --- mcp ---
 
-// connectMCP launches cmd/mcp exactly as an MCP client does: a subprocess
-// speaking the protocol on stdio, configured through the environment.
+// connectMCP launches `ragota mcp` exactly as an MCP client does: a
+// subprocess speaking the protocol on stdio, configured through the
+// environment.
 func connectMCP(t *testing.T, bin string, port int) *mcp.ClientSession {
 	t.Helper()
-	cmd := exec.Command(bin)
+	cmd := exec.Command(bin, "mcp")
 	cmd.Env = append(os.Environ(), fmt.Sprintf("RAGOTA_URL=http://127.0.0.1:%d", port))
 	cmd.Stderr = os.Stderr
 

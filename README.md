@@ -20,16 +20,26 @@ them when the index beats their own grep — and when it does not.
 | Piece | What it is |
 |---|---|
 | `cmd/server` → `bin/ragota` | The server: indexing, watching, HTTP API, terminal dashboard |
-| `cmd/mcp` → `bin/ragota-mcp` | Read-only MCP server over a running `ragota`; ten tools for any MCP client |
+| `ragota mcp` | Read-only MCP server over the same binary: ten tools for any MCP client, on stdio |
 | [`skills/`](skills/README.md) | Agent Skills: when to use the index vs glob/grep/read, the graph tools, the empty-answer protocol |
 | [`docs/`](docs/) | The documentation site (Docusaurus): `make docs` |
 | `tools/eval` | The measured retrieval benchmark behind every quality claim |
-| `e2e/` | Both shipped binaries driven from outside: `make e2e`, ~6 s |
+| `e2e/` | The shipped binary driven from outside, both doors: `make e2e`, ~6 s |
+
+## Install
+
+Grab the archive for your platform from the [releases page](https://github.com/Nahua-Foundation/ragota/releases), unpack, and put `ragota` on your PATH — it is the whole product: the server, `repos` administration and the MCP server are subcommands of one file.
+
+```bash
+tar -xzf ragota_v*_darwin_arm64.tar.gz && sudo mv ragota_v*_darwin_arm64/ragota /usr/local/bin/
+```
+
+Releases are cut from a maintainer machine with `make release VERSION=vX.Y.Z` — no CI in the loop; `make release-snapshot` proves the same artifacts without publishing. Building from source needs Go 1.26+ and a C compiler (the tree-sitter grammars).
 
 ## Quick start
 
 ```bash
-make binary                                            # bin/ragota, bin/ragota-mcp
+make binary                                            # bin/ragota — server, repos and mcp in one binary
 ./bin/ragota --source ~/projects --watch --interactive run
 ```
 
@@ -37,7 +47,7 @@ Every repository under `--source` is discovered, indexed and kept fresh;
 the dashboard shows progress. Then connect an agent:
 
 ```bash
-claude mcp add ragota $(pwd)/bin/ragota-mcp -e RAGOTA_URL=http://localhost:8080
+claude mcp add ragota -e RAGOTA_URL=http://localhost:8080 -- $(pwd)/bin/ragota mcp
 ```
 
 and install the skills into the workspace the agent analyzes code in:
@@ -86,7 +96,7 @@ no network.
 ## Lineage
 
 This branch (`v2`) is the unification of two projects: **ragota-core** (the
-API-first indexing server) and **ragota-mcp** (the MCP server over it),
+API-first indexing server) and its MCP server (now the `mcp` subcommand),
 merged into one module under one name. Their commit histories live in their
 original repositories; the v1 local tool this repository used to hold is on
 `master`.

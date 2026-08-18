@@ -10,7 +10,7 @@ title: Getting started
 Go 1.26+ with cgo enabled (the AST extractors use tree-sitter):
 
 ```bash
-make binary        # → bin/ragota and bin/ragota-mcp
+make binary        # → bin/ragota (server, repos and mcp in one binary)
 ```
 
 ## Index a directory of projects

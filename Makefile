@@ -38,7 +38,6 @@ STACK_COMPOSE := $(COMPOSE) -f deploy/docker-compose.yml
 LSP_PORTS   := 7301 7302 7303 7304
 
 BIN        := ragota
-MCP_BIN    := ragota-mcp
 BIN_DIR    := bin
 VERSION    := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS    := -X main.version=$(VERSION)
@@ -53,7 +52,8 @@ CONFIG ?= config.yaml
 
 .DEFAULT_GOAL := build
 
-.PHONY: build binary install run check-config vet fmt fmt-check lint lint-install sqlc \
+.PHONY: up release release-snapshot \
+	build binary install run check-config vet fmt fmt-check lint lint-install sqlc \
 	test test-integration test-e2e e2e test-postgres test-qdrant test-e2e-postgres ci \
 	lsp-build lsp-up lsp-down test-e2e-lsp compose-check compose-up compose-down compose-logs help \
 	corpus-clone corpus-bench corpus-measure eval eval-fast eval-validate \
@@ -62,19 +62,34 @@ CONFIG ?= config.yaml
 build:
 	go build ./...
 
-# Version-stamped binaries (--version reports it).
+# The one version-stamped binary (--version reports it); the server, repos
+# and the MCP server are its subcommands.
 binary:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BIN) ./cmd/server
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(MCP_BIN) ./cmd/mcp
 
 install:
 	go build -ldflags "$(LDFLAGS)" -o $(INSTALL_DIR)/$(BIN) ./cmd/server
-	go build -ldflags "$(LDFLAGS)" -o $(INSTALL_DIR)/$(MCP_BIN) ./cmd/mcp
-	@echo "installed $(INSTALL_DIR)/$(BIN) and $(INSTALL_DIR)/$(MCP_BIN)"
+	@echo "installed $(INSTALL_DIR)/$(BIN)"
 
 # Runs the server against $(CONFIG); RAGOTA_CONFIG still works.
 run: binary
 	./$(BIN_DIR)/$(BIN) --config $(CONFIG)
+
+# The whole local stack from a cold machine — qdrant, embedder, reranker,
+# wiring check — then the server over a directory of repositories:
+#   make up SOURCE=~/projects
+up: binary
+	scripts/up.sh $(SOURCE)
+
+# Cross-build the release matrix into dist/ and stop: proves the artifacts
+# without touching git or GitHub. VERSION= is required, e.g. VERSION=v0.2.0.
+release-snapshot:
+	scripts/release.sh --snapshot $(VERSION)
+
+# Build the matrix, tag $(VERSION), push the tag and publish a GitHub release
+# with its assets. Needs a clean tree and a one-time `gh auth login`.
+release:
+	scripts/release.sh $(VERSION)
 
 # Validates the config and probes every configured dependency. Exit codes:
 # 0 ok, 1 invalid config, 2 a dependency is unreachable.
@@ -122,7 +137,7 @@ test-e2e:
 
 # The whole product, from outside: builds bin-for-bin what a release ships,
 # starts the server on a fixture estate, and reads the answers back through
-# the HTTP API and through cmd/mcp over stdio — the same doors users use.
+# the HTTP API and through the mcp subcommand over stdio — the same doors users use.
 e2e:
 	go test -tags e2e -count=1 -timeout 10m ./e2e/ -v
 

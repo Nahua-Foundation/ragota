@@ -1,9 +1,14 @@
-// Command ragota-mcp serves a running ragota to a coding agent over MCP.
+package main
+
+// The mcp subcommand serves a running ragota to a coding agent over MCP.
 //
 // It speaks MCP on stdin/stdout, which is what an MCP client launching a
 // subprocess expects, so nothing but protocol may be written to stdout: every
-// diagnostic here goes to stderr, where the client surfaces it.
-package main
+// diagnostic goes to stderr, where the client surfaces it. It dispatches in
+// main before the server's config file is even looked for, because it needs
+// nothing from that file — its configuration is the environment of the launch
+// block that started it, which is the one place an MCP client lets a user put
+// settings.
 
 import (
 	"context"
@@ -24,18 +29,8 @@ import (
 	"github.com/Nahua-Foundation/ragota/internal/mcp/server"
 )
 
-// version is stamped at link time; see the Makefile.
-var version = "dev"
-
-func main() {
-	if err := run(os.Args[1:], os.Stderr); err != nil {
-		fmt.Fprintf(os.Stderr, "ragota-mcp: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func run(args []string, stderr io.Writer) error {
-	fs := flag.NewFlagSet("ragota-mcp", flag.ContinueOnError)
+func runMCP(args []string, stderr io.Writer) error {
+	fs := flag.NewFlagSet("ragota mcp", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
 		url         = fs.String("url", "", "ragota base URL (env RAGOTA_URL)")
@@ -47,9 +42,9 @@ func run(args []string, stderr io.Writer) error {
 		showVersion = fs.Bool("version", false, "print the version and exit")
 	)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(stderr, `ragota-mcp %s — MCP server over a running ragota.
+		_, _ = fmt.Fprintf(stderr, `ragota mcp %s — MCP server over a running ragota.
 
-Usage: ragota-mcp [flags]
+Usage: ragota mcp [flags]
 
 Configuration comes from the environment, which is what an MCP client's launch
 block sets; these flags override it for testing by hand. The API key is
@@ -94,12 +89,12 @@ Flags:
 		return err
 	}
 
-	s := server.New(cfg, newClient(cfg))
+	s := server.New(cfg, mcpClient(cfg))
 
 	// The startup check runs before the transport is connected, so a
 	// misconfiguration is a process that refuses to start with a reason on
-	// stderr — which the client shows — rather than ten identical tool failures
-	// inside a model's turn.
+	// stderr — which the client surfaces — rather than ten identical tool
+	// failures inside a model's turn.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -116,18 +111,18 @@ Flags:
 		return nil
 	}
 
-	_, _ = fmt.Fprintf(stderr, "ragota-mcp %s serving %d tools over stdio: %s (ragota %s, api %s)\n",
+	_, _ = fmt.Fprintf(stderr, "ragota mcp %s serving %d tools over stdio: %s (ragota %s, api %s)\n",
 		version, len(server.ToolNames()), cfg.Redacted(), health.Version, health.APIVersion)
 	return s.MCP(version).Run(ctx, &mcp.StdioTransport{})
 }
 
-// newClient builds the ragota client.
+// mcpClient builds the ragota client the tools call.
 //
 // What actually bounds a tool call is the per-call deadline each handler sets,
 // because that one covers the client's retries as well; the transport timeout
 // here only bounds a single attempt, and is set alongside it so that a
 // connection which never returns cannot outlive the deadline by a whole attempt.
-func newClient(cfg *config.Config) *client.Client {
+func mcpClient(cfg *config.Config) *client.Client {
 	opts := []client.Option{
 		client.WithUserAgent("ragota-mcp/" + version),
 		client.WithHTTPClient(&http.Client{Timeout: cfg.Timeout}),

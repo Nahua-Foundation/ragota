@@ -5,7 +5,7 @@ title: Connecting an agent (MCP)
 
 # Connecting an agent
 
-`ragota-mcp` speaks MCP on stdio — the shape every MCP client launches — and
+`ragota mcp` speaks MCP on stdio — the shape every MCP client launches — and
 forwards to a running `ragota` over HTTP. It is deliberately **read-only**:
 no tool reaches a mutating route, and there is no flag that adds one, so the
 key you hand it can be a `read:` key and a model cannot be talked into
@@ -19,7 +19,8 @@ Claude Code (or any client with the standard JSON config):
 {
   "mcpServers": {
     "ragota": {
-      "command": "/path/to/bin/ragota-mcp",
+      "command": "/path/to/bin/ragota",
+      "args": ["mcp"],
       "env": {
         "RAGOTA_URL": "http://localhost:8080",
         "RAGOTA_MCP_KEY": "…read-scoped key, if auth is on…"
@@ -30,13 +31,13 @@ Claude Code (or any client with the standard JSON config):
 ```
 
 ```bash
-claude mcp add ragota /path/to/bin/ragota-mcp -e RAGOTA_URL=http://localhost:8080
+claude mcp add ragota -e RAGOTA_URL=http://localhost:8080 -- /path/to/bin/ragota mcp
 ```
 
 At startup it proves the whole path — server reachable, API version
 compatible, key accepted, configured scope valid — and refuses to start with
 a reason on stderr rather than failing ten times inside a model's turn.
-`ragota-mcp --check` runs the same probe and exits.
+`ragota mcp -check` runs the same probe and exits.
 
 ## Configuration (environment)
 

@@ -26,7 +26,7 @@ discover → walk → extract → store → serve
 4. **Store.** SQLite or PostgreSQL, behind one storage interface with a
    shared conformance suite; BM25 in embedded bleve; vectors optionally.
 5. **Serve.** Retrieval, the graph and the service map over HTTP;
-   `ragota-mcp` re-serves the same answers over MCP.
+   `ragota mcp` re-serves the same answers over MCP.
 
 ## Contract keys: the cross-repository join
 

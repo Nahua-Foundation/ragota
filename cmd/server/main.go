@@ -70,6 +70,7 @@ const (
 const (
 	commandRun   = "run"
 	commandRepos = "repos"
+	commandMCP   = "mcp"
 )
 
 // fatalf reports a fatal error directly on stderr and exits. Directly, not
@@ -108,6 +109,18 @@ func main() {
 
 	if *showVersion {
 		fmt.Println(versionString())
+		return
+	}
+
+	// The MCP subcommand configures itself from the environment of the launch
+	// block and speaks protocol on stdout, so it dispatches before the config
+	// file is loaded or a single line can be printed: the server's own config
+	// has nothing it needs, and stdout belongs to the protocol from the first
+	// byte.
+	if cmd.name == commandMCP {
+		if err := runMCP(cmd.mcp, os.Stderr); err != nil {
+			fatalf("mcp: %v", err)
+		}
 		return
 	}
 
@@ -366,6 +379,7 @@ func main() {
 type command struct {
 	name  string
 	repos reposArgs // meaningful only when name is commandRepos
+	mcp   []string  // meaningful only when name is commandMCP
 }
 
 // parseCommand validates the positional arguments flag parsing left behind.
@@ -387,6 +401,10 @@ func parseCommand(args []string) (command, error) {
 			return command{}, err
 		}
 		return command{name: commandRepos, repos: sub}, nil
+	case commandMCP:
+		// Everything after the word belongs to the subcommand's own flag set
+		// — `ragota mcp -check` — and is parsed and rejected there.
+		return command{name: commandMCP, mcp: args[1:]}, nil
 	default:
 		return command{}, fmt.Errorf("unknown command %q", args[0])
 	}
@@ -400,6 +418,9 @@ func usage() {
   %[2]s list             every repository in the index, and which are active
   %[2]s activate REPO    put one repository back into the working set
   %[2]s deactivate REPO  take one out of it, keeping its index
+  %[3]s [flags]          serve the index to a coding agent: MCP over stdio
+                         (configured by the launch block's environment; see
+                         ragota %[3]s -h)
 
 examples:
   ragota --config config.yaml
@@ -407,9 +428,10 @@ examples:
   ragota --source ./projects --watch %[1]s
   ragota --source ./projects --watch --interactive %[1]s
   ragota %[2]s list
+  ragota %[3]s -check
 
 flags:
-`, commandRun, commandRepos)
+`, commandRun, commandRepos, commandMCP)
 	flag.PrintDefaults()
 }
 
