@@ -76,7 +76,7 @@ func (s *Source) Add(ctx context.Context, req *repos.AddRequest) (*repos.Repo, e
 	// Expand work directory
 	workDir := s.workDir
 	if workDir == "" {
-		workDir = "~/.ragota-core/repos"
+		workDir = "~/.ragota/repos"
 	}
 	workDir = config.ExpandPath(workDir)
 

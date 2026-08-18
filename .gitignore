@@ -51,7 +51,6 @@ config.local.yaml
 # Data directories
 data/
 repos_data/
-.ragota-core/
 
 # IDE
 .idea/
@@ -82,5 +81,6 @@ __pycache__/
 # skips it when expanding "./..." — see CORPUS_DIR in the Makefile.
 /_corpus/
 
-# ragota v1 runtime data (the old local tool wrote its index here)
+# Project-local .ragota/ — v1 wrote its index here, and a stray home-relative
+# run could recreate it; either way it is runtime data, not source.
 /.ragota/

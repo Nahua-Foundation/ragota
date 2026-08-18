@@ -8,7 +8,7 @@
 // part of indexing with language servers, and this runs it (or re-runs it for
 // one repository) without a reindex.
 //
-//	lspcalls -db ~/.ragota-core/data/ragota.db -corpus /data/corpus \
+//	lspcalls -db ~/.ragota/data/ragota.db -corpus /data/corpus \
 //	    -host-root /data/corpus -repos petclinic -langs java -scope both
 //
 //	== petclinic

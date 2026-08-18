@@ -27,10 +27,10 @@ var ErrBadEnvRef = errors.New("malformed environment reference")
 const DefaultConfigPath = "config.yaml"
 
 // DefaultBM25Path is the fallback location of the BM25 index directory.
-const DefaultBM25Path = "~/.ragota-core/data/bm25"
+const DefaultBM25Path = "~/.ragota/data/bm25"
 
 // DefaultSQLitePath is the fallback location of the SQLite metadata database.
-const DefaultSQLitePath = "~/.ragota-core/data/ragota.db"
+const DefaultSQLitePath = "~/.ragota/data/ragota.db"
 
 // Request body caps used when server.max_body_bytes / max_commit_body_bytes
 // are unset. Commit ingestion carries file contents, hence its own limit.

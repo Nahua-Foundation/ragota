@@ -32,6 +32,9 @@ func Build(ctx context.Context, cfg *config.Config) (_ *service.Service, retErr 
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
+	// Before anything opens the default paths: releases before the rename kept
+	// their data under ~/.ragota-core.
+	config.MigrateLegacyHome(cfg)
 	for _, w := range cfg.Warnings() {
 		obs.Inc(obs.MetricConfigWarnings, 1)
 		slog.Warn("config", "warning", w)
@@ -456,7 +459,7 @@ func initVectorIndexer(cfg *config.Config, stor storage.Storage, embedders map[s
 }
 
 // initBM25Indexer initializes BM25 indexer. The path comes from
-// indexes.bm25.path (default ~/.ragota-core/data/bm25); RAGOTA_BM25_PATH
+// indexes.bm25.path (default ~/.ragota/data/bm25); RAGOTA_BM25_PATH
 // overrides it for one process.
 func initBM25Indexer(cfg *config.Config) (indexing.Indexer, error) {
 	configured := config.DefaultBM25Path

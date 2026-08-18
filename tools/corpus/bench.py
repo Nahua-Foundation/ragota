@@ -5,7 +5,7 @@ many contract edges were resolved, and the coverage summary the server
 reports.
 
     ./clone.sh -d /data/corpus
-    ./bench.py --corpus /data/corpus --db ~/.ragota-core/data/ragota.db
+    ./bench.py --corpus /data/corpus --db ~/.ragota/data/ragota.db
 
 The counts come from the metadata database rather than the API because no
 endpoint reports per-repo unit and edge kinds; the coverage summary comes from
@@ -122,7 +122,7 @@ def main():
     ap.add_argument("--api-key", default=os.environ.get("RAGOTA_API_KEY"))
     ap.add_argument("--corpus", default=os.environ.get("CORPUS_DIR", "corpus"),
                     help="directory holding the checkouts (see clone.sh)")
-    ap.add_argument("--db", default=os.environ.get("RAGOTA_DB", os.path.expanduser("~/.ragota-core/data/ragota.db")),
+    ap.add_argument("--db", default=os.environ.get("RAGOTA_DB", os.path.expanduser("~/.ragota/data/ragota.db")),
                     help="metadata store: sqlite path or postgres DSN")
     ap.add_argument("--out", default="corpus-results", help="directory for the per-repo JSON dumps")
     ap.add_argument("--timeout", type=int, default=7200, help="seconds to wait for one repository")

@@ -58,7 +58,7 @@ storage:
     dsn: postgres://user:pass@localhost:5432/ragota
     pool_size: 10
    # sqlite:                 # lightweight embedded/dev option
-   #   path: ~/.ragota-core/data/ragota.db   # this is also the built-in default
+   #   path: ~/.ragota/data/ragota.db   # this is also the built-in default
    #   pool_size: 10
    # qdrant:                 # required whenever indexes.vector is enabled
    #   url: http://localhost:6333
@@ -88,9 +88,9 @@ indexes:
     languages: [go, java, kotlin, csharp, typescript, javascript, python, proto, sql, yaml, json, properties]
   bm25:
     enabled: true
-    # On-disk Bleve index (default ~/.ragota-core/data/bm25).
+    # On-disk Bleve index (default ~/.ragota/data/bm25).
     # RAGOTA_BM25_PATH overrides it for one process.
-    # path: ~/.ragota-core/data/bm25
+    # path: ~/.ragota/data/bm25
     # A full index pass ends by merging the index into a single segment, which
     # is what makes a score depend on the indexed content rather than on the
     # segment layout the pass happened to leave behind. It costs ~4% of the
@@ -340,7 +340,7 @@ repos:
       # paths: ["/path/to/repos"]
     git:
       enabled: false
-      work_dir: ~/.ragota-core/repos
+      work_dir: ~/.ragota/repos
       # Each token falls back to the matching environment variable
       # (GITHUB_TOKEN / GITLAB_TOKEN) when left empty. An auth block needs at
       # least one non-empty value; omit it entirely to rely on the environment.

@@ -83,7 +83,7 @@ func interactiveLogPath() string {
 	if err != nil || home == "" {
 		return filepath.Join(os.TempDir(), interactiveLogName)
 	}
-	return filepath.Join(home, ".ragota-core", "logs", interactiveLogName)
+	return filepath.Join(home, ".ragota", "logs", interactiveLogName)
 }
 
 // openInteractiveLog opens the file the log is parked in while the dashboard

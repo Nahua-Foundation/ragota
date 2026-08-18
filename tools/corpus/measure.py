@@ -22,7 +22,7 @@ false positives (a URL in a comment, a `client` variable that is not a
 client). They are stable across runs, which is what makes them useful — the
 question the corpus answers is whether a change moved them.
 
-    ./measure.py --corpus /data/corpus --db ~/.ragota-core/data/ragota.db
+    ./measure.py --corpus /data/corpus --db ~/.ragota/data/ragota.db
 """
 
 import argparse
@@ -255,7 +255,7 @@ def measure_recall(root, paths, edges, window):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--corpus", default=os.environ.get("CORPUS_DIR", "corpus"))
-    ap.add_argument("--db", default=os.environ.get("RAGOTA_DB", os.path.expanduser("~/.ragota-core/data/ragota.db")))
+    ap.add_argument("--db", default=os.environ.get("RAGOTA_DB", os.path.expanduser("~/.ragota/data/ragota.db")))
     ap.add_argument("--results", default="corpus-results",
                     help="bench.py output directory; repo ids are read from it")
     ap.add_argument("--out", default="corpus-results", help="where the measurement JSON goes")

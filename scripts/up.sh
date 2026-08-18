@@ -16,7 +16,7 @@ set -euo pipefail
 SOURCE="${1:?usage: scripts/up.sh <directory-with-repositories>}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${RAGOTA_CONFIG:-$ROOT/config.yaml}"
-LOGDIR="$HOME/.ragota-core/logs"
+LOGDIR="$HOME/.ragota/logs"
 mkdir -p "$LOGDIR"
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }

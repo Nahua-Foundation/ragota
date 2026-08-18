@@ -320,7 +320,7 @@ type ChunkingConfig struct {
 type BM25IndexConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// Path is the on-disk directory of the Bleve index
-	// (default ~/.ragota-core/data/bm25). The RAGOTA_BM25_PATH environment
+	// (default ~/.ragota/data/bm25). The RAGOTA_BM25_PATH environment
 	// variable overrides it.
 	Path string `yaml:"path"`
 	// K1 and B are the BM25 scoring parameters (defaults 1.2 / 0.75). They are

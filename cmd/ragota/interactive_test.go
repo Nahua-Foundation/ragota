@@ -103,7 +103,7 @@ func TestOpenInteractiveLogAppends(t *testing.T) {
 	}
 	_ = second.Close()
 
-	if want := filepath.Join(dir, ".ragota-core", "logs", interactiveLogName); path != want || path2 != want {
+	if want := filepath.Join(dir, ".ragota", "logs", interactiveLogName); path != want || path2 != want {
 		t.Errorf("log paths = %q and %q, want one stable %q", path, path2, want)
 	}
 	body, err := os.ReadFile(path)

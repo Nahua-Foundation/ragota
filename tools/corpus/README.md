@@ -7,8 +7,8 @@ numbers below.
 
 ```sh
 ./clone.sh -d /data/corpus                 # shallow clones, ~15 GB
-./bench.py  --corpus /data/corpus --db ~/.ragota-core/data/ragota.db
-./measure.py --corpus /data/corpus --db ~/.ragota-core/data/ragota.db
+./bench.py  --corpus /data/corpus --db ~/.ragota/data/ragota.db
+./measure.py --corpus /data/corpus --db ~/.ragota/data/ragota.db
 ```
 
 `bench.py` needs a running server (`--server`, default `http://127.0.0.1:8080`)

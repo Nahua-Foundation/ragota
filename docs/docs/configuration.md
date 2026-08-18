@@ -22,7 +22,7 @@ server:
   host: 127.0.0.1
   port: 8080
 storage:
-  sqlite: {path: ~/.ragota-core/data/ragota.db}
+  sqlite: {path: ~/.ragota/data/ragota.db}
 indexes:
   ast:  {enabled: true}
   bm25: {enabled: true}
@@ -69,7 +69,7 @@ ignore:
 
 ```yaml
 storage:
-  sqlite:   {path: ~/.ragota-core/data/ragota.db}   # single-user, zero setup
+  sqlite:   {path: ~/.ragota/data/ragota.db}   # single-user, zero setup
   # postgres: {dsn: "${RAGOTA_PG_DSN}"}              # shared deployments
 ```
 
