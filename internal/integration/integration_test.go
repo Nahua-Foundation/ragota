@@ -1,7 +1,7 @@
 //go:build integration
 // +build integration
 
-package e2e_test
+package integration_test
 
 import (
 	"bytes"

@@ -2,7 +2,7 @@
 // (deploy/lsp/, started via `make lsp-up`) through the internal/lsp client
 // and refinement pass. Skipped unless RAGOTA_TEST_LSP=1; `make test-e2e-lsp`
 // runs the full cycle.
-package e2e_test
+package integration_test
 
 import (
 	"context"

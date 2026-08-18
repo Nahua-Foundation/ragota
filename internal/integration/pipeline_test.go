@@ -1,11 +1,11 @@
-// Package e2e_test exercises the full indexing pipeline over the testdata
+// Package integration_test exercises the full indexing pipeline over the testdata
 // microservice fixtures: a Go monorepo (gateway + orders + proto contract),
 // a Java Kafka consumer, a .NET HTTP service and a TypeScript client.
 //
 // The scenario under test is the chain:
 //
 //	web-ts ──HTTP──▶ gateway ──gRPC──▶ orders ──Kafka──▶ billing-java ──HTTP──▶ notifier-dotnet
-package e2e_test
+package integration_test
 
 import (
 	"bytes"

@@ -54,8 +54,8 @@ CONFIG ?= config.yaml
 
 .PHONY: up release release-snapshot \
 	build binary install run check-config vet fmt fmt-check lint lint-install sqlc \
-	test test-integration test-e2e e2e test-postgres test-qdrant test-e2e-postgres ci \
-	lsp-build lsp-up lsp-down test-e2e-lsp compose-check compose-up compose-down compose-logs help \
+	test test-integration test-integration-all e2e test-postgres test-qdrant test-integration-postgres ci \
+	lsp-build lsp-up lsp-down test-integration-lsp compose-check compose-up compose-down compose-logs help \
 	corpus-clone corpus-bench corpus-measure eval eval-fast eval-validate \
 	eval-compare eval-related eval-answers docs docs-serve
 
@@ -130,10 +130,10 @@ test:
 	go test ./...
 
 test-integration:
-	go test -tags integration -run 'TestBM25AndLocalSource' ./internal/e2e/
+	go test -tags integration -run 'TestBM25AndLocalSource' ./internal/integration/
 
-test-e2e:
-	go test ./internal/e2e/ -v
+test-integration-all:
+	go test ./internal/integration/ -v
 
 # The whole product, from outside: builds bin-for-bin what a release ships,
 # starts the server on a fixture estate, and reads the answers back through
@@ -170,7 +170,7 @@ test-postgres:
 # Spins up a throwaway Postgres in Docker and runs the full e2e suite plus the
 # postgres storage tests against it (the primary-backend configuration), then
 # always tears the container down.
-test-e2e-postgres:
+test-integration-postgres:
 	@docker rm -f $(PG_E2E_CONTAINER) >/dev/null 2>&1 || true
 	docker run --rm -d --name $(PG_E2E_CONTAINER) \
 		-e POSTGRES_USER=postgres \
@@ -190,7 +190,7 @@ test-e2e-postgres:
 		exit 1; \
 	fi
 	@RAGOTA_TEST_STORAGE=postgres RAGOTA_TEST_POSTGRES_DSN="$(PG_E2E_DSN)" \
-		go test ./internal/e2e/ ./internal/storage/postgres/ -count=1; \
+		go test ./internal/integration/ ./internal/storage/postgres/ -count=1; \
 	status=$$?; \
 	docker stop $(PG_E2E_CONTAINER) >/dev/null 2>&1 || true; \
 	exit $$status
@@ -240,7 +240,7 @@ lsp-down:
 # connections, runs the LSP e2e tests and always tears the containers down.
 # The readiness probe is Go, not nc: nc is absent from many CI images and its
 # flags differ between the BSD, GNU and busybox variants.
-test-e2e-lsp: lsp-up
+test-integration-lsp: lsp-up
 	@for p in $(LSP_PORTS); do \
 		ok=0; \
 		for i in $$(seq 1 60); do \
@@ -255,7 +255,7 @@ test-e2e-lsp: lsp-up
 		echo "port $$p ready"; \
 	done
 	@RAGOTA_TEST_LSP=1 RAGOTA_LSP_HOST_ROOT=$(PWD) \
-		go test ./internal/e2e/ -run TestLSP -v -count=1 -timeout 20m; \
+		go test ./internal/integration/ -run TestLSP -v -count=1 -timeout 20m; \
 	status=$$?; \
 	$(MAKE) lsp-down; \
 	exit $$status
@@ -362,7 +362,7 @@ help:
 	@echo "run            run the server with --config $(CONFIG)"
 	@echo "check-config   validate the config and probe its dependencies"
 	@echo "test           unit tests            test-integration  tagged integration tests"
-	@echo "test-e2e       end-to-end tests      test-e2e-lsp      e2e with the LSP containers"
+	@echo "test-integration-all  full in-process integration suite    test-integration-lsp  with LSP containers"
 	@echo "e2e            the shipped binary driven from outside (HTTP + MCP over stdio)"
 	@echo "docs           build the documentation site (docs/build)   docs-serve  live dev server"
 	@echo "test-postgres  storage tests on a throwaway postgres"
