@@ -29,7 +29,7 @@ func NewOllamaGenerator(baseURL, model string) (*OllamaGenerator, error) {
 		return nil, fmt.Errorf("ollama generator: model is required")
 	}
 	if baseURL == "" {
-		baseURL = "http://localhost:11434"
+		baseURL = DefaultOllamaBaseURL
 	}
 	return &OllamaGenerator{
 		client: &httpx.Client{BaseURL: baseURL},
@@ -75,7 +75,7 @@ func NewOpenAIGenerator(baseURL, apiKey, model string) (*OpenAIGenerator, error)
 	base := normalizeOpenAIBase(baseURL)
 	// Self-hosted OpenAI-compatible gateways (vLLM, LiteLLM) usually need no
 	// credential; only the public endpoint always does.
-	if apiKey == "" && base == defaultOpenAIBase {
+	if apiKey == "" && base == DefaultOpenAIBaseURL {
 		return nil, fmt.Errorf("openai generator: api key is required")
 	}
 	return &OpenAIGenerator{

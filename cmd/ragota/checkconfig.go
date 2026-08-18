@@ -2,13 +2,13 @@ package main
 
 import (
 	"fmt"
-	"net"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
+	"github.com/Nahua-Foundation/ragota/internal/httpx"
+	"github.com/Nahua-Foundation/ragota/internal/llm"
 )
 
 // probeTimeout bounds one reachability check. It is short on purpose:
@@ -83,7 +83,7 @@ func dependencyProbes(cfg *config.Config) []probe {
 		if target == "" {
 			return
 		}
-		probes = append(probes, probe{name: name, target: target, err: dialTarget(target)})
+		probes = append(probes, probe{name: name, target: target, err: httpx.DialTarget(target, probeTimeout)})
 	}
 
 	if cfg.Storage.Qdrant != nil {
@@ -98,11 +98,10 @@ func dependencyProbes(cfg *config.Config) []probe {
 		if endpoint == "" {
 			endpoint = cfg.Models.Providers[provider].BaseURL
 		}
-		if endpoint == "" && provider == "ollama" {
-			endpoint = "http://localhost:11434"
-		}
-		if endpoint == "" && provider == "openai" {
-			endpoint = "https://api.openai.com"
+		if endpoint == "" {
+			// The same fallback the embedder constructors use: the probe must
+			// dial what the server will dial.
+			endpoint = llm.DefaultBaseURL(provider)
 		}
 		add("indexes.vector.embedder ("+provider+")", endpoint)
 	}
@@ -128,48 +127,4 @@ func dependencyProbes(cfg *config.Config) []probe {
 	}
 
 	return probes
-}
-
-// dialTarget opens a TCP connection to a "host:port" address or to the host of
-// a URL. It proves the endpoint is routable and listening without sending a
-// request, so probing costs nothing on the far side.
-func dialTarget(target string) error {
-	addr, err := hostPort(target)
-	if err != nil {
-		return err
-	}
-	conn, err := net.DialTimeout("tcp", addr, probeTimeout)
-	if err != nil {
-		return err
-	}
-	return conn.Close()
-}
-
-// hostPort turns a URL or a bare host:port into a dialable address.
-func hostPort(target string) (string, error) {
-	if !strings.Contains(target, "://") {
-		if _, _, err := net.SplitHostPort(target); err != nil {
-			return "", fmt.Errorf("not a host:port address: %q", target)
-		}
-		return target, nil
-	}
-
-	u, err := url.Parse(target)
-	if err != nil {
-		return "", fmt.Errorf("parse url %q: %w", target, err)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("url %q has no host", target)
-	}
-	if u.Port() != "" {
-		return u.Host, nil
-	}
-	switch u.Scheme {
-	case "https":
-		return net.JoinHostPort(u.Hostname(), "443"), nil
-	case "http":
-		return net.JoinHostPort(u.Hostname(), "80"), nil
-	default:
-		return "", fmt.Errorf("url %q has no port and an unknown scheme %q", target, u.Scheme)
-	}
 }

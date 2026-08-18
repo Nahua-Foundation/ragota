@@ -239,8 +239,8 @@ func TestOpenAIBaseNormalization(t *testing.T) {
 }
 
 func TestNormalizeOpenAIBase_DefaultsToPublicEndpoint(t *testing.T) {
-	if got := normalizeOpenAIBase(""); got != defaultOpenAIBase {
-		t.Errorf("normalizeOpenAIBase(\"\") = %q, want %q", got, defaultOpenAIBase)
+	if got := normalizeOpenAIBase(""); got != DefaultOpenAIBaseURL {
+		t.Errorf("normalizeOpenAIBase(\"\") = %q, want %q", got, DefaultOpenAIBaseURL)
 	}
 	if got := normalizeOpenAIBase("https://gw.corp/openai/v1"); got != "https://gw.corp/openai" {
 		t.Errorf("normalizeOpenAIBase() = %q, want https://gw.corp/openai", got)

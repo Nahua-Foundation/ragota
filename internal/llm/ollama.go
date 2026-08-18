@@ -41,7 +41,7 @@ type Ollama struct {
 func NewOllama(cfg *config.EmbedderConfig) (*Ollama, error) {
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
-		baseURL = "http://localhost:11434"
+		baseURL = DefaultOllamaBaseURL
 	}
 
 	dims, err := resolveDims(cfg)

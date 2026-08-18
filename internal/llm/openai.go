@@ -11,9 +11,6 @@ import (
 	"github.com/Nahua-Foundation/ragota/internal/httpx"
 )
 
-// defaultOpenAIBase is the public OpenAI endpoint, without the "/v1" segment.
-const defaultOpenAIBase = "https://api.openai.com"
-
 // normalizeOpenAIBase strips a trailing slash and a trailing "/v1" from a
 // configured base URL. Callers append the full "/v1/..." path, so both
 // "https://host" and "https://host/v1" — the two ways OpenAI-compatible
@@ -30,7 +27,7 @@ func authHeader(apiKey string) http.Header {
 
 func normalizeOpenAIBase(baseURL string) string {
 	if baseURL == "" {
-		return defaultOpenAIBase
+		return DefaultOpenAIBaseURL
 	}
 	return strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
 }
@@ -46,7 +43,7 @@ type OpenAI struct {
 // NewOpenAI creates a new OpenAI embedder.
 func NewOpenAI(cfg *config.EmbedderConfig, apiKey string) (*OpenAI, error) {
 	base := normalizeOpenAIBase(cfg.BaseURL)
-	if apiKey == "" && base == defaultOpenAIBase {
+	if apiKey == "" && base == DefaultOpenAIBaseURL {
 		return nil, fmt.Errorf("openai api key is required")
 	}
 

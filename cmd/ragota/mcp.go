@@ -25,7 +25,7 @@ import (
 	"github.com/Nahua-Foundation/ragota/pkg/client"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Nahua-Foundation/ragota/internal/mcp/config"
+	mcpconfig "github.com/Nahua-Foundation/ragota/internal/mcp/config"
 	"github.com/Nahua-Foundation/ragota/internal/mcp/server"
 )
 
@@ -59,7 +59,7 @@ environment-only, because a flag would put it in the process table.
   RAGOTA_REPOS        comma-separated default repository scope
 
 Flags:
-`, version, config.DefaultBaseURL, config.AuthAPIKey, config.AuthBearer, config.DefaultTimeout, config.DefaultMaxBytes)
+`, version, mcpconfig.DefaultBaseURL, mcpconfig.AuthAPIKey, mcpconfig.AuthBearer, mcpconfig.DefaultTimeout, mcpconfig.DefaultMaxBytes)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -70,7 +70,7 @@ Flags:
 		return nil
 	}
 
-	cfg, err := config.FromEnv(config.OSEnv)
+	cfg, err := mcpconfig.FromEnv(mcpconfig.OSEnv)
 	if err != nil {
 		return err
 	}
@@ -122,13 +122,13 @@ Flags:
 // because that one covers the client's retries as well; the transport timeout
 // here only bounds a single attempt, and is set alongside it so that a
 // connection which never returns cannot outlive the deadline by a whole attempt.
-func mcpClient(cfg *config.Config) *client.Client {
+func mcpClient(cfg *mcpconfig.Config) *client.Client {
 	opts := []client.Option{
 		client.WithUserAgent("ragota/" + version + " (mcp)"),
 		client.WithHTTPClient(&http.Client{Timeout: cfg.Timeout}),
 	}
 	if cfg.APIKey != "" {
-		if cfg.AuthStyle == config.AuthBearer {
+		if cfg.AuthStyle == mcpconfig.AuthBearer {
 			opts = append(opts, client.WithBearerToken(cfg.APIKey))
 		} else {
 			opts = append(opts, client.WithAPIKey(cfg.APIKey))

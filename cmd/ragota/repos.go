@@ -2,15 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/repos"
 	"github.com/Nahua-Foundation/ragota/internal/service"
 	"github.com/Nahua-Foundation/ragota/internal/setup"
+	"github.com/Nahua-Foundation/ragota/internal/storage"
 )
 
 // The `repos` subcommand: what the index is made of, and which part of it the
@@ -145,12 +145,11 @@ func listRepos(ctx context.Context, svc *service.Service) int {
 // ordering them properly would cost a transaction spanning two processes to buy
 // nothing.
 func setRepoActive(ctx context.Context, svc *service.Service, ref string, active bool) int {
-	all, err := svc.ListRepos(ctx)
+	repo, err := svc.ResolveRepo(ctx, ref)
 	if err != nil {
-		return fail("cannot list the repositories: %v", err)
-	}
-	repo, err := findRepo(all, ref)
-	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return fail("%v; `ragota %s %s` shows what is registered", err, commandRepos, reposList)
+		}
 		return fail("%v", err)
 	}
 	if repo.Active == active {
@@ -158,76 +157,22 @@ func setRepoActive(ctx context.Context, svc *service.Service, ref string, active
 		return 0
 	}
 
-	ids := make([]string, 0, len(all))
-	for _, r := range all {
-		on := r.Active
-		if r.ID == repo.ID {
-			on = active
-		}
-		if on {
-			ids = append(ids, r.ID)
-		}
-	}
-	if err := svc.SetActiveRepos(ctx, ids); err != nil {
+	activeN, total, err := svc.SetRepoActive(ctx, repo.ID, active)
+	if err != nil {
 		return fail("cannot change the working set: %v", err)
 	}
 
 	fmt.Printf("%s (%s) is now %s; %d of %d registered repositories active\n",
-		repo.Name, repo.ID, activeWord(active), len(ids), len(all))
+		repo.Name, repo.ID, activeWord(active), activeN, total)
 	if !active {
 		// Said once, here, because the word "dormant" suggests neither: the
 		// index is untouched and the next --source or activate brings it back.
 		fmt.Println("its index, edges and coverage are kept; naming it again restores it")
 	}
-	if len(ids) == 0 {
+	if activeN == 0 {
 		fmt.Println("the working set is now empty: /search and /context answer nothing until a request names a repository")
 	}
 	return 0
-}
-
-// findRepo resolves what a user typed at a shell to one repository: its id, its
-// name, or its path. A path is resolved against the working directory first, so
-// that `repos deactivate .` inside a project means that project.
-//
-// Matching is exact in all three. A repository whose name is a prefix of
-// another's is a normal thing to have — "gateway" and "gateway-v2" — and
-// guessing between them here would deactivate the wrong project silently.
-func findRepo(all []*repos.Repo, ref string) (*repos.Repo, error) {
-	for _, r := range all {
-		if r.ID == ref {
-			return r, nil
-		}
-	}
-
-	var named []*repos.Repo
-	for _, r := range all {
-		if r.Name != "" && r.Name == ref {
-			named = append(named, r)
-		}
-	}
-	if len(named) == 1 {
-		return named[0], nil
-	}
-	if len(named) > 1 {
-		// Two checkouts of the same project under different roots, which the
-		// index keeps apart by id because their paths differ.
-		ids := make([]string, 0, len(named))
-		for _, r := range named {
-			ids = append(ids, r.ID)
-		}
-		return nil, fmt.Errorf("%d repositories are named %q; name one by its id: %s",
-			len(named), ref, strings.Join(ids, " "))
-	}
-
-	if abs, err := filepath.Abs(config.ExpandPath(ref)); err == nil {
-		for _, r := range all {
-			if r.Path == abs {
-				return r, nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("no repository matches %q; `ragota %s %s` shows what is registered",
-		ref, commandRepos, reposList)
 }
 
 func activeWord(active bool) string {

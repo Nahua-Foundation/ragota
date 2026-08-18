@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/Nahua-Foundation/ragota/internal/config"
 	"github.com/Nahua-Foundation/ragota/internal/repos"
 	"github.com/Nahua-Foundation/ragota/internal/storage"
 )
@@ -125,4 +128,87 @@ func (s *Service) DeleteRepo(ctx context.Context, repoID string) error {
 	s.compactIndexes(ctx)
 
 	return errors.Join(errs...)
+}
+
+// ResolveRepo resolves a user-typed reference to one registered repository:
+// its id, its name, or its path. A path is resolved against the working
+// directory first, so that a "." typed inside a project means that project.
+//
+// Matching is exact in all three. A repository whose name is a prefix of
+// another's is a normal thing to have — "gateway" and "gateway-v2" — and
+// guessing between them here would pick the wrong project silently. An
+// unknown reference reports storage.ErrNotFound.
+func (s *Service) ResolveRepo(ctx context.Context, ref string) (*repos.Repo, error) {
+	all, err := s.ListRepos(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot list the repositories: %w", err)
+	}
+	return resolveRepoRef(all, ref)
+}
+
+func resolveRepoRef(all []*repos.Repo, ref string) (*repos.Repo, error) {
+	for _, r := range all {
+		if r.ID == ref {
+			return r, nil
+		}
+	}
+
+	var named []*repos.Repo
+	for _, r := range all {
+		if r.Name != "" && r.Name == ref {
+			named = append(named, r)
+		}
+	}
+	if len(named) == 1 {
+		return named[0], nil
+	}
+	if len(named) > 1 {
+		// Two checkouts of the same project under different roots, which the
+		// index keeps apart by id because their paths differ.
+		ids := make([]string, 0, len(named))
+		for _, r := range named {
+			ids = append(ids, r.ID)
+		}
+		return nil, fmt.Errorf("%d repositories are named %q; name one by its id: %s",
+			len(named), ref, strings.Join(ids, " "))
+	}
+
+	if abs, err := filepath.Abs(config.ExpandPath(ref)); err == nil {
+		for _, r := range all {
+			if r.Path == abs {
+				return r, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no repository matches %q: %w", ref, storage.ErrNotFound)
+}
+
+// SetRepoActive moves one repository into or out of the working set and leaves
+// the rest of it alone, returning the new active count and the total.
+//
+// SetActiveRepos replaces the set rather than editing it — that is the
+// operation --source needs — so this reads the set, changes one row and writes
+// the lot back. Two of these racing each other, or one racing a --source run,
+// leaves the last writer's set in place; callers are keystrokes at a shell,
+// and ordering them properly would cost a transaction spanning two processes
+// to buy nothing.
+func (s *Service) SetRepoActive(ctx context.Context, id string, active bool) (activeN, total int, err error) {
+	all, err := s.ListRepos(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("cannot list the repositories: %w", err)
+	}
+	ids := make([]string, 0, len(all))
+	for _, r := range all {
+		on := r.Active
+		if r.ID == id {
+			on = active
+		}
+		if on {
+			ids = append(ids, r.ID)
+		}
+	}
+	if err := s.SetActiveRepos(ctx, ids); err != nil {
+		return 0, 0, err
+	}
+	return len(ids), len(all), nil
 }
