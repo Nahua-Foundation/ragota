@@ -8,21 +8,21 @@ import (
 	"github.com/Nahua-Foundation/ragota/internal/storage"
 )
 
-// ProtoParser parses .proto files into contract units:
+// protoParser parses .proto files into contract units:
 // proto_service, rpc_method, proto_message, proto_field.
 //
 // It is a lightweight hand-rolled parser sufficient for the proto2/proto3
 // subset that defines services, rpcs, messages and scalar/message fields.
-type ProtoParser struct{}
+type protoParser struct{}
 
-// NewProtoParser creates a proto contract parser.
-func NewProtoParser() *ProtoParser { return &ProtoParser{} }
+// newProtoParser creates a proto contract parser.
+func newProtoParser() *protoParser { return &protoParser{} }
 
 // Language returns the language name.
-func (p *ProtoParser) Language() string { return "proto" }
+func (p *protoParser) Language() string { return "proto" }
 
 // Parse extracts contract units and edges from a .proto file.
-func (p *ProtoParser) Parse(filePath, content string) ([]*storage.ASTUnit, []*storage.Edge, error) {
+func (p *protoParser) Parse(filePath, content string) ([]*storage.ASTUnit, []*storage.Edge, error) {
 	fc := &fileCtx{path: filePath, src: []byte(content)}
 
 	pkg := ""
@@ -204,7 +204,7 @@ func addGatewayRoutes(fc *fileCtx, line string, lineNo, rpcIdx int) {
 		u := &storage.ASTUnit{
 			Kind:      storage.KindHTTPRoute,
 			Name:      method + " " + path,
-			Qualified: RouteKey(method, path),
+			Qualified: routeKey(method, path),
 			Signature: "path:" + path,
 			StartLine: lineNo + 1,
 			EndLine:   lineNo + 1,

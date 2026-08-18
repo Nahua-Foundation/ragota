@@ -13,24 +13,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ConfigParser flattens configuration files (yaml, json, properties/env)
+// configParser flattens configuration files (yaml, json, properties/env)
 // into config_key units: qualified "config:<dot.path>", value in Signature.
 // The linker uses these to resolve env/config-driven Kafka topics.
-type ConfigParser struct {
+type configParser struct {
 	lang string
 }
 
-// NewConfigParser creates a config parser for "yaml", "json" or "properties".
-func NewConfigParser(lang string) *ConfigParser { return &ConfigParser{lang: lang} }
+// newConfigParser creates a config parser for "yaml", "json" or "properties".
+func newConfigParser(lang string) *configParser { return &configParser{lang: lang} }
 
 // Language returns the language name.
-func (p *ConfigParser) Language() string { return p.lang }
+func (p *configParser) Language() string { return p.lang }
 
 // maxConfigKeys caps the number of keys stored per file.
 const maxConfigKeys = 500
 
 // Parse extracts flattened config keys from the file.
-func (p *ConfigParser) Parse(filePath, content string) ([]*storage.ASTUnit, []*storage.Edge, error) {
+func (p *configParser) Parse(filePath, content string) ([]*storage.ASTUnit, []*storage.Edge, error) {
 	values := map[string]string{}
 
 	switch p.lang {
@@ -154,7 +154,7 @@ func openAPIRoutes(doc any) []*storage.ASTUnit {
 			units = append(units, &storage.ASTUnit{
 				Kind:      storage.KindHTTPRoute,
 				Name:      m + " " + path,
-				Qualified: RouteKey(m, path),
+				Qualified: routeKey(m, path),
 				Signature: "path:" + path,
 				Doc:       doc,
 				StartLine: 1,

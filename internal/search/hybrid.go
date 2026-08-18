@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -423,20 +424,11 @@ func appendReason(reasons []string, reason string, source indexing.IndexType) []
 		if part == "" {
 			continue
 		}
-		if !contains(reasons, part) {
+		if !slices.Contains(reasons, part) {
 			reasons = append(reasons, part)
 		}
 	}
 	return reasons
-}
-
-func contains(list []string, v string) bool {
-	for _, item := range list {
-		if item == v {
-			return true
-		}
-	}
-	return false
 }
 
 // settleSearcherOrder puts one searcher's hits into the order the rest of the

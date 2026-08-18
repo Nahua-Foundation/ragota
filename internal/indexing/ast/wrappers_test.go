@@ -14,9 +14,9 @@ import (
 // forwards its own method and path parameters into an options object, and one
 // that hard-codes the route it calls.
 
-func parseFactsOrFail(t *testing.T, lang, path, src string) *FileFacts {
+func parseFactsOrFail(t *testing.T, lang, path, src string) *fileFacts {
 	t.Helper()
-	p, ok := GetParserForLanguage(lang).(FactsParser)
+	p, ok := GetParserForLanguage(lang).(factsParser)
 	if !ok {
 		t.Fatalf("%s parser reports no facts", lang)
 	}
@@ -56,7 +56,7 @@ export async function search(this: IExecuteFunctions) {
 		t.Fatalf("wrappers = %+v, want one", facts.Wrappers)
 	}
 	w := facts.Wrappers[0]
-	want := Wrapper{
+	want := wrapper{
 		Name: "hunterApiRequest", Dir: "nodes/Hunter",
 		Path: "/v2", Host: "api.hunter.io", MethodParam: 1, URLParam: 2,
 	}
@@ -199,7 +199,7 @@ export async function listOrders(this: IExecuteFunctions) {
 func TestWrapperTarget(t *testing.T) {
 	tests := []struct {
 		name    string
-		wrapper Wrapper
+		wrapper wrapper
 		args    []string
 		method  string
 		path    string
@@ -208,41 +208,41 @@ func TestWrapperTarget(t *testing.T) {
 	}{
 		{
 			name:    "fixed route",
-			wrapper: Wrapper{Method: "POST", Path: "/api/charge", Host: "billing", MethodParam: -1, URLParam: -1},
+			wrapper: wrapper{Method: "POST", Path: "/api/charge", Host: "billing", MethodParam: -1, URLParam: -1},
 			args:    []string{"payload"},
 			method:  "POST", path: "/api/charge", host: "billing", ok: true,
 		},
 		{
 			name:    "route and method from the call site",
-			wrapper: Wrapper{Path: "/v2", Host: "api.hunter.io", MethodParam: 1, URLParam: 2},
+			wrapper: wrapper{Path: "/v2", Host: "api.hunter.io", MethodParam: 1, URLParam: 2},
 			args:    []string{"this", `'DELETE'`, `'/leads/1'`},
 			method:  "DELETE", path: "/v2/leads/1", host: "api.hunter.io", ok: true,
 		},
 		{
 			name:    "unknown method falls back to ANY",
-			wrapper: Wrapper{MethodParam: -1, URLParam: 1},
+			wrapper: wrapper{MethodParam: -1, URLParam: 1},
 			args:    []string{"this", `'/leads'`},
 			method:  "ANY", path: "/leads", ok: true,
 		},
 		{
 			name:    "a method argument that is not a method is ignored",
-			wrapper: Wrapper{Method: "GET", MethodParam: 1, URLParam: 2},
+			wrapper: wrapper{Method: "GET", MethodParam: 1, URLParam: 2},
 			args:    []string{"this", "verb", `'/leads'`},
 			method:  "GET", path: "/leads", ok: true,
 		},
 		{
 			name:    "the call site does not pass a literal route",
-			wrapper: Wrapper{MethodParam: 1, URLParam: 2},
+			wrapper: wrapper{MethodParam: 1, URLParam: 2},
 			args:    []string{"this", `'GET'`, "endpoint"},
 		},
 		{
 			name:    "too few arguments",
-			wrapper: Wrapper{MethodParam: 1, URLParam: 2},
+			wrapper: wrapper{MethodParam: 1, URLParam: 2},
 			args:    []string{"this"},
 		},
 		{
 			name:    "a fixed-route wrapper without a route",
-			wrapper: Wrapper{MethodParam: -1, URLParam: -1},
+			wrapper: wrapper{MethodParam: -1, URLParam: -1},
 			args:    []string{"x"},
 		},
 	}

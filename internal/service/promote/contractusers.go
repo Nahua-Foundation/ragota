@@ -3,7 +3,9 @@ package promote
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -177,7 +179,7 @@ func (p *Promoter) PromoteContractUses(ctx context.Context, q *indexing.SearchQu
 	if len(promoted) == 0 {
 		return hits
 	}
-	meta["contract_use_keys"] = sortedKeys(keys)
+	meta["contract_use_keys"] = slices.Sorted(maps.Keys(keys))
 	meta["contract_uses"] = len(promoted)
 	return prependPromoted(promoted, hits)
 }
@@ -420,14 +422,5 @@ func stemSet(words ...string) map[string]bool {
 	for _, w := range words {
 		out[stemWord(w)] = true
 	}
-	return out
-}
-
-func sortedKeys(set map[string]bool) []string {
-	out := make([]string, 0, len(set))
-	for k := range set {
-		out = append(out, k)
-	}
-	sort.Strings(out)
 	return out
 }

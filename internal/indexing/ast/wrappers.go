@@ -30,11 +30,11 @@ import (
 // One level only, and at ConfWeak: the helper is evidence about where the
 // request goes, not proof, and a chain of helpers would multiply that guess.
 
-// Wrapper is a local function that performs an outbound HTTP call for its
+// wrapper is a local function that performs an outbound HTTP call for its
 // callers. Either Path is fixed (the helper hard-codes the route) or URLParam
 // names the parameter the route arrives in, in which case Path holds the
 // constant prefix the helper prepends and Host the host it targets.
-type Wrapper struct {
+type wrapper struct {
 	Name string // function name as call sites spell it
 	Dir  string // directory of the defining file: the package scope of the lookup
 
@@ -53,13 +53,13 @@ const minWrapperName = 3
 
 // wrappers builds the wrapper table for the file from the outbound HTTP call
 // sites recorded during extraction.
-func (fc *fileCtx) wrappers() []Wrapper {
+func (fc *fileCtx) wrappers() []wrapper {
 	if len(fc.https) == 0 {
 		return nil
 	}
 	dir := path.Dir(fc.path)
 	seen := map[string]bool{}
-	var out []Wrapper
+	var out []wrapper
 	for _, site := range fc.https {
 		if site.unit < 0 || site.unit >= len(fc.units) {
 			continue
@@ -98,14 +98,14 @@ func (fc *fileCtx) wrappers() []Wrapper {
 // the route of an API call. A distinctive name is what the claim rests on, and
 // the helpers that carry it — getAllOwners, GetChannels, CreateOrder — are
 // unaffected.
-func followable(w Wrapper, name string) bool {
+func followable(w wrapper, name string) bool {
 	return w.URLParam >= 0 || !httpMethodNames[strings.ToUpper(name)]
 }
 
 // newWrapper describes the outbound call a function makes: a fixed route, or
 // the parameters the route and method arrive in.
-func newWrapper(lang string, u *storage.ASTUnit, site httpSite) (Wrapper, bool) {
-	w := Wrapper{MethodParam: -1, URLParam: -1}
+func newWrapper(lang string, u *storage.ASTUnit, site httpSite) (wrapper, bool) {
+	w := wrapper{MethodParam: -1, URLParam: -1}
 	if site.path != "" {
 		w.Method, w.Path, w.Host = site.method, site.path, site.host
 		return w, true
@@ -133,7 +133,7 @@ func paramIndex(params []string, expr string) int {
 		return -1
 	}
 	found := -1
-	for _, tok := range identTokens(expr) {
+	for _, tok := range contract.IdentTokens(expr) {
 		for i, p := range params {
 			if p == tok {
 				found = i
@@ -188,7 +188,7 @@ func stringLiterals(expr string) []string {
 
 // target resolves the route a call site reaches through the wrapper from the
 // argument expressions at that site.
-func (w Wrapper) target(args []string) (method, path, host string, ok bool) {
+func (w wrapper) target(args []string) (method, path, host string, ok bool) {
 	if w.URLParam < 0 {
 		if w.Path == "" {
 			return "", "", "", false
@@ -234,11 +234,11 @@ func orAnyMethod(m string) string {
 // linkWrappers attributes the wrappers' outbound calls to the call sites in
 // this file. It is the same pass the indexer runs across a directory, applied
 // to the file's own helpers.
-func (fc *fileCtx) linkWrappers(wrappers []Wrapper) {
+func (fc *fileCtx) linkWrappers(wrappers []wrapper) {
 	if len(wrappers) == 0 {
 		return
 	}
-	byName := make(map[string]Wrapper, len(wrappers))
+	byName := make(map[string]wrapper, len(wrappers))
 	for _, w := range wrappers {
 		if _, dup := byName[w.Name]; !dup {
 			byName[w.Name] = w
@@ -258,7 +258,7 @@ func (fc *fileCtx) linkWrappers(wrappers []Wrapper) {
 // A call site that already carries an http_call on the same line is left
 // alone, which makes the pass idempotent: the indexer re-runs it with the
 // directory-wide table over files whose own helpers were already linked.
-func linkWrapperCalls(edges []*storage.Edge, byName map[string]Wrapper) (int, []*storage.Edge) {
+func linkWrapperCalls(edges []*storage.Edge, byName map[string]wrapper) (int, []*storage.Edge) {
 	if len(byName) == 0 {
 		return 0, edges
 	}
@@ -291,7 +291,7 @@ func linkWrapperCalls(edges []*storage.Edge, byName map[string]Wrapper) (int, []
 		edges = append(edges, &storage.Edge{
 			SrcID:      e.SrcID,
 			Kind:       storage.EdgeHTTPCall,
-			DstName:    RouteKey(method, route),
+			DstName:    routeKey(method, route),
 			Line:       e.Line,
 			Confidence: contract.ConfWeak,
 			Meta: storage.EncodeEdgeMeta(&storage.EdgeMeta{

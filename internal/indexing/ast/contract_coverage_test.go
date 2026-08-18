@@ -213,7 +213,7 @@ func Add(a, b int) int { return a + b }
 // must be able to tell apart from a zero.
 func TestCoverageAbsentForNonCallLanguages(t *testing.T) {
 	for _, lang := range []string{"sql", "proto", "yaml"} {
-		if _, ok := GetParserForLanguage(lang).(FactsParser); ok {
+		if _, ok := GetParserForLanguage(lang).(factsParser); ok {
 			t.Errorf("%s parser reports coverage it does not collect", lang)
 		}
 	}

@@ -326,7 +326,7 @@ func (l *Linker) resolveLocal(ctx context.Context, repoID string, stats *RunStat
 
 	w := newResolutionWriter(l.store, stats, "link local edge")
 	for _, e := range edges {
-		name := lastComponent(e.DstName)
+		name := contract.LastComponent(e.DstName)
 		candidates := byName[name]
 		if len(candidates) == 0 {
 			continue
@@ -1442,11 +1442,4 @@ func (l *Linker) deriveKafkaFlows(ctx context.Context, repoID string, rewritten 
 		}
 	}
 	return nil
-}
-
-func lastComponent(s string) string {
-	if i := strings.LastIndex(s, "."); i >= 0 {
-		return s[i+1:]
-	}
-	return s
 }

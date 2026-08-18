@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -98,7 +100,7 @@ func (p *TreeSitterParser) Parse(filePath, content string) ([]*storage.ASTUnit, 
 // need from it: the units and edges Parse returns, plus the facts that only
 // make sense once other files are in view — the local outbound wrappers and
 // this file's contract-coverage counters.
-func (p *TreeSitterParser) ParseFacts(filePath, content string) (*FileFacts, error) {
+func (p *TreeSitterParser) ParseFacts(filePath, content string) (*fileFacts, error) {
 	lang, err := p.sitterLanguage()
 	if err != nil {
 		return nil, err
@@ -137,7 +139,7 @@ func (p *TreeSitterParser) ParseFacts(filePath, content string) (*FileFacts, err
 		}
 	}
 
-	return &FileFacts{Units: fc.units, Edges: fc.edges, Wrappers: wrappers,
+	return &fileFacts{Units: fc.units, Edges: fc.edges, Wrappers: wrappers,
 		Coverage: fc.cov, Tables: fc.tables, Consts: fc.consts}, nil
 }
 
@@ -150,11 +152,11 @@ func (p *TreeSitterParser) Language() string {
 func GetParserForLanguage(lang string) Parser {
 	switch lang {
 	case "proto":
-		return NewProtoParser()
+		return newProtoParser()
 	case "sql":
-		return NewSQLParser()
+		return newSQLParser()
 	case "yaml", "json", "properties":
-		return NewConfigParser(lang)
+		return newConfigParser(lang)
 	default:
 		return NewTreeSitterParser(lang)
 	}
@@ -178,11 +180,11 @@ func RegisterDefaultParsers(indexer *Indexer) {
 // index in the parsed file's unit slice instead of a storage ID.
 const srcMarkPrefix = "#"
 
-// SrcMark returns the positional marker for unit index i.
-func SrcMark(i int) string { return fmt.Sprintf("%s%d", srcMarkPrefix, i) }
+// srcMark returns the positional marker for unit index i.
+func srcMark(i int) string { return fmt.Sprintf("%s%d", srcMarkPrefix, i) }
 
-// ResolveMark returns the unit index for a marker, or -1.
-func ResolveMark(s string) int {
+// resolveMark returns the unit index for a marker, or -1.
+func resolveMark(s string) int {
 	if !strings.HasPrefix(s, srcMarkPrefix) {
 		return -1
 	}
@@ -224,7 +226,7 @@ type fileCtx struct {
 	// this file does not declare, and consts the table names this file declares
 	// for the rest of its package. The two halves are joined per directory once
 	// the batch is parsed (see linkPackageTables).
-	tables []PendingTable
+	tables []pendingTable
 	consts map[string]string
 }
 
@@ -286,8 +288,8 @@ func (fc *fileCtx) tableCandidate(unit int, ident, kind string, line int, args [
 	if unit < 0 || len(fc.tables) >= maxPendingTables {
 		return
 	}
-	fc.tables = append(fc.tables, PendingTable{
-		Src: SrcMark(unit), Ident: ident, Kind: kind, Line: line, Args: args,
+	fc.tables = append(fc.tables, pendingTable{
+		Src: srcMark(unit), Ident: ident, Kind: kind, Line: line, Args: args,
 	})
 }
 
@@ -423,7 +425,7 @@ func (fc *fileCtx) addEdge(srcIdx int, kind, dstName string, line int, conf floa
 		meta.BaseConf = conf
 	}
 	fc.edges = append(fc.edges, &storage.Edge{
-		SrcID:      SrcMark(srcIdx),
+		SrcID:      srcMark(srcIdx),
 		Kind:       kind,
 		DstName:    dstName,
 		Line:       line,
@@ -451,7 +453,7 @@ func edgeNeedsBaseConf(kind string) bool {
 // found by the generic registry rule stays distinguishable from one a
 // framework rule recognized exactly.
 func (fc *fileCtx) addRoute(n *sitter.Node, method, path, handler string, line int, conf float32, detectedBy string) int {
-	idx := fc.addUnit(n, storage.KindHTTPRoute, method+" "+path, RouteKey(method, path), "path:"+path, "")
+	idx := fc.addUnit(n, storage.KindHTTPRoute, method+" "+path, routeKey(method, path), "path:"+path, "")
 	if detectedBy != "" {
 		fc.units[idx].Meta = storage.EncodeUnitMeta(&storage.UnitMeta{DetectedBy: detectedBy})
 	}
@@ -468,7 +470,7 @@ func (fc *fileCtx) enclosingUnit(pos int, kinds ...string) int {
 	bestSpan := 1 << 62
 	for i, u := range fc.units {
 		if u.StartByte <= pos && pos < u.EndByte {
-			if len(kinds) > 0 && !contains(kinds, u.Kind) {
+			if len(kinds) > 0 && !slices.Contains(kinds, u.Kind) {
 				continue
 			}
 			span := u.EndByte - u.StartByte
@@ -642,34 +644,11 @@ func isAliasExpr(s string) bool {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
-		if !isWordByte(s[i]) && s[i] != '.' {
+		if !contract.IsWordByte(s[i]) && s[i] != '.' {
 			return false
 		}
 	}
 	return true
-}
-
-// identTokens splits an expression into identifier tokens: maximal runs of
-// identifier characters, so "g(x, body.UserID)" -> ["g", "x", "body", "UserID"].
-func identTokens(s string) []string {
-	var toks []string
-	start := -1
-	for i := 0; i < len(s); i++ {
-		if isWordByte(s[i]) {
-			if start < 0 {
-				start = i
-			}
-			continue
-		}
-		if start >= 0 {
-			toks = append(toks, s[start:i])
-			start = -1
-		}
-	}
-	if start >= 0 {
-		toks = append(toks, s[start:])
-	}
-	return toks
 }
 
 // relevantAliases returns the subset of aliases whose NAME occurs as an
@@ -691,7 +670,7 @@ func relevantAliases(aliases map[string]string, args []string, fields map[string
 	out := map[string]string{}
 	var direct []string
 	scan := func(expr string) {
-		for _, tok := range identTokens(expr) {
+		for _, tok := range contract.IdentTokens(expr) {
 			if len(out) >= maxEdgeAliases {
 				return
 			}
@@ -706,7 +685,7 @@ func relevantAliases(aliases map[string]string, args []string, fields map[string
 	for _, a := range args {
 		scan(a)
 	}
-	for _, k := range sortedKeys(fields) {
+	for _, k := range slices.Sorted(maps.Keys(fields)) {
 		scan(fields[k])
 	}
 	// One transitive step over the values of the directly relevant aliases,
@@ -719,28 +698,6 @@ func relevantAliases(aliases map[string]string, args []string, fields map[string
 		return nil
 	}
 	return out
-}
-
-// sortedKeys returns a map's keys in ascending order; nil for an empty map.
-func sortedKeys(m map[string]string) []string {
-	if len(m) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // unquote strips matching string delimiters and returns (value, true) if the
@@ -762,16 +719,10 @@ func unquote(s string) (string, bool) {
 	return body, true
 }
 
-// lastComponent returns the identifier after the final '.' (or the whole
-// string). Surrounding whitespace is dropped: a chained call split across
-// lines puts the newline and the indentation between the '.' and the method
-// name, and the name is compared against proto and framework tables verbatim.
-func lastComponent(s string) string {
-	if i := strings.LastIndex(s, "."); i >= 0 {
-		return strings.TrimSpace(s[i+1:])
-	}
-	return strings.TrimSpace(s)
-}
+// lastComponent is contract.LastComponent under its local name: the
+// extractors compare the result against proto and framework tables verbatim,
+// see the doc there for why surrounding whitespace is dropped.
+func lastComponent(s string) string { return contract.LastComponent(s) }
 
 // trimGenericArgs drops a type's generic argument list, keeping the type
 // itself: IIntegrationEventHandler<OrderStarted> -> IIntegrationEventHandler,
@@ -1009,20 +960,19 @@ func isLowerOrDigit(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
 }
 
-// Contract join keys shared by parsers and the linker. Construction and
-// parsing live in internal/contract; these are thin wrappers kept for the
-// language extractors and existing callers.
+// Contract join keys shared by the parsers. Construction and parsing live in
+// internal/contract; these are thin local wrappers for the extractors.
 
-// RouteKey builds the join key for an HTTP route: "http:POST /a/b".
-func RouteKey(method, path string) string { return contract.HTTP(method, path) }
+// routeKey builds the join key for an HTTP route: "http:POST /a/b".
+func routeKey(method, path string) string { return contract.HTTP(method, path) }
 
-// TopicKey builds the join key for a Kafka topic: "topic:orders.created".
-func TopicKey(name string) string { return contract.Topic(name) }
+// topicKey builds the join key for a Kafka topic: "topic:orders.created".
+func topicKey(name string) string { return contract.Topic(name) }
 
-// GrpcKey builds the join key for a gRPC method: "grpc:Service/Method" or
+// grpcKey builds the join key for a gRPC method: "grpc:Service/Method" or
 // "grpc:pkg.Service/Method". Empty service yields "grpc:/Method" which the
 // linker matches by suffix.
-func GrpcKey(service, method string) string { return contract.GRPC(service, method) }
+func grpcKey(service, method string) string { return contract.GRPC(service, method) }
 
 func hashString(s string) string {
 	sum := sha256.Sum256([]byte(s))

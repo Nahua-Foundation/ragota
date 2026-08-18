@@ -438,7 +438,7 @@ func (c *csharpExtractor) handleMethod(fc *fileCtx, n *sitter.Node, scope, baseP
 	line := fc.units[idx].StartLine
 
 	if c.rpcSvc != "" && csharpIsRPCImpl(fc, n, sig) {
-		fc.addEdge(idx, storage.EdgeImplementsRPC, GrpcKey(c.rpcSvc, name), line, contract.ConfCrossFile, nil)
+		fc.addEdge(idx, storage.EdgeImplementsRPC, grpcKey(c.rpcSvc, name), line, contract.ConfCrossFile, nil)
 	}
 	if c.eventTopic != "" && csharpEventHandlerMethods[name] {
 		key, topic := topicEdgeKey(c.eventTopic)
@@ -450,7 +450,7 @@ func (c *csharpExtractor) handleMethod(fc *fileCtx, n *sitter.Node, scope, baseP
 		if method, ok := csharpHTTPAttrs[attr.name]; ok {
 			sub := c.attrValue(fc, attr.node)
 			path := joinPath(basePath, sub)
-			ridx := fc.addUnit(n, storage.KindHTTPRoute, method+" "+path, RouteKey(method, path), "path:"+path, "")
+			ridx := fc.addUnit(n, storage.KindHTTPRoute, method+" "+path, routeKey(method, path), "path:"+path, "")
 			fc.addEdge(ridx, storage.EdgeHandledBy, name, line, contract.ConfHigh, nil)
 		}
 	}
@@ -585,7 +585,7 @@ func (c *csharpExtractor) handleObjectCreation(fc *fileCtx, n *sitter.Node) {
 	}
 	line := int(n.StartPoint().Row) + 1
 	host, path := splitURL(u)
-	fc.addEdge(src, storage.EdgeHTTPCall, RouteKey(method, path), line, conf,
+	fc.addEdge(src, storage.EdgeHTTPCall, routeKey(method, path), line, conf,
 		&storage.EdgeMeta{Method: method, Path: path, Host: host, Args: args,
 			Aliases: c.aliases.relevant(int(n.StartByte()), args, nil)})
 }
@@ -626,7 +626,7 @@ func (c *csharpExtractor) handleInvocation(fc *fileCtx, n *sitter.Node) {
 	if svc != "" && name != "" {
 		method := strings.TrimSuffix(name, "Async")
 		if method != "" {
-			fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, capitalizeFirst(method)), line, contract.ConfHigh,
+			fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, capitalizeFirst(method)), line, contract.ConfHigh,
 				&storage.EdgeMeta{Args: args, Aliases: aliases})
 			fc.contractSite(storage.ContractKindRPC, true)
 			return
@@ -677,7 +677,7 @@ func (c *csharpExtractor) handleInvocation(fc *fileCtx, n *sitter.Node) {
 		if svc := grpcStubService(c.types[lastComponent(object)], fc.hasGRPC() || len(c.clients) > 0); svc != "" {
 			method := strings.TrimSuffix(name, "Async")
 			if method != "" {
-				fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, capitalizeFirst(method)), line, contract.ConfCrossFile,
+				fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, capitalizeFirst(method)), line, contract.ConfCrossFile,
 					&storage.EdgeMeta{Args: args, Aliases: aliases})
 				fc.contractSite(storage.ContractKindRPC, true)
 				return

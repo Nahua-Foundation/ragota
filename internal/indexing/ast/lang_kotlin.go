@@ -132,7 +132,7 @@ func (k *ktExtractor) handleFunction(fc *fileCtx, n *sitter.Node, scope, basePat
 	for _, ann := range ktAnnotations(fc, n) {
 		if method, ok := javaMappingMethods[ann.name]; ok {
 			path := joinPath(basePath, k.ktAnnotationValue(fc, ann.node))
-			ridx := fc.addUnit(n, storage.KindHTTPRoute, method+" "+path, RouteKey(method, path), "path:"+path, "")
+			ridx := fc.addUnit(n, storage.KindHTTPRoute, method+" "+path, routeKey(method, path), "path:"+path, "")
 			fc.addEdge(ridx, storage.EdgeHandledBy, name, line, contract.ConfHigh, nil)
 		}
 	}
@@ -178,7 +178,7 @@ func (k *ktExtractor) handleCall(fc *fileCtx, n *sitter.Node) {
 	// WebClient fluent chain: webClient.post().uri("/api/x").bodyValue(b)...
 	if m, u, conf, ok := fluentChainHTTP(name, object, args, k.consts.resolve); ok {
 		host, path := splitURL(u)
-		fc.addEdge(src, storage.EdgeHTTPCall, RouteKey(m, path), line, conf,
+		fc.addEdge(src, storage.EdgeHTTPCall, routeKey(m, path), line, conf,
 			&storage.EdgeMeta{Method: m, Path: path, Host: host, Args: args, Aliases: aliases})
 		fc.contractSite(storage.ContractKindHTTP, true)
 		return
@@ -190,7 +190,7 @@ func (k *ktExtractor) handleCall(fc *fileCtx, n *sitter.Node) {
 		return
 	}
 	if svc := inlineStubService(object, fc.hasGRPC()); svc != "" && name != "" {
-		fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, capitalizeFirst(name)), line, contract.ConfHigh,
+		fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, capitalizeFirst(name)), line, contract.ConfHigh,
 			&storage.EdgeMeta{Args: args, Aliases: aliases})
 		fc.contractSite(storage.ContractKindRPC, true)
 		return
@@ -207,7 +207,7 @@ func (k *ktExtractor) handleCall(fc *fileCtx, n *sitter.Node) {
 	// Java, since both run on the Spring stack.
 	if name != "" {
 		if svc := grpcStubService(recvType, fc.hasGRPC()); svc != "" {
-			fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, capitalizeFirst(name)), line, contract.ConfCrossFile,
+			fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, capitalizeFirst(name)), line, contract.ConfCrossFile,
 				&storage.EdgeMeta{Args: args, Aliases: aliases})
 			fc.contractSite(storage.ContractKindRPC, true)
 			return

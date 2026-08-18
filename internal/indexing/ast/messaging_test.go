@@ -34,7 +34,7 @@ class Publisher:
                                     routing_key=self.ROUTING_KEY,
                                     body=msg)
 `,
-			produces: []string{TopicKey("orders")},
+			produces: []string{topicKey("orders")},
 		},
 		{
 			name: "pika publish to the default exchange falls back to the exchange name",
@@ -42,7 +42,7 @@ class Publisher:
 			src: `def send(channel, body):
     channel.basic_publish(exchange='events', routing_key='', body=body)
 `,
-			produces: []string{TopicKey("events")},
+			produces: []string{topicKey("events")},
 		},
 		{
 			name: "pika consume names its queue with a keyword",
@@ -50,7 +50,7 @@ class Publisher:
 			src: `def run(channel):
     channel.basic_consume(queue='orders', on_message_callback=handle)
 `,
-			consumes: []string{TopicKey("orders")},
+			consumes: []string{topicKey("orders")},
 		},
 		{
 			name: "boto3 sqs send and receive key on the queue name behind the url",
@@ -61,8 +61,8 @@ class Publisher:
 def read(sqs):
     return sqs.receive_message(QueueUrl='https://sqs.eu-west-1.amazonaws.com/123456789012/order-events')
 `,
-			produces: []string{TopicKey("order-events")},
-			consumes: []string{TopicKey("order-events")},
+			produces: []string{topicKey("order-events")},
+			consumes: []string{topicKey("order-events")},
 		},
 		{
 			name: "boto3 sns publish keys on the arn's topic name",
@@ -70,7 +70,7 @@ def read(sqs):
 			src: `def notify(sns_client, msg):
     sns_client.publish(TopicArn='arn:aws:sns:us-east-1:123456789012:order-shipped', Message=msg)
 `,
-			produces: []string{TopicKey("order-shipped")},
+			produces: []string{topicKey("order-shipped")},
 		},
 		{
 			name: "go amqp publish takes the routing key, consume the queue",
@@ -86,8 +86,8 @@ func consume(rabbitChan *amqp.Channel) {
 	_ = msgs
 }
 `,
-			produces: []string{TopicKey("orders")},
-			consumes: []string{TopicKey("orders")},
+			produces: []string{topicKey("orders")},
+			consumes: []string{topicKey("orders")},
 		},
 		{
 			name: "go amqp091 publish shifts its arguments for the context",
@@ -98,7 +98,7 @@ func publish(amqpChan *amqp.Channel) {
 	amqpChan.PublishWithContext(ctx, "events", "orders.created", false, false, msg)
 }
 `,
-			produces: []string{TopicKey("orders.created")},
+			produces: []string{topicKey("orders.created")},
 		},
 		{
 			name: "go nats publish and subscribe on a connection named nc",
@@ -110,8 +110,8 @@ func run(nc *nats.Conn) {
 	nc.Subscribe("orders.shipped", handle)
 }
 `,
-			produces: []string{TopicKey("orders.created")},
-			consumes: []string{TopicKey("orders.shipped")},
+			produces: []string{topicKey("orders.created")},
+			consumes: []string{topicKey("orders.shipped")},
 		},
 		{
 			name: "a plain network connection is not a nats connection",
@@ -122,7 +122,7 @@ func run(conn *websocket.Conn) {
 	conn.Publish("hello there", data)
 }
 `,
-			absent: []string{TopicKey("hello there")},
+			absent: []string{topicKey("hello there")},
 		},
 		{
 			name: "go sqs input struct carries the queue url",
@@ -136,7 +136,7 @@ func send(client *sqs.Client) {
 	})
 }
 `,
-			produces: []string{TopicKey("payments")},
+			produces: []string{topicKey("payments")},
 		},
 		{
 			name: "go redis stream add",
@@ -147,7 +147,7 @@ func add(rdb *redis.Client) {
 	rdb.XAdd(ctx, &redis.XAddArgs{Stream: "order-events", Values: v})
 }
 `,
-			produces: []string{TopicKey("order-events")},
+			produces: []string{topicKey("order-events")},
 		},
 		{
 			name: "java rabbit client publish and consume",
@@ -164,8 +164,8 @@ public class Broker {
   }
 }
 `,
-			produces: []string{TopicKey("orders")},
-			consumes: []string{TopicKey("orders")},
+			produces: []string{topicKey("orders")},
+			consumes: []string{topicKey("orders")},
 		},
 		{
 			name: "spring amqp convertAndSend picks its destination by arity",
@@ -184,7 +184,7 @@ public class Publisher {
   }
 }
 `,
-			produces: []string{TopicKey("orders.created"), TopicKey("orders.paid")},
+			produces: []string{topicKey("orders.created"), topicKey("orders.paid")},
 		},
 		{
 			name: "rabbit listener names its queues, not its topics",
@@ -197,7 +197,7 @@ public class Listener {
   }
 }
 `,
-			consumes: []string{TopicKey("orders")},
+			consumes: []string{topicKey("orders")},
 		},
 		{
 			name: "jms listener destination",
@@ -210,7 +210,7 @@ public class Handler {
   }
 }
 `,
-			consumes: []string{TopicKey("shipping.requests")},
+			consumes: []string{topicKey("shipping.requests")},
 		},
 		{
 			name: "csharp rabbit client with named arguments",
@@ -230,8 +230,8 @@ public class Bus
     }
 }
 `,
-			produces: []string{TopicKey("orders.created")},
-			consumes: []string{TopicKey("orders-queue")},
+			produces: []string{topicKey("orders.created")},
+			consumes: []string{topicKey("orders-queue")},
 		},
 		{
 			name: "azure service bus sender and processor name their queue",
@@ -247,8 +247,8 @@ public class Sb
     }
 }
 `,
-			produces: []string{TopicKey("orders")},
-			consumes: []string{TopicKey("shipments")},
+			produces: []string{topicKey("orders")},
+			consumes: []string{topicKey("shipments")},
 		},
 		{
 			name: "amqplib publish, sendToQueue and consume",
@@ -259,8 +259,8 @@ public class Sb
   await channel.consume('orders', handle);
 }
 `,
-			produces: []string{TopicKey("orders.created"), TopicKey("orders")},
-			consumes: []string{TopicKey("orders")},
+			produces: []string{topicKey("orders.created"), topicKey("orders")},
+			consumes: []string{topicKey("orders")},
 		},
 		{
 			name: "google pubsub topic and subscription bindings",
@@ -270,8 +270,8 @@ public class Sb
   pubSubClient.subscription('projects/p/subscriptions/order-events-sub').on('message', handle);
 }
 `,
-			produces: []string{TopicKey("order-events")},
-			consumes: []string{TopicKey("order-events-sub")},
+			produces: []string{topicKey("order-events")},
+			consumes: []string{topicKey("order-events-sub")},
 		},
 		{
 			name: "aws sdk v2 style sqs options object",
@@ -280,7 +280,7 @@ public class Sb
   await sqs.sendMessage({ QueueUrl: 'https://sqs.us-east-1.amazonaws.com/1/jobs', MessageBody: 'x' });
 }
 `,
-			produces: []string{TopicKey("jobs")},
+			produces: []string{topicKey("jobs")},
 		},
 		{
 			name: "express res.send is not a publish",
@@ -289,7 +289,7 @@ public class Sb
   res.status(500).send('database not available');
 });
 `,
-			absent: []string{TopicKey("database not available")},
+			absent: []string{topicKey("database not available")},
 		},
 	}
 
@@ -347,7 +347,7 @@ public class GracePeriodConfirmedIntegrationEventHandler(ILogger logger)
     }
 }
 `
-	key := TopicKey("GracePeriodConfirmedIntegrationEvent")
+	key := topicKey("GracePeriodConfirmedIntegrationEvent")
 
 	pub := parseFactsOrFail(t, "csharp", "GracePeriodManagerService.cs", publisher)
 	if findEdge(pub.Edges, storage.EdgeProduces, key) == nil {
@@ -355,7 +355,7 @@ public class GracePeriodConfirmedIntegrationEventHandler(ILogger logger)
 	}
 	// The abstract base names no destination — the routing key is the runtime
 	// type — so it must not become a topic of its own.
-	if findEdge(pub.Edges, storage.EdgeProduces, TopicKey("IntegrationEvent")) != nil {
+	if findEdge(pub.Edges, storage.EdgeProduces, topicKey("IntegrationEvent")) != nil {
 		t.Error("the abstract event base was keyed as a topic")
 	}
 
@@ -403,7 +403,7 @@ func send(pulsarProducer *pulsar.Producer) {
 	pulsarProducer.Emit("orders.created", payload)
 }
 `,
-			produces: []string{TopicKey("orders.created")},
+			produces: []string{topicKey("orders.created")},
 		},
 		{
 			name: "an unrecognized receive on a broker receiver",
@@ -411,7 +411,7 @@ func send(pulsarProducer *pulsar.Producer) {
 			src: `def run(message_broker):
     message_broker.receive_messages("orders.shipped")
 `,
-			consumes: []string{TopicKey("orders.shipped")},
+			consumes: []string{topicKey("orders.shipped")},
 		},
 		{
 			name: "a sentence in the argument is not a queue name",
@@ -422,7 +422,7 @@ func send(eventBus *bus.Bus) {
 	eventBus.Emit("failed to reach the broker", err)
 }
 `,
-			absent: []string{TopicKey("failed to reach the broker")},
+			absent: []string{topicKey("failed to reach the broker")},
 		},
 		{
 			name: "a receiver that names nothing broker-like is left alone",
@@ -433,7 +433,7 @@ func send(w *widget) {
 	w.Emit("orders.created", payload)
 }
 `,
-			absent: []string{TopicKey("orders.created")},
+			absent: []string{topicKey("orders.created")},
 		},
 	}
 
@@ -662,7 +662,7 @@ public static class Extensions
     }
 }
 `,
-			consumes: []string{TopicKey("OrderStockConfirmedIntegrationEvent")},
+			consumes: []string{topicKey("OrderStockConfirmedIntegrationEvent")},
 			handler:  "OrderStockConfirmedIntegrationEventHandler",
 		},
 		{
@@ -674,7 +674,7 @@ public class Sender(IEventBus bus)
     public Task Emit() => bus.Publish<OrderStockConfirmedIntegrationEvent>(new (1));
 }
 `,
-			produces: []string{TopicKey("OrderStockConfirmedIntegrationEvent")},
+			produces: []string{topicKey("OrderStockConfirmedIntegrationEvent")},
 		},
 		{
 			// MassTransit registers the consumer class, not the message; the
@@ -690,7 +690,7 @@ public static class Bus
     }
 }
 `,
-			consumes: []string{TopicKey("SubmitOrderCommand")},
+			consumes: []string{topicKey("SubmitOrderCommand")},
 			handler:  "SubmitOrderConsumer",
 		},
 		{
@@ -706,7 +706,7 @@ public static class Extensions
     }
 }
 `,
-			absent: []string{TopicKey("OrderPaidIntegrationEvent")},
+			absent: []string{topicKey("OrderPaidIntegrationEvent")},
 		},
 		{
 			// eShop's own app host, two projects away from the event bus:
@@ -723,7 +723,7 @@ public class Subscriber
     }
 }
 `,
-			absent: []string{TopicKey("BeforeStartEvent")},
+			absent: []string{topicKey("BeforeStartEvent")},
 		},
 		{
 			name: "the declaration of a generic registration names no contract",
@@ -740,7 +740,7 @@ public static class EventBusBuilderExtensions
     }
 }
 `,
-			absent: []string{TopicKey("T"), TopicKey("TH")},
+			absent: []string{topicKey("T"), topicKey("TH")},
 		},
 	}
 
@@ -824,12 +824,12 @@ public class Svc(HttpClient httpClient, IMediator mediator)
 }
 `
 	facts := parseFactsOrFail(t, "csharp", "Svc.cs", src)
-	for _, not := range []string{TopicKey("HttpRequestMessage"), TopicKey("OutboundKeepAliveMessage")} {
+	for _, not := range []string{topicKey("HttpRequestMessage"), topicKey("OutboundKeepAliveMessage")} {
 		if findEdge(facts.Edges, storage.EdgeProduces, not) != nil {
 			t.Errorf("produces %q was emitted and should not be", not)
 		}
 	}
-	if findEdge(facts.Edges, storage.EdgeProduces, TopicKey("CancelOrderCommand")) == nil {
+	if findEdge(facts.Edges, storage.EdgeProduces, topicKey("CancelOrderCommand")) == nil {
 		t.Errorf("a mediator send is still a dispatch: %v", edgeNamesOfKind(facts.Edges, storage.EdgeProduces))
 	}
 }
@@ -854,11 +854,11 @@ def consume_asset_event():
     pass
 `
 	facts := parseFactsOrFail(t, "python", "tasks.py", celery)
-	if findEdge(facts.Edges, storage.EdgeConsumes, TopicKey("process_order")) == nil {
+	if findEdge(facts.Edges, storage.EdgeConsumes, topicKey("process_order")) == nil {
 		t.Errorf("celery task consumer missing from %v", edgeNamesOfKind(facts.Edges, storage.EdgeConsumes))
 	}
 	facts = parseFactsOrFail(t, "python", "example_dag.py", dag)
-	for _, not := range []string{TopicKey("produce_asset_events"), TopicKey("consume_asset_event")} {
+	for _, not := range []string{topicKey("produce_asset_events"), topicKey("consume_asset_event")} {
 		if findEdge(facts.Edges, storage.EdgeConsumes, not) != nil {
 			t.Errorf("a dag node was read as a queue consumer: %s", not)
 		}
@@ -876,10 +876,10 @@ def run(pool, image_params):
     self.delay(30)
 `
 	facts := parseFactsOrFail(t, "python", "run.py", src)
-	if findEdge(facts.Edges, storage.EdgeProduces, TopicKey("process_order")) == nil {
+	if findEdge(facts.Edges, storage.EdgeProduces, topicKey("process_order")) == nil {
 		t.Errorf("celery dispatch missing from %v", edgeNamesOfKind(facts.Edges, storage.EdgeProduces))
 	}
-	for _, not := range []string{TopicKey("pool"), TopicKey("self")} {
+	for _, not := range []string{topicKey("pool"), topicKey("self")} {
 		if findEdge(facts.Edges, storage.EdgeProduces, not) != nil {
 			t.Errorf("%q was emitted and should not be", not)
 		}

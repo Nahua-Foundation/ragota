@@ -2,6 +2,7 @@ package ast
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 
 	"github.com/Nahua-Foundation/ragota/internal/contract"
@@ -85,7 +86,7 @@ func (m objectMatch) matches(object string) bool {
 }
 
 // httpClientRule detects an outgoing HTTP client call and emits an http_call
-// edge keyed by RouteKey(method, path), with host/path/args in the meta.
+// edge keyed by routeKey(method, path), with host/path/args in the meta.
 type httpClientRule struct {
 	Object  objectMatch       // receiver filter; zero value = any receiver
 	Methods map[string]string // call name -> HTTP method ("ANY" defers to MethodArg)
@@ -262,7 +263,7 @@ func (r *httpClientRule) apply(fc *fileCtx, cs *callSite, res resolver) (claimed
 		return true, false
 	}
 	host, path := splitURL(u)
-	fc.addEdge(cs.Src, storage.EdgeHTTPCall, RouteKey(m, path), cs.Line, conf,
+	fc.addEdge(cs.Src, storage.EdgeHTTPCall, routeKey(m, path), cs.Line, conf,
 		&storage.EdgeMeta{Method: m, Path: path, Host: host, Args: cs.Args, Fields: cs.Fields, Aliases: cs.Aliases})
 	return true, true
 }
@@ -354,7 +355,7 @@ func isRouteSegment(seg string) bool {
 	}
 	for i := 0; i < len(seg); i++ {
 		switch c := seg[i]; {
-		case isWordByte(c):
+		case contract.IsWordByte(c):
 		case c == '-', c == '.', c == '~', c == '%', c == '{', c == '}', c == '+':
 		default:
 			return false
@@ -500,7 +501,7 @@ func inlineConstructedType(object string) string {
 	if !ok {
 		return ""
 	}
-	if rest, found := strings.CutPrefix(head, "new"); found && rest != "" && !isWordByte(rest[0]) {
+	if rest, found := strings.CutPrefix(head, "new"); found && rest != "" && !contract.IsWordByte(rest[0]) {
 		return strings.TrimSpace(rest)
 	}
 	name := lastComponent(head)
@@ -691,7 +692,7 @@ func brokerName(v string, ref bool) string {
 }
 
 // kafkaProduceRule detects a message publish and emits a produces edge keyed
-// by TopicKey(topic).
+// by topicKey(topic).
 type kafkaProduceRule struct {
 	Object   objectMatch
 	Methods  []string // call names ("send", "Produce", ...)
@@ -763,7 +764,7 @@ func matchBrokerReceiver(obj, recv objectMatch, cs *callSite) bool {
 // apply emits the rule's produces edge. See httpClientRule.apply for the
 // meaning of the two results.
 func (r *kafkaProduceRule) apply(fc *fileCtx, cs *callSite, res resolver) (claimed, emitted bool) {
-	if !contains(r.Methods, cs.Name) || !matchBrokerReceiver(r.Object, r.RecvType, cs) {
+	if !slices.Contains(r.Methods, cs.Name) || !matchBrokerReceiver(r.Object, r.RecvType, cs) {
 		return false, false
 	}
 	if r.NeedsBroker && !brokerHandle(fc, cs) {
@@ -789,13 +790,13 @@ func (r *kafkaProduceRule) apply(fc *fileCtx, cs *callSite, res resolver) (claim
 // the meta as the fallback.
 func topicEdgeKey(topic string) (key, name string) {
 	if ref, def, ok := splitPlaceholderDefault(topic); ok {
-		return TopicKey("${" + ref + "}"), def
+		return topicKey("${" + ref + "}"), def
 	}
-	return TopicKey(topic), topic
+	return topicKey(topic), topic
 }
 
 // kafkaConsumeRule detects a subscription and emits one consumes edge per
-// resolved topic, keyed by TopicKey(topic).
+// resolved topic, keyed by topicKey(topic).
 type kafkaConsumeRule struct {
 	Object   objectMatch
 	Methods  []string
@@ -841,7 +842,7 @@ func (r *kafkaConsumeRule) spec() topicSpec {
 // whose topic list is present but unresolvable — the rule owns that call site
 // even though it could name no topic.
 func (r *kafkaConsumeRule) apply(fc *fileCtx, cs *callSite, res resolver, list listResolver) (claimed, emitted, handled bool) {
-	if !contains(r.Methods, cs.Name) || !matchBrokerReceiver(r.Object, r.RecvType, cs) {
+	if !slices.Contains(r.Methods, cs.Name) || !matchBrokerReceiver(r.Object, r.RecvType, cs) {
 		return false, false, false
 	}
 	if r.NeedsBroker && !brokerHandle(fc, cs) {

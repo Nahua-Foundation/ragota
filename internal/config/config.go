@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,7 +130,7 @@ func expandEnv(s string) (string, error) {
 			ErrBadEnvRef, strings.Join(dedup(badRefs), ", "))
 	}
 	if len(missing) > 0 {
-		return "", fmt.Errorf("%w: %s", ErrMissingEnvVar, strings.Join(sortedKeys(missing), ", "))
+		return "", fmt.Errorf("%w: %s", ErrMissingEnvVar, strings.Join(slices.Sorted(maps.Keys(missing)), ", "))
 	}
 	return b.String(), nil
 }
@@ -228,15 +230,6 @@ func isEnvName(s string) bool {
 		}
 	}
 	return true
-}
-
-func sortedKeys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // splitList splits a comma-separated environment list, dropping empty entries.

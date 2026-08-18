@@ -321,16 +321,8 @@ func (p *Postgres) Close() error {
 // VectorStore returns the vector storage delegate.
 func (p *Postgres) VectorStore() storage.VectorStorage { return p.vectorStore }
 
-func intOrZero(s string) int64 {
-	if s == "" {
-		return 0
-	}
-	i, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return i
-}
+// intOrZero is sqlutil.IntOrZero under its local name.
+func intOrZero(s string) int64 { return sqlutil.IntOrZero(s) }
 
 func notFoundErr(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -18,8 +18,21 @@ import (
 const (
 	UnitColumns = "id, repo_id, file_path, language, kind, name, qualified, parent_id, start_line, end_line, start_byte, end_byte, signature, doc, hash, meta"
 	EdgeColumns = "id, repo_id, src_id, dst_id, kind, dst_name, file_path, line, dst_repo_id, confidence, meta"
-	RepoColumns = "id, name, source, url, path, branch, status, last_error, created_at, indexed_at"
 )
+
+// IntOrZero converts a string unit ID to its integer form; empty or
+// unparsable -> 0 (unresolved). Both SQL backends store unit IDs as integers
+// and hand this to the query builders as their idConv.
+func IntOrZero(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	i, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return i
+}
 
 // EdgeOrder is what both backends order GetEdges by. Like UnitTieBreak, it says
 // an edge's place in the result is where the edge is, not when it was written:

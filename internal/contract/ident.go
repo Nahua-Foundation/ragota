@@ -82,7 +82,7 @@ func SplitTopLevel(s string, sep byte) []string {
 		case ')', ']', '}':
 			depth--
 		case '<':
-			if i > 0 && isWordByte(s[i-1]) && i+1 < len(s) && s[i+1] != '=' && s[i+1] != '<' {
+			if i > 0 && IsWordByte(s[i-1]) && i+1 < len(s) && s[i+1] != '=' && s[i+1] != '<' {
 				angleDepth++
 			}
 		case '>':
@@ -100,8 +100,8 @@ func SplitTopLevel(s string, sep byte) []string {
 	return parts
 }
 
-// isWordByte reports whether b is an identifier character.
-func isWordByte(b byte) bool {
+// IsWordByte reports whether b is an identifier character.
+func IsWordByte(b byte) bool {
 	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
@@ -110,6 +110,17 @@ func IdentTokens(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool {
 		return !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
 	})
+}
+
+// LastComponent returns the identifier after the final '.' (or the whole
+// string). Surrounding whitespace is dropped: a chained call split across
+// lines puts the newline and the indentation between the '.' and the method
+// name, and the name is compared against proto and framework tables verbatim.
+func LastComponent(s string) string {
+	if i := strings.LastIndex(s, "."); i >= 0 {
+		return strings.TrimSpace(s[i+1:])
+	}
+	return strings.TrimSpace(s)
 }
 
 // TokenComponents splits s into identifier tokens and each token into its

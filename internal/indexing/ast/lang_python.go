@@ -335,7 +335,7 @@ func (p *pyExtractor) addDefinition(fc *fileCtx, def *sitter.Node, scope string)
 		doc := extractLineComments(string(fc.src), def, "#")
 		idx := fc.addUnit(def, kind, name, p.qualify(scope, name), sig, doc)
 		if p.rpcSvc != "" && pyIsRPCImpl(name, sig) {
-			fc.addEdge(idx, storage.EdgeImplementsRPC, GrpcKey(p.rpcSvc, name),
+			fc.addEdge(idx, storage.EdgeImplementsRPC, grpcKey(p.rpcSvc, name),
 				fc.units[idx].StartLine, contract.ConfCrossFile, nil)
 		}
 		return idx
@@ -418,7 +418,7 @@ func (p *pyExtractor) applyDecorators(fc *fileCtx, decorated *sitter.Node, fnIdx
 			// example DAG. A bare decorator names nothing but the function; the
 			// broker is the only thing that makes it a destination.
 			if bare := lastComponent(strings.TrimPrefix(fc.text(d), "@")); pyConsumerDecorators[bare] && fc.hasBroker() {
-				fc.addEdge(fnIdx, storage.EdgeConsumes, TopicKey(fn.Name), fn.StartLine, contract.ConfHeuristic,
+				fc.addEdge(fnIdx, storage.EdgeConsumes, topicKey(fn.Name), fn.StartLine, contract.ConfHeuristic,
 					&storage.EdgeMeta{Topic: fn.Name})
 			}
 			continue
@@ -435,7 +435,7 @@ func (p *pyExtractor) applyDecorators(fc *fileCtx, decorated *sitter.Node, fnIdx
 		if m, ok := pyHTTPMethods[name]; ok && len(args) > 0 {
 			if path, isStr := p.resolveString(args[0]); isStr && strings.HasPrefix(path, "/") {
 				path = joinPath(p.prefixes[lastComponent(object)], path)
-				ridx := fc.addUnit(call, storage.KindHTTPRoute, m+" "+path, RouteKey(m, path), "path:"+path, "")
+				ridx := fc.addUnit(call, storage.KindHTTPRoute, m+" "+path, routeKey(m, path), "path:"+path, "")
 				fc.addEdge(ridx, storage.EdgeHandledBy, fn.Name, fn.StartLine, contract.ConfHigh, nil)
 			}
 			continue
@@ -451,7 +451,7 @@ func (p *pyExtractor) applyDecorators(fc *fileCtx, decorated *sitter.Node, fnIdx
 					}
 				}
 				path = joinPath(p.prefixes[lastComponent(object)], path)
-				ridx := fc.addUnit(call, storage.KindHTTPRoute, method+" "+path, RouteKey(method, path), "path:"+path, "")
+				ridx := fc.addUnit(call, storage.KindHTTPRoute, method+" "+path, routeKey(method, path), "path:"+path, "")
 				fc.addEdge(ridx, storage.EdgeHandledBy, fn.Name, fn.StartLine, contract.ConfHigh, nil)
 			}
 			continue
@@ -531,7 +531,7 @@ func (p *pyExtractor) handleCall(fc *fileCtx, call *sitter.Node) {
 	// gRPC stub constructed in the call itself:
 	// pb2_grpc.OrderServiceStub(channel).CreateOrder(req).
 	if svc := inlineStubService(object, fc.hasGRPC()); svc != "" && name != "" {
-		fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, capitalizeFirst(name)), line, contract.ConfHigh,
+		fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, capitalizeFirst(name)), line, contract.ConfHigh,
 			&storage.EdgeMeta{Args: args, Fields: fields, Aliases: aliases})
 		fc.contractSite(storage.ContractKindRPC, true)
 		return
@@ -553,7 +553,7 @@ func (p *pyExtractor) handleCall(fc *fileCtx, call *sitter.Node) {
 		if ok {
 			m := httpMethodFromArg(args[0], p.resolveString)
 			host, path := splitURL(u)
-			fc.addEdge(src, storage.EdgeHTTPCall, RouteKey(m, path), line, conf,
+			fc.addEdge(src, storage.EdgeHTTPCall, routeKey(m, path), line, conf,
 				&storage.EdgeMeta{Method: m, Path: path, Host: host, Args: args,
 					Fields: pyHTTPKwargFields(kwargs, p.consts), Aliases: aliases})
 			return
@@ -571,7 +571,7 @@ func (p *pyExtractor) handleCall(fc *fileCtx, call *sitter.Node) {
 		task := lastComponent(object)
 		fc.contractSite(storage.ContractKindMessaging, task != "")
 		if task != "" {
-			fc.addEdge(src, storage.EdgeProduces, TopicKey(task), line, contract.ConfHeuristic,
+			fc.addEdge(src, storage.EdgeProduces, topicKey(task), line, contract.ConfHeuristic,
 				&storage.EdgeMeta{Topic: task, Args: args, Aliases: aliases})
 			return
 		}

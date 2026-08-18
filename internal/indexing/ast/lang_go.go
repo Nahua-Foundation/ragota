@@ -478,7 +478,7 @@ func (g *goExtractor) handleCall(fc *fileCtx, call *sitter.Node) {
 	// callers actually request.
 	if method, route, handler, ok := g.matchRoute(name, args); ok {
 		route = joinPath(g.prefixAt(operand, pos), route)
-		idx := fc.addUnit(call, storage.KindHTTPRoute, method+" "+route, RouteKey(method, route), "", "")
+		idx := fc.addUnit(call, storage.KindHTTPRoute, method+" "+route, routeKey(method, route), "", "")
 		fc.units[idx].Signature = "path:" + route
 		if handler != "" {
 			fc.addEdge(idx, storage.EdgeHandledBy, lastComponent(handler), line, contract.ConfHigh, nil)
@@ -498,7 +498,7 @@ func (g *goExtractor) handleCall(fc *fileCtx, call *sitter.Node) {
 	if svc := g.grpcService(fc, operand); svc != "" && name != "" {
 		fields := g.compositeFields(fc, call)
 		meta := &storage.EdgeMeta{Args: args, Fields: fields, Aliases: g.aliases.relevant(pos, args, fields)}
-		fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, name), line, contract.ConfHigh, meta)
+		fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, name), line, contract.ConfHigh, meta)
 		fc.contractSite(storage.ContractKindRPC, true)
 		return
 	}
@@ -591,7 +591,7 @@ func (g *goExtractor) handleCall(fc *fileCtx, call *sitter.Node) {
 	if src >= 0 && name != "" && name[0] >= 'A' && name[0] <= 'Z' {
 		if svc := grpcStubService(g.types[lastComponent(operand)], fc.hasGRPC()); svc != "" {
 			fields := g.compositeFields(fc, call)
-			fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, name), line, contract.ConfCrossFile,
+			fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, name), line, contract.ConfCrossFile,
 				&storage.EdgeMeta{Args: args, Fields: fields, Aliases: g.aliases.relevant(pos, args, fields)})
 			fc.contractSite(storage.ContractKindRPC, true)
 			return
@@ -611,7 +611,7 @@ func (g *goExtractor) handleCall(fc *fileCtx, call *sitter.Node) {
 			fc.contractSite(storage.ContractKindHTTP, ok)
 			if ok {
 				host, path := splitURL(u)
-				fc.addEdge(src, storage.EdgeHTTPCall, RouteKey(m, path), line, conf,
+				fc.addEdge(src, storage.EdgeHTTPCall, routeKey(m, path), line, conf,
 					&storage.EdgeMeta{Method: m, Path: path, Host: host, Args: args,
 						Aliases: g.aliases.relevant(pos, args, nil)})
 				return
@@ -934,16 +934,16 @@ func (g *goExtractor) markRPCImplementations(fc *fileCtx) {
 			continue
 		}
 		if svc := g.svcTypes[g.methodRecv[i]]; svc != "" {
-			fc.addEdge(i, storage.EdgeImplementsRPC, GrpcKey(svc, u.Name), u.StartLine, contract.ConfHigh, nil)
+			fc.addEdge(i, storage.EdgeImplementsRPC, grpcKey(svc, u.Name), u.StartLine, contract.ConfHigh, nil)
 			continue
 		}
 		emitted := false
 		for _, svc := range g.regSvcs {
-			fc.addEdge(i, storage.EdgeImplementsRPC, GrpcKey(svc, u.Name), u.StartLine, contract.ConfCrossFile, nil)
+			fc.addEdge(i, storage.EdgeImplementsRPC, grpcKey(svc, u.Name), u.StartLine, contract.ConfCrossFile, nil)
 			emitted = true
 		}
 		if !emitted && strings.Contains(u.Signature, "Request") && strings.Contains(u.Signature, "context.Context") {
-			fc.addEdge(i, storage.EdgeImplementsRPC, GrpcKey("", u.Name), u.StartLine, contract.ConfWeak, nil)
+			fc.addEdge(i, storage.EdgeImplementsRPC, grpcKey("", u.Name), u.StartLine, contract.ConfWeak, nil)
 		}
 	}
 }

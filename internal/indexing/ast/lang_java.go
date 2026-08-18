@@ -1,6 +1,7 @@
 package ast
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/Nahua-Foundation/ragota/internal/contract"
@@ -258,7 +259,7 @@ func (j *javaExtractor) handleMethod(fc *fileCtx, n *sitter.Node, scope, basePat
 	// every one of them takes the response StreamObserver. Java stubs expose
 	// lowerCamel names; the proto rpc they answer is PascalCase.
 	if j.rpcSvc != "" && strings.Contains(sig, "StreamObserver") {
-		fc.addEdge(idx, storage.EdgeImplementsRPC, GrpcKey(j.rpcSvc, capitalizeFirst(name)),
+		fc.addEdge(idx, storage.EdgeImplementsRPC, grpcKey(j.rpcSvc, capitalizeFirst(name)),
 			line, contract.ConfCrossFile, nil)
 	}
 
@@ -267,7 +268,7 @@ func (j *javaExtractor) handleMethod(fc *fileCtx, n *sitter.Node, scope, basePat
 		// HTTP route
 		if method, ok := javaMappingMethods[annName]; ok {
 			path := joinPath(basePath, j.annotationValue(fc, ann.node))
-			ridx := fc.addUnit(n, storage.KindHTTPRoute, method+" "+path, RouteKey(method, path), "path:"+path, "")
+			ridx := fc.addUnit(n, storage.KindHTTPRoute, method+" "+path, routeKey(method, path), "path:"+path, "")
 			fc.addEdge(ridx, storage.EdgeHandledBy, name, line, contract.ConfHigh, nil)
 		}
 		// Broker listener: @KafkaListener(topics=...), @RabbitListener(queues=...),
@@ -416,7 +417,7 @@ func (j *javaExtractor) handleInvocation(fc *fileCtx, n *sitter.Node) {
 		svc = inlineStubService(object, fc.hasGRPC())
 	}
 	if svc != "" && name != "" {
-		fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, capitalizeFirst(name)), line, contract.ConfHigh,
+		fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, capitalizeFirst(name)), line, contract.ConfHigh,
 			&storage.EdgeMeta{Args: args, Aliases: aliases})
 		fc.contractSite(storage.ContractKindRPC, true)
 		return
@@ -425,7 +426,7 @@ func (j *javaExtractor) handleInvocation(fc *fileCtx, n *sitter.Node) {
 	// WebClient fluent chain: webClient.post().uri("/api/x").bodyValue(b)...
 	if m, u, conf, ok := fluentChainHTTP(name, object, args, j.consts.resolve); ok {
 		host, path := splitURL(u)
-		fc.addEdge(src, storage.EdgeHTTPCall, RouteKey(m, path), line, conf,
+		fc.addEdge(src, storage.EdgeHTTPCall, routeKey(m, path), line, conf,
 			&storage.EdgeMeta{Method: m, Path: path, Host: host, Args: args, Aliases: aliases})
 		fc.contractSite(storage.ContractKindHTTP, true)
 		return
@@ -442,7 +443,7 @@ func (j *javaExtractor) handleInvocation(fc *fileCtx, n *sitter.Node) {
 	// and a type name is only evidence when the file corroborates it.
 	if name != "" {
 		if svc := grpcStubService(recvType, fc.hasGRPC() || len(j.clients) > 0); svc != "" {
-			fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, capitalizeFirst(name)), line, contract.ConfCrossFile,
+			fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, capitalizeFirst(name)), line, contract.ConfCrossFile,
 				&storage.EdgeMeta{Args: args, Aliases: aliases})
 			fc.contractSite(storage.ContractKindRPC, true)
 			return
@@ -556,7 +557,7 @@ func (j *javaExtractor) annotationTopics(fc *fileCtx, ann *sitter.Node, keys []s
 		c := argList.NamedChild(i)
 		if c.Type() == "element_value_pair" {
 			key := fc.text(c.ChildByFieldName("key"))
-			if key == "value" || contains(keys, key) {
+			if key == "value" || slices.Contains(keys, key) {
 				collect(c.ChildByFieldName("value"))
 			}
 		} else {

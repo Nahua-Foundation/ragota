@@ -41,10 +41,10 @@ func (p *productCatalog) GetProduct(ctx context.Context, req *pb.GetProductReque
 func (p *productCatalog) parseCatalog() error { return nil }
 `,
 			want: []string{
-				GrpcKey("ProductCatalogService", "ListProducts"),
-				GrpcKey("ProductCatalogService", "GetProduct"),
+				grpcKey("ProductCatalogService", "ListProducts"),
+				grpcKey("ProductCatalogService", "GetProduct"),
 			},
-			not: []string{GrpcKey("ProductCatalogService", "parseCatalog")},
+			not: []string{grpcKey("ProductCatalogService", "parseCatalog")},
 		},
 		{
 			name: "go embed without a package qualifier, declared after its methods",
@@ -59,7 +59,7 @@ type server struct {
 	UnimplementedShippingServiceServer
 }
 `,
-			want: []string{GrpcKey("ShippingService", "GetQuote")},
+			want: []string{grpcKey("ShippingService", "GetQuote")},
 		},
 		{
 			name: "csharp nested generated base, primary constructor",
@@ -85,10 +85,10 @@ public class BasketService(
 }
 `,
 			want: []string{
-				GrpcKey("Basket", "GetBasket"),
-				GrpcKey("Basket", "DeleteBasket"),
+				grpcKey("Basket", "GetBasket"),
+				grpcKey("Basket", "DeleteBasket"),
 			},
-			not: []string{GrpcKey("Basket", "ThrowNotAuthenticated")},
+			not: []string{grpcKey("Basket", "ThrowNotAuthenticated")},
 		},
 		{
 			name: "csharp fully qualified generated base",
@@ -103,7 +103,7 @@ public class CartService : Hipstershop.CartService.CartServiceBase
     }
 }
 `,
-			want: []string{GrpcKey("CartService", "AddItem")},
+			want: []string{grpcKey("CartService", "AddItem")},
 		},
 		{
 			name: "csharp bare base left by a using static, corroborated by the context type",
@@ -120,7 +120,7 @@ internal class HealthCheckService : HealthBase
     }
 }
 `,
-			want: []string{GrpcKey("Health", "Check")},
+			want: []string{grpcKey("Health", "Check")},
 		},
 		{
 			name: "csharp ControllerBase is not a generated server",
@@ -132,7 +132,7 @@ public class OrdersController : ControllerBase
     public override Task<string> Index(int id) { return null; }
 }
 `,
-			not: []string{GrpcKey("Controller", "Index")},
+			not: []string{grpcKey("Controller", "Index")},
 		},
 		{
 			name: "java nested ImplBase, lowerCamel method mapped to the proto name",
@@ -150,8 +150,8 @@ public final class AdService {
   }
 }
 `,
-			want: []string{GrpcKey("AdService", "GetAds")},
-			not:  []string{GrpcKey("AdService", "Helper")},
+			want: []string{grpcKey("AdService", "GetAds")},
+			not:  []string{grpcKey("AdService", "Helper")},
 		},
 		{
 			name: "python servicer base",
@@ -163,7 +163,7 @@ public final class AdService {
     def _helper(self):
         return None
 `,
-			want: []string{GrpcKey("RecommendationService", "ListRecommendations")},
+			want: []string{grpcKey("RecommendationService", "ListRecommendations")},
 		},
 		{
 			name: "python servicer reached through an intermediate base in the same file",
@@ -178,8 +178,8 @@ class DummyEmailService(BaseEmailService):
         return None
 `,
 			want: []string{
-				GrpcKey("EmailService", "Check"),
-				GrpcKey("EmailService", "SendOrderConfirmation"),
+				grpcKey("EmailService", "Check"),
+				grpcKey("EmailService", "SendOrderConfirmation"),
 			},
 		},
 		{
@@ -194,8 +194,8 @@ function main () {
 }
 `,
 			want: []string{
-				GrpcKey("CurrencyService", "GetSupportedCurrencies"),
-				GrpcKey("CurrencyService", "Convert"),
+				grpcKey("CurrencyService", "GetSupportedCurrencies"),
+				grpcKey("CurrencyService", "Convert"),
 			},
 		},
 		{
@@ -214,7 +214,7 @@ function main () {
   }
 }
 `,
-			want: []string{GrpcKey("PaymentService", "Charge")},
+			want: []string{grpcKey("PaymentService", "Charge")},
 		},
 	}
 

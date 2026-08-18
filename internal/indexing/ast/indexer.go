@@ -33,40 +33,40 @@ type Parser interface {
 	Language() string
 }
 
-// FileFacts is one file's parse output, including the facts that only become
+// fileFacts is one file's parse output, including the facts that only become
 // useful once the other files of a package are in view.
-type FileFacts struct {
+type fileFacts struct {
 	Units []*storage.ASTUnit
 	Edges []*storage.Edge
 	// Wrappers are the local helpers that perform an outbound call on behalf
 	// of their callers (see wrappers.go).
-	Wrappers []Wrapper
+	Wrappers []wrapper
 	// Coverage counts the call sites this file offered as outbound contracts,
 	// per storage.ContractKind*. Nil from a parser that does not look for any.
 	Coverage map[string]storage.CoverageCounts
 	// Tables are the data-access sites whose table this file names by a
 	// constant it does not declare, and Consts the table names it declares for
 	// the rest of its package (see linkPackageTables).
-	Tables []PendingTable
+	Tables []pendingTable
 	Consts map[string]string
 }
 
-// PendingTable is one data-access site waiting for the package to say which
+// pendingTable is one data-access site waiting for the package to say which
 // table its constant stands for.
-type PendingTable struct {
-	Src   string   // source unit, as a positional marker (see SrcMark)
+type pendingTable struct {
+	Src   string   // source unit, as a positional marker (see srcMark)
 	Ident string   // the identifier the table name arrives in
 	Kind  string   // storage.EdgeReadsFrom or storage.EdgeWritesTo
 	Line  int      // 1-based source line of the call
 	Args  []string // call arguments, for the edge meta
 }
 
-// FactsParser is a Parser that can also report per-file facts. Parsers that do
+// factsParser is a Parser that can also report per-file facts. Parsers that do
 // not implement it are used through Parse and contribute no wrappers and no
 // coverage — silence, which the coverage report distinguishes from a zero.
-type FactsParser interface {
+type factsParser interface {
 	Parser
-	ParseFacts(filePath, content string) (*FileFacts, error)
+	ParseFacts(filePath, content string) (*fileFacts, error)
 }
 
 // Config is the AST indexer configuration.
@@ -292,7 +292,7 @@ func (i *Indexer) deleteWindow(ctx context.Context, repoID string, paths []strin
 func resolveEdgeSources(edges []*storage.Edge, units []*storage.ASTUnit) []*storage.Edge {
 	valid := edges[:0]
 	for _, edge := range edges {
-		if idx := ResolveMark(edge.SrcID); idx >= 0 {
+		if idx := resolveMark(edge.SrcID); idx >= 0 {
 			if idx >= len(units) {
 				continue
 			}
@@ -310,9 +310,9 @@ func resolveEdgeSources(edges []*storage.Edge, units []*storage.ASTUnit) []*stor
 type parseResult struct {
 	units    []*storage.ASTUnit
 	edges    []*storage.Edge
-	wrappers []Wrapper
+	wrappers []wrapper
 	coverage map[string]storage.CoverageCounts
-	tables   []PendingTable
+	tables   []pendingTable
 	consts   map[string]string
 	err      error
 }
@@ -328,12 +328,12 @@ type parseResult struct {
 // used by dozens of unrelated packages, and a name is all this pass has to
 // join on.
 func linkPackageWrappers(files []*indexing.FileToIndex, parsed []parseResult) {
-	byDir := map[string]map[string]Wrapper{}
+	byDir := map[string]map[string]wrapper{}
 	for fi := range parsed {
 		for _, w := range parsed[fi].wrappers {
 			table, ok := byDir[w.Dir]
 			if !ok {
-				table = map[string]Wrapper{}
+				table = map[string]wrapper{}
 				byDir[w.Dir] = table
 			}
 			if _, dup := table[w.Name]; !dup {
@@ -468,7 +468,7 @@ func (i *Indexer) parseFiles(req *indexing.IndexRequest, language string,
 	files []*indexing.FileToIndex, parser Parser) []parseResult {
 	results := make([]parseResult, len(files))
 
-	facts, _ := parser.(FactsParser)
+	facts, _ := parser.(factsParser)
 	share := symbols.Annotated(language)
 	publish := func(file *indexing.FileToIndex, units []*storage.ASTUnit) {
 		if share {

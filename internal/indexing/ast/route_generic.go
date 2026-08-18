@@ -150,7 +150,7 @@ func isFuncRefExpr(expr string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
-		case isWordByte(c):
+		case contract.IsWordByte(c):
 			if c < '0' || c > '9' {
 				letters = true
 			}
@@ -204,7 +204,7 @@ func literalElements(fc *fileCtx, body *sitter.Node, keyedType string) []string 
 // for the file, so a generic detection never duplicates a route a framework
 // rule already found precisely.
 func (fc *fileCtx) hasRoute(method, path string) bool {
-	key := RouteKey(method, path)
+	key := routeKey(method, path)
 	for _, u := range fc.units {
 		if u.Kind == storage.KindHTTPRoute && u.Qualified == key {
 			return true

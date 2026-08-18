@@ -362,7 +362,7 @@ func (t *tsExtractor) applyMethodDecorators(fc *fileCtx, n *sitter.Node, idx int
 		if m, ok := tsHTTPMethods[strings.ToLower(d.name)]; ok && d.name != strings.ToLower(d.name) {
 			// @Get(), @Post('bulk'), @Get(':id') — the sub-path may be empty.
 			path := joinPath(basePath, d.arg(0))
-			ridx := fc.addUnit(n, storage.KindHTTPRoute, m+" "+path, RouteKey(m, path), "path:"+path, "")
+			ridx := fc.addUnit(n, storage.KindHTTPRoute, m+" "+path, routeKey(m, path), "path:"+path, "")
 			fc.addEdge(ridx, storage.EdgeHandledBy, u.Name, u.StartLine, contract.ConfHigh, nil)
 			continue
 		}
@@ -503,7 +503,7 @@ func (t *tsExtractor) handleCall(fc *fileCtx, call *sitter.Node) {
 		!tsClientObjects.matches(object) && tsHandlerLike(nodes[len(nodes)-1]) {
 		if path, isStr := t.resolveString(args[0]); isStr && strings.HasPrefix(path, "/") {
 			path = joinPath(t.prefixes[lastComponent(object)], path)
-			idx := fc.addUnit(call, storage.KindHTTPRoute, m+" "+path, RouteKey(m, path), "path:"+path, "")
+			idx := fc.addUnit(call, storage.KindHTTPRoute, m+" "+path, routeKey(m, path), "path:"+path, "")
 			handler := args[len(args)-1]
 			if isTSIdentifier(handler) {
 				fc.addEdge(idx, storage.EdgeHandledBy, handler, line, contract.ConfHigh, nil)
@@ -541,7 +541,7 @@ func (t *tsExtractor) handleCall(fc *fileCtx, call *sitter.Node) {
 		if len(nodes) >= 1 {
 			fields = tsObjectFields(fc, nodes[0])
 		}
-		fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, capitalizeFirst(name)), line, contract.ConfHigh,
+		fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, capitalizeFirst(name)), line, contract.ConfHigh,
 			&storage.EdgeMeta{Args: args, Fields: fields, Aliases: t.aliases.relevant(pos, args, fields)})
 		fc.contractSite(storage.ContractKindRPC, true)
 		return
@@ -563,7 +563,7 @@ func (t *tsExtractor) handleCall(fc *fileCtx, call *sitter.Node) {
 	// Injected gRPC client: constructor(private orders: OrderServiceClient).
 	if name != "" {
 		if svc := grpcStubService(t.types[lastComponent(object)], fc.hasGRPC() || len(t.clients) > 0); svc != "" {
-			fc.addEdge(src, storage.EdgeRPCCall, GrpcKey(svc, capitalizeFirst(name)), line, contract.ConfCrossFile,
+			fc.addEdge(src, storage.EdgeRPCCall, grpcKey(svc, capitalizeFirst(name)), line, contract.ConfCrossFile,
 				&storage.EdgeMeta{Args: args, Fields: fields, Aliases: aliases})
 			fc.contractSite(storage.ContractKindRPC, true)
 			return
@@ -854,7 +854,7 @@ func (t *tsExtractor) markRPCHandlers(fc *fileCtx, def string, handlers *sitter.
 		if src < 0 {
 			continue
 		}
-		fc.addEdge(src, storage.EdgeImplementsRPC, GrpcKey(svc, capitalizeFirst(key)),
+		fc.addEdge(src, storage.EdgeImplementsRPC, grpcKey(svc, capitalizeFirst(key)),
 			line, contract.ConfCrossFile, nil)
 	}
 	return true

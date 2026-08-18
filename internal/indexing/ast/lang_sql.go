@@ -8,16 +8,16 @@ import (
 	"github.com/Nahua-Foundation/ragota/internal/storage"
 )
 
-// SQLParser parses SQL migration files into db_table / db_column units.
+// sqlParser parses SQL migration files into db_table / db_column units.
 // It understands CREATE TABLE and ALTER TABLE ... ADD COLUMN statements —
 // enough to model the schema that application code writes into.
-type SQLParser struct{}
+type sqlParser struct{}
 
-// NewSQLParser creates a SQL migrations parser.
-func NewSQLParser() *SQLParser { return &SQLParser{} }
+// newSQLParser creates a SQL migrations parser.
+func newSQLParser() *sqlParser { return &sqlParser{} }
 
 // Language returns the language name.
-func (p *SQLParser) Language() string { return "sql" }
+func (p *sqlParser) Language() string { return "sql" }
 
 var (
 	reCreateTable = regexp.MustCompile(`(?i)^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["'` + "`" + `]?([A-Za-z_][A-Za-z0-9_.]*)`)
@@ -31,7 +31,7 @@ var sqlConstraintKeywords = map[string]bool{
 }
 
 // Parse extracts schema units from a SQL file.
-func (p *SQLParser) Parse(filePath, content string) ([]*storage.ASTUnit, []*storage.Edge, error) {
+func (p *sqlParser) Parse(filePath, content string) ([]*storage.ASTUnit, []*storage.Edge, error) {
 	var units []*storage.ASTUnit
 
 	addUnit := func(lineNo int, kind, name, qualified, signature string) {
