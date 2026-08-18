@@ -25,13 +25,14 @@ var _ indexing.Searcher = (*Indexer)(nil)
 
 // Indexer implements indexing.Indexer and indexing.Searcher for vector search.
 type Indexer struct {
-	embedder llm.Embedder
-	vecStore storage.VectorStorage
-	chunkCfg indexing.ChunkConfig
-	cards    bool
-	maxChars int
-	workers  int
-	excludes []string
+	embedder         llm.Embedder
+	vecStore         storage.VectorStorage
+	chunkCfg         indexing.ChunkConfig
+	cards            bool
+	maxChars         int
+	workers          int
+	excludes         []string
+	queryInstruction string
 }
 
 // defaultEmbedWorkers is how many embed requests are in flight at once, and
@@ -99,6 +100,10 @@ type Config struct {
 	// body head) replaces window chunks. Files without units fall back to
 	// window chunking.
 	Cards bool
+	// QueryInstruction wraps search queries — never documents — for
+	// instruction-aware embedding models; see
+	// config.EmbedderConfig.QueryInstruction.
+	QueryInstruction string
 }
 
 // New creates a new vector indexer.
@@ -110,13 +115,14 @@ func New(cfg *Config) *Indexer {
 		}
 	}
 	return &Indexer{
-		embedder: cfg.Embedder,
-		vecStore: cfg.Storage,
-		chunkCfg: cfg.Chunking,
-		cards:    cfg.Cards,
-		maxChars: cfg.MaxChars,
-		workers:  cfg.Concurrency,
-		excludes: excludes,
+		embedder:         cfg.Embedder,
+		vecStore:         cfg.Storage,
+		chunkCfg:         cfg.Chunking,
+		cards:            cfg.Cards,
+		maxChars:         cfg.MaxChars,
+		workers:          cfg.Concurrency,
+		excludes:         excludes,
+		queryInstruction: cfg.QueryInstruction,
 	}
 }
 
@@ -472,7 +478,14 @@ func (i *Indexer) Search(ctx context.Context, q *indexing.SearchQuery) (*indexin
 		return i.searchWithVector(ctx, q, q.Vector)
 	}
 
-	embeddings, err := i.embedder.Embed(ctx, []string{truncateForEmbed(q.Query, i.embedMaxChars())})
+	query := q.Query
+	if i.queryInstruction != "" {
+		// The instruction-aware form the embedder was trained on. Documents
+		// are always embedded bare at index time; the asymmetry is the
+		// contract, which is why this needs no reindex.
+		query = "Instruct: " + i.queryInstruction + "\nQuery: " + query
+	}
+	embeddings, err := i.embedder.Embed(ctx, []string{truncateForEmbed(query, i.embedMaxChars())})
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}

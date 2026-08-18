@@ -280,9 +280,15 @@ type EmbedderConfig struct {
 	// BaseURL overrides the provider endpoint for embeddings only; empty
 	// falls back to models.providers.<provider>.base_url. Honoured for both
 	// providers.
-	BaseURL    string `yaml:"base_url,omitempty"`
-	BatchSize  int    `yaml:"batch_size"`
-	Dimensions int    `yaml:"dimensions,omitempty"`
+	BaseURL string `yaml:"base_url,omitempty"`
+	// QueryInstruction wraps the search query — never a document — before it
+	// is embedded, as "Instruct: {instruction}\nQuery: {query}": the form
+	// instruction-aware embedders (Qwen3-Embedding) are trained on. Documents
+	// stay bare, which is the other half of that training, so flipping this
+	// key needs no reindex — it is a query-time setting.
+	QueryInstruction string `yaml:"query_instruction,omitempty"`
+	BatchSize        int    `yaml:"batch_size"`
+	Dimensions       int    `yaml:"dimensions,omitempty"`
 	// MaxChars caps the text sent to the embedder per chunk, in bytes
 	// (0 = default 4096). Every embedding model has a context limit, and
 	// some servers (llama.cpp) reject the whole batch when one input exceeds

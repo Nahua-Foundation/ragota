@@ -437,11 +437,12 @@ func initVectorIndexer(cfg *config.Config, stor storage.Storage, embedders map[s
 	}
 
 	vecIndexer := vector.New(&vector.Config{
-		Embedder:    emb,
-		Storage:     vecStore,
-		MaxChars:    cfg.Indexes.Vector.Embedder.MaxChars,
-		Concurrency: cfg.Indexes.Vector.Embedder.Concurrency,
-		Exclude:     cfg.Indexes.Vector.Exclude,
+		Embedder:         emb,
+		Storage:          vecStore,
+		MaxChars:         cfg.Indexes.Vector.Embedder.MaxChars,
+		Concurrency:      cfg.Indexes.Vector.Embedder.Concurrency,
+		Exclude:          cfg.Indexes.Vector.Exclude,
+		QueryInstruction: cfg.Indexes.Vector.Embedder.QueryInstruction,
 		Chunking: indexing.ChunkConfig{
 			Method:      cfg.Indexes.Vector.Chunking.Method,
 			WindowLines: cfg.Indexes.Vector.Chunking.WindowLines,

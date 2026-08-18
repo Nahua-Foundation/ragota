@@ -85,6 +85,10 @@ def add_common_args(ap):
     ap.add_argument("--embed-provider", default="ollama", help="embedding provider (variants: window, cards)")
     ap.add_argument("--embed-model", default="", help="embedding model (variants: window, cards)")
     ap.add_argument("--embed-url", default="", help="embedding endpoint override")
+    ap.add_argument("--embed-dimensions", type=int, default=0,
+                    help="embedding dimensions override for models outside the built-in table")
+    ap.add_argument("--embed-query-instruction", default="",
+                    help="query-side instruction for instruction-aware embedders (variant: qinstr)")
     ap.add_argument("--assistant-provider", default="ollama", help="assistant provider (variant: rewrite)")
     ap.add_argument("--assistant-url", help="assistant base url (variant: rewrite)")
     ap.add_argument("--assistant-model", default="", help="assistant model (variant: rewrite)")
@@ -100,6 +104,8 @@ def options_from(args):
         "embed_provider": args.embed_provider,
         "embed_model": args.embed_model,
         "embed_url": args.embed_url,
+        "embed_dimensions": args.embed_dimensions,
+        "embed_query_instruction": args.embed_query_instruction,
         "assistant_provider": args.assistant_provider,
         "assistant_url": args.assistant_url,
         "assistant_model": args.assistant_model,

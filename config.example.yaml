@@ -107,6 +107,12 @@ indexes:
    #     base_url: ""
    #     batch_size: 64
    #     dimensions: 768       # required for models not in built-in table (override detected embedding size)
+   #     # Instruction-aware embedders (Qwen3-Embedding) are trained with an
+   #     # instruction on the query side only: when set, the query is embedded
+   #     # as "Instruct: {this}\nQuery: {query}" while documents always stay
+   #     # bare. Query-time only — flipping it needs no reindex. Measure it
+   #     # (tools/eval, variant "qinstr") before trusting either setting.
+   #     # query_instruction: "Given a code search query, retrieve the most relevant code"
    #     # Per-chunk input budget in bytes (default 4096: stays under a
    #     # 2048-token context for any script; servers meter tokens, and dense
    #     # scripts run ~2 bytes/token where code runs ~4). On a rejected

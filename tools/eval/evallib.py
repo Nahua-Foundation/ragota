@@ -764,6 +764,8 @@ def _enable_vector(cfg, opt, method):
         "chunking": {"method": method, "window_lines": 60, "overlap": 10},
         "exclude": list(VECTOR_EXCLUDES),
     }
+    if opt.get("embed_dimensions"):
+        cfg["indexes"]["vector"]["embedder"]["dimensions"] = opt["embed_dimensions"]
     return cfg
 
 
@@ -773,6 +775,17 @@ def variant_window(cfg, opt):
 
 def variant_cards(cfg, opt):
     return _enable_vector(cfg, opt, "cards")
+
+
+def variant_qinstr(cfg, opt):
+    """Query-side instruction for an instruction-aware embedder. Composes on
+    top of window/cards, and changes only how the query is embedded — never a
+    document — so a --no-reindex comparison against the bare side is valid."""
+    vec = cfg["indexes"].get("vector")
+    if not vec:
+        raise SystemExit("variant 'qinstr' composes on top of 'window' or 'cards'")
+    vec["embedder"]["query_instruction"] = opt["embed_query_instruction"]
+    return cfg
 
 
 def variant_symsum(cfg, opt):
@@ -825,6 +838,7 @@ VARIANTS = {
     "norerank": variant_norerank,
     "window": variant_window,
     "cards": variant_cards,
+    "qinstr": variant_qinstr,
     "rewrite": variant_rewrite,
     "norewrite": variant_norewrite,
 }
@@ -836,6 +850,7 @@ VARIANT_REQUIRES = {
     "symsum": ["assistant_url", "assistant_model"],
     "window": ["qdrant_url", "embed_model"],
     "cards": ["qdrant_url", "embed_model"],
+    "qinstr": ["embed_query_instruction"],
     "rewrite": ["assistant_url", "assistant_model"],
 }
 
