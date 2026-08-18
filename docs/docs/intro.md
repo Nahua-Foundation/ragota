@@ -35,9 +35,9 @@ server. What it does not have:
 
 ## The shape of it
 
-One Go module, two binaries:
+One Go module, one binary:
 
-| Binary | Role |
+| Command | Role |
 |---|---|
 | `ragota` | The server: discovers, indexes and watches repositories; serves the HTTP API; optional terminal dashboard |
 | `ragota mcp` | A thin, **read-only** MCP server over a running `ragota` — the same binary, exposing ten tools to any MCP client |
@@ -48,7 +48,8 @@ Around them, in this repository:
   the index and when to use its own file tools,
 - `tools/eval` — a measured retrieval benchmark (the numbers in
   [Quality](./quality.md) come from it),
-- `e2e/` — an end-to-end suite that drives both shipped binaries.
+- `e2e/` — an end-to-end suite that drives the shipped binary through both
+  doors (HTTP and MCP).
 
 ## Where to go next
 

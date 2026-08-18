@@ -1,8 +1,8 @@
 //go:build e2e
 
-// Package e2e proves the two shipped binaries against each other: cmd/server
+// Package e2e proves the one shipped binary through both its doors: cmd/server
 // built and started on a real corpus, the mcp subcommand launched over stdio the way an
-// MCP client launches it, and the answers read back through both doors.
+// MCP client launches it, and the answers read back through both.
 //
 // The three phases follow the working-set lifecycle, because that is where an
 // end-to-end seam actually broke once: a wide --source, then a narrow one that
@@ -50,7 +50,7 @@ var wantTools = []string{
 }
 
 func TestEndToEnd(t *testing.T) {
-	bins := buildBinaries(t)
+	bin := buildBinary(t)
 	fx := writeFixture(t)
 	work := t.TempDir()
 	port := freePort(t)
@@ -60,7 +60,7 @@ func TestEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	// --- Phase 1: the whole estate ---
-	srv := startServer(t, bins.server, cfg, fx.root, filepath.Join(work, "server-1.log"))
+	srv := startServer(t, bin, cfg, fx.root, filepath.Join(work, "server-1.log"))
 	waitHealthy(t, api)
 	repos := waitRepos(t, api, func(rs []*client.Repo) error {
 		return indexed(rs, 2, 2)
@@ -108,7 +108,7 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	t.Run("mcp serves the tool set and answers through it", func(t *testing.T) {
-		sess := connectMCP(t, bins.server, port)
+		sess := connectMCP(t, bin, port)
 
 		tools, err := sess.ListTools(ctx, nil)
 		if err != nil {
@@ -149,7 +149,7 @@ func TestEndToEnd(t *testing.T) {
 	stopServer(t, srv)
 
 	// --- Phase 2: a narrow --source leaves payments dormant ---
-	srv = startServer(t, bins.server, cfg, fx.gateway, filepath.Join(work, "server-2.log"))
+	srv = startServer(t, bin, cfg, fx.gateway, filepath.Join(work, "server-2.log"))
 	waitHealthy(t, api)
 	waitRepos(t, api, func(rs []*client.Repo) error {
 		return indexed(rs, 2, 1)
@@ -174,7 +174,7 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	t.Run("mcp reports the narrowed working set", func(t *testing.T) {
-		sess := connectMCP(t, bins.server, port)
+		sess := connectMCP(t, bin, port)
 
 		status := callText(t, sess, "ragota_status", nil)
 		if !strings.Contains(status, "1 in the working set") {
@@ -190,7 +190,7 @@ func TestEndToEnd(t *testing.T) {
 	stopServer(t, srv)
 
 	// --- Phase 3: the wide --source brings payments back ---
-	srv = startServer(t, bins.server, cfg, fx.root, filepath.Join(work, "server-3.log"))
+	srv = startServer(t, bin, cfg, fx.root, filepath.Join(work, "server-3.log"))
 	waitHealthy(t, api)
 	waitRepos(t, api, func(rs []*client.Repo) error {
 		return indexed(rs, 2, 2)
@@ -210,27 +210,23 @@ func TestEndToEnd(t *testing.T) {
 	_ = gateway
 }
 
-// --- binaries ---
+// --- the binary ---
 
-type binaries struct {
-	server string
-}
-
-// buildBinaries compiles the one shipped command the way a release would, so
+// buildBinary compiles the one shipped command the way a release would, so
 // the test exercises the artifact and not just the packages. The MCP server
 // is the same binary's mcp subcommand, which is exactly what makes this one
 // build the whole install story.
-func buildBinaries(t *testing.T) binaries {
+func buildBinary(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	root := repoRoot(t)
-	b := binaries{server: filepath.Join(dir, "ragota")}
-	cmd := exec.Command("go", "build", "-o", b.server, "./cmd/server")
+	bin := filepath.Join(dir, "ragota")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/server")
 	cmd.Dir = root
 	if msg, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build ./cmd/server: %v\n%s", err, msg)
 	}
-	return b
+	return bin
 }
 
 func repoRoot(t *testing.T) string {

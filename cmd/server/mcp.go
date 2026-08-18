@@ -124,7 +124,7 @@ Flags:
 // connection which never returns cannot outlive the deadline by a whole attempt.
 func mcpClient(cfg *config.Config) *client.Client {
 	opts := []client.Option{
-		client.WithUserAgent("ragota-mcp/" + version),
+		client.WithUserAgent("ragota/" + version + " (mcp)"),
 		client.WithHTTPClient(&http.Client{Timeout: cfg.Timeout}),
 	}
 	if cfg.APIKey != "" {
