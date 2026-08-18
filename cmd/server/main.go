@@ -72,6 +72,19 @@ const (
 	commandRepos = "repos"
 )
 
+// fatalf reports a fatal error directly on stderr and exits. Directly, not
+// through slog, and that is the point: once a dashboard is requested the log
+// handler points at the status bus and the interactive log file, so a process
+// that dies before the dashboard draws — a bad config, an unreachable
+// dependency, a taken port — would take its last words with it. That was the
+// observed failure: `--interactive run` over a broken wiring exited to a
+// clean prompt with nothing printed at all. os.Exit skips deferred cleanup
+// exactly as the log.Fatalf it replaces did.
+func fatalf(format string, v ...any) {
+	fmt.Fprintf(os.Stderr, "ragota: "+format+"\n", v...)
+	os.Exit(exitFailure)
+}
+
 func main() {
 	var (
 		cfgPath     = flag.String("config", "", "path to the YAML config file (overrides RAGOTA_CONFIG; default "+config.DefaultConfigPath+")")
@@ -103,11 +116,11 @@ func main() {
 	// a repos subcommand asked about what that run left behind.
 	cfg, err := loadConfig(*cfgPath, *source != "" || cmd.name == commandRepos)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		fatalf("failed to load config: %v", err)
 	}
 	if *source != "" {
 		if _, err := setup.ApplySource(cfg, *source); err != nil {
-			log.Fatalf("Invalid --source: %v", err)
+			fatalf("invalid --source: %v", err)
 		}
 	}
 	if *logLevel != "" {
@@ -166,7 +179,7 @@ func main() {
 	}
 
 	if err := cfg.Validate(); err != nil {
-		log.Fatalf("Invalid config: %v", err)
+		fatalf("invalid config: %v", err)
 	}
 	for _, w := range cfg.Warnings() {
 		slog.Warn("config", "warning", w)
@@ -191,7 +204,7 @@ func main() {
 	ctx := context.Background()
 	svc, err := setup.Build(ctx, cfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize: %v", err)
+		fatalf("failed to initialize: %v", err)
 	}
 	defer func() { _ = svc.Close(ctx) }()
 	svc.SetStatusBus(bus)
@@ -211,7 +224,7 @@ func main() {
 	if *source != "" {
 		registered, err = setup.DiscoverAndRegister(ctx, svc, *source, bus)
 		if err != nil {
-			log.Fatalf("Failed to scan --source: %v", err)
+			fatalf("failed to scan --source: %v", err)
 		}
 		if len(registered) == 0 {
 			slog.Warn("source: nothing registered; leaving the working set as it was", "source", *source)
@@ -223,7 +236,7 @@ func main() {
 		// another project's code, silently. That confusion is what --source
 		// computing the set exists to end, so failing to compute it ends the
 		// run instead.
-		log.Fatalf("Failed to set the working set: %v", err)
+		fatalf("failed to set the working set: %v", err)
 	}
 
 	// Primed after the source scan, never before: priming reads the working set
@@ -265,7 +278,7 @@ func main() {
 	// 127.0.0.1:8080: socket: too many open files".)
 	ln, lerr := net.Listen("tcp", addr)
 	if lerr != nil {
-		log.Fatalf("Failed to listen on %s: %v", addr, lerr)
+		fatalf("failed to listen on %s: %v", addr, lerr)
 	}
 
 	if *watchFS {
@@ -325,7 +338,7 @@ func main() {
 		}
 	}
 	if fatal != nil {
-		log.Fatalf("Server error: %v", fatal)
+		fatalf("server error: %v", fatal)
 	}
 
 	slog.Info("shutting down server")
