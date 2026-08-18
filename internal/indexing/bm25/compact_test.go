@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nahua-Foundation/ragota/internal/indexing"
 
@@ -426,5 +427,44 @@ func TestCompactedReindexMatchesAFreshBuild(t *testing.T) {
 	}
 	if diff := diffScores(scoredHits(t, reopened, query, everything), want); len(diff) > 0 {
 		t.Errorf("a re-index scores the same sources differently from a fresh build:\n\t%s", strings.Join(diff, "\n\t"))
+	}
+}
+
+// A compaction of an index that is already one segment must return without
+// waiting on scorch's background loops. Their epochs advance only when the
+// merger and persister run, and on an idle, freshly reopened index they never
+// do — the old path stalled admin/compact for tens of minutes against a cycle
+// that was never coming, over an index compacted hours earlier.
+func TestCompactOfCompactedReopenedIndexReturnsImmediately(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := New(&Config{Path: dir, K1: 1.2, B: 0.75})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for start, files := 0, corpusFiles(200); start < len(files); start += 16 {
+		batch := files[start:min(start+16, len(files))]
+		if _, err := idx.Index(context.Background(), &indexing.IndexRequest{RepoID: "r1", Files: batch}); err != nil {
+			t.Fatalf("Index: %v", err)
+		}
+	}
+	if err := idx.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if err := idx.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	re, err := New(&Config{Path: dir, K1: 1.2, B: 0.75})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer re.Close()
+
+	start := time.Now()
+	if err := re.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact after reopen: %v", err)
+	}
+	if took := time.Since(start); took > time.Minute {
+		t.Fatalf("Compact on a cold compacted index took %v; it must answer from the segment count, not wait for background cycles", took)
 	}
 }

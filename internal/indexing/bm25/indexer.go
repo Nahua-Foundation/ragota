@@ -308,6 +308,17 @@ func (i *Indexer) Compact(ctx context.Context) error {
 	i.compactMu.Lock()
 	defer i.compactMu.Unlock()
 
+	// An index that is already one segment has nothing to canonicalise, and
+	// asking anyway is not free. Scorch's background epochs advance only when
+	// its merger and persister loops run, and on an idle, freshly reopened
+	// index they never do — ForceMerge and the settle wait below then both
+	// stall against a cycle that is not coming. Observed as admin/compact
+	// holding its caller for 27 minutes over an index compacted hours
+	// earlier. The segment count answers without waiting on anything.
+	if file, mem, counted := i.rootSegments(); counted && file <= 1 && mem == 0 {
+		return nil
+	}
+
 	start := time.Now()
 	if err := sc.ForceMerge(ctx, &mergeplan.SingleSegmentMergePlanOptions); err != nil {
 		return fmt.Errorf("compact index at %s: %w", i.path, err)
@@ -362,6 +373,19 @@ func (i *Indexer) awaitSteadyState(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// rootSegments reports how many file and in-memory segments the current root
+// snapshot holds, and whether the running bleve build reports the numbers at
+// all.
+func (i *Indexer) rootSegments() (file, mem uint64, reported bool) {
+	stats, ok := i.index.StatsMap()["index"].(map[string]interface{})
+	if !ok {
+		return 0, 0, false
+	}
+	file, fok := stats["TotFileSegmentsAtRoot"].(uint64)
+	mem, mok := stats["TotMemorySegmentsAtRoot"].(uint64)
+	return file, mem, fok && mok
 }
 
 // steady reports whether bleve's background threads have caught up with the
