@@ -15,6 +15,9 @@ import (
 )
 
 // Qdrant implements storage.VectorStorage with Qdrant backend.
+// The vector backend satisfies its contract at compile time.
+var _ storage.VectorStorage = (*Qdrant)(nil)
+
 type Qdrant struct {
 	baseURL          string
 	apiKey           string

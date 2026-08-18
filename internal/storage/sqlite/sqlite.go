@@ -268,6 +268,9 @@ func (s *SQLite) migrate() error {
 }
 
 // SQLite implements storage.Storage with SQLite backend.
+// See the matching assertion in postgres: conformance is a build-time fact.
+var _ storage.Storage = (*SQLite)(nil)
+
 type SQLite struct {
 	db          *sql.DB
 	path        string

@@ -228,6 +228,10 @@ var migrations = []struct {
 }
 
 // Postgres implements storage.Storage.
+// The backend must satisfy the full contract at compile time, not first at
+// test-compile time — a partially implemented backend is a build failure.
+var _ storage.Storage = (*Postgres)(nil)
+
 type Postgres struct {
 	pool        *pgxpool.Pool
 	q           *pgdb.Queries

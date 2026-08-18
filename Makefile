@@ -353,7 +353,9 @@ docs-serve:
 	cd docs && npm install --no-audit --no-fund && npm run start
 
 # Everything CI runs, including lint and the integration suite.
-ci: build vet fmt-check lint test test-integration
+# test-postgres is in ci deliberately: postgres is the primary relational
+# backend, and without it the conformance suite only ever runs against sqlite.
+ci: build vet fmt-check lint test test-integration test-postgres
 
 help:
 	@echo "build          compile every package"
@@ -369,7 +371,7 @@ help:
 	@echo "lint           golangci-lint (lint-install to get it)"
 	@echo "compose-up     start the deploy/docker-compose.yml stack"
 	@echo "lsp-up         start only the LSP servers (deploy/lsp)"
-	@echo "ci             build vet fmt-check lint test test-integration"
+	@echo "ci             build vet fmt-check lint test test-integration test-postgres"
 	@echo "corpus-clone   clone the benchmark corpus into $(CORPUS_DIR)"
 	@echo "corpus-bench   extraction counts per repository (needs a running server)"
 	@echo "eval           retrieval quality: recall@k, MRR, nDCG@10 over tools/eval/queries.jsonl"
