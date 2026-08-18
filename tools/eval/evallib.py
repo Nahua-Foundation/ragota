@@ -1052,11 +1052,19 @@ def compact_indexes(api):
     but a run whose compaction failed is a run whose scores can move between
     repetitions, so the failure is reported rather than swallowed.
     """
+    # The server confirms the merge reached disk for up to ten minutes before
+    # it answers (with a warning when it gives up). The client's default 600 s
+    # is the same number, and the race was once lost by a millisecond — the
+    # server answered 200 at 10m0.001s and the run died at its very last step.
+    # The caller of a bounded wait must outwait it, with slack.
+    prev, api.timeout = api.timeout, 900
     try:
         took = (api.post("/api/v1/admin/compact", {}) or {}).get("compacted_ms") or {}
-    except (RuntimeError, TypeError) as exc:
+    except (RuntimeError, TypeError, OSError) as exc:
         print("  compaction failed (%s): scores may vary between runs" % exc, flush=True)
         return
+    finally:
+        api.timeout = prev
     if took:
         print("  compacted %s" % ", ".join("%s %.1fs" % (k, v / 1000.0)
                                            for k, v in sorted(took.items())), flush=True)
