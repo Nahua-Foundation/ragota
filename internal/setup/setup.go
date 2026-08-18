@@ -89,7 +89,7 @@ func Build(ctx context.Context, cfg *config.Config) (_ *service.Service, retErr 
 	embedders := make(map[string]llm.Embedder)
 
 	if cfg.Indexes.Vector != nil && cfg.Indexes.Vector.Enabled {
-		if embedderBaseURL(cfg, "ollama") != "" {
+		if ollamaConfigured(cfg) {
 			emb, err := initOllamaEmbedder(cfg)
 			if err != nil {
 				obs.Inc(obs.MetricEmbedderInitFailure, 1)
@@ -318,6 +318,20 @@ func embedderBaseURL(cfg *config.Config, provider string) string {
 		return cfg.Indexes.Vector.Embedder.BaseURL
 	}
 	return cfg.Models.Providers[provider].BaseURL
+}
+
+// ollamaConfigured mirrors openaiConfigured: an endpoint or an embedder that
+// explicitly selects the provider is enough. The constructor then falls back
+// to Ollama's stock port — the same default --check-config's dry-run prints —
+// so a wiring the dry-run reported OK is one Build accepts. It used to demand
+// a models.providers entry the dry-run never asked about, and "embedder ollama
+// not found" was the first run's answer to a config check-config had passed.
+func ollamaConfigured(cfg *config.Config) bool {
+	if embedderBaseURL(cfg, "ollama") != "" {
+		return true
+	}
+	return cfg.Indexes.Vector != nil && cfg.Indexes.Vector.Enabled &&
+		cfg.Indexes.Vector.Embedder.Provider == "ollama"
 }
 
 // openaiConfigured reports whether the openai provider is usable: an endpoint,
