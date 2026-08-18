@@ -93,7 +93,7 @@ func DiscoverAndRegister(ctx context.Context, svc *service.Service, root string,
 //
 // An empty list is passed through as an empty working set, because that is what
 // storage.SetActiveRepos means by it. Whether a discovery that found nothing
-// should be read that way is the caller's decision, and cmd/server makes it:
+// should be read that way is the caller's decision, and cmd/ragota makes it:
 // a source matching nothing is a mistyped path far more often than a request
 // for an index that answers nothing.
 func ActivateOnly(ctx context.Context, svc *service.Service, list []*repos.Repo) error {

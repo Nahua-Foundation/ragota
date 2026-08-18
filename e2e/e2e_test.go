@@ -1,6 +1,6 @@
 //go:build e2e
 
-// Package e2e proves the one shipped binary through both its doors: cmd/server
+// Package e2e proves the one shipped binary through both its doors: cmd/ragota
 // built and started on a real corpus, the mcp subcommand launched over stdio the way an
 // MCP client launches it, and the answers read back through both.
 //
@@ -221,10 +221,10 @@ func buildBinary(t *testing.T) string {
 	dir := t.TempDir()
 	root := repoRoot(t)
 	bin := filepath.Join(dir, "ragota")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/server")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/ragota")
 	cmd.Dir = root
 	if msg, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build ./cmd/server: %v\n%s", err, msg)
+		t.Fatalf("go build ./cmd/ragota: %v\n%s", err, msg)
 	}
 	return bin
 }

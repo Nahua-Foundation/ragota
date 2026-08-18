@@ -19,7 +19,7 @@ them when the index beats their own grep — and when it does not.
 
 | Piece | What it is |
 |---|---|
-| `cmd/server` → `bin/ragota` | The server: indexing, watching, HTTP API, terminal dashboard |
+| `cmd/ragota` → `bin/ragota` | The server: indexing, watching, HTTP API, terminal dashboard |
 | `ragota mcp` | Read-only MCP server over the same binary: ten tools for any MCP client, on stdio |
 | [`skills/`](skills/README.md) | Agent Skills: when to use the index vs glob/grep/read, the graph tools, the empty-answer protocol |
 | [`docs/`](docs/) | The documentation site (Docusaurus): `make docs` |

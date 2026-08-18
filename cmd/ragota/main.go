@@ -32,7 +32,7 @@ import (
 
 // version is stamped at build time:
 //
-//	go build -ldflags "-X main.version=$(git describe --tags)" ./cmd/server
+//	go build -ldflags "-X main.version=$(git describe --tags)" ./cmd/ragota
 var version = "dev"
 
 // Exit codes. 2 distinguishes "the config is valid but something it points at

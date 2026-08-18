@@ -23,7 +23,7 @@ make eval-answers CORPUS_DIR=/data/corpus \
      EVAL_ARGS="--judge --control"              # what a model answers from it
 ```
 
-`run.py` builds `cmd/server`, starts it on its own SQLite database under
+`run.py` builds `cmd/ragota`, starts it on its own SQLite database under
 `--work`, indexes only the repositories the selected queries need, asks every
 question through `POST /api/v1/search` and `POST /api/v1/context`, and scores
 the ranked results. Nothing it touches lives outside `--work`. Python 3

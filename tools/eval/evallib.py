@@ -938,11 +938,11 @@ class Server:
 
 
 def build_binary(repo_root, out_path):
-    """Build cmd/server. Returns the path, or exits with the compiler output."""
+    """Build cmd/ragota. Returns the path, or exits with the compiler output."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     env = dict(os.environ, CGO_ENABLED="1")
     proc = subprocess.run(
-        ["go", "build", "-o", out_path, "./cmd/server"],
+        ["go", "build", "-o", out_path, "./cmd/ragota"],
         cwd=repo_root, env=env, capture_output=True, text=True,
     )
     if proc.returncode != 0:

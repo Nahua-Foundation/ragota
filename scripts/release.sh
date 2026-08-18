@@ -53,7 +53,7 @@ build() {
     echo "  $goos/$goarch"
     mkdir -p "$out"
     CGO_ENABLED=1 GOOS="$goos" GOARCH="$goarch" ${cc:+CC="$cc"} \
-        go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$out/ragota" ./cmd/server
+        go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$out/ragota" ./cmd/ragota
     cp README.md "$out/"
     tar -czf "$DIST/$name.tar.gz" -C "$DIST" "$name"
     rm -r "$out"

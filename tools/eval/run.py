@@ -53,7 +53,7 @@ def add_common_args(ap):
                     help="restrict to this question scope: %s (repeatable)" % ", ".join(ev.SCOPES))
     ap.add_argument("--id", action="append", default=[], help="restrict to this query id (repeatable)")
 
-    ap.add_argument("--binary", help="ragota server binary to run (default: build cmd/server)")
+    ap.add_argument("--binary", help="ragota server binary to run (default: build cmd/ragota)")
     ap.add_argument("--server", help="use an already-running server instead of starting one")
     ap.add_argument("--api-key", default=os.environ.get("RAGOTA_API_KEY"))
     ap.add_argument("--work", default=os.environ.get("EVAL_WORK", DEFAULT_WORK),

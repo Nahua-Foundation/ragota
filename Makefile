@@ -65,10 +65,10 @@ build:
 # The one version-stamped binary (--version reports it); the server, repos
 # and the MCP server are its subcommands.
 binary:
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BIN) ./cmd/server
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BIN) ./cmd/ragota
 
 install:
-	go build -ldflags "$(LDFLAGS)" -o $(INSTALL_DIR)/$(BIN) ./cmd/server
+	go build -ldflags "$(LDFLAGS)" -o $(INSTALL_DIR)/$(BIN) ./cmd/ragota
 	@echo "installed $(INSTALL_DIR)/$(BIN)"
 
 # Runs the server against $(CONFIG); RAGOTA_CONFIG still works.
@@ -308,7 +308,7 @@ corpus-measure:
 eval-validate:
 	tools/eval/run.py --validate --corpus $(CORPUS_DIR) $(EVAL_ARGS)
 
-# Builds cmd/server, indexes the repositories the query set needs into
+# Builds cmd/ragota, indexes the repositories the query set needs into
 # $(EVAL_WORK), asks every question through /search and /context and scores the
 # answers with recall@k, MRR and nDCG@10.
 eval: eval-validate
