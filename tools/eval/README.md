@@ -1856,6 +1856,54 @@ the one addressed**: same file, distant regions. Capping hits per file is what
 that asks for, and it trades diversity against span@10 in a way this stage does
 not — a separate experiment, not a tweak to this one.
 
+### Qwen3-Reranker-0.6B, first numbers, and an unfinished experiment
+
+`config.example.yaml` has recommended this model since the reranker landed and
+no row of this document had ever measured it. One is here now, and the run it
+belongs to is not finished — the machine ran out of memory before the two rows
+that mattered most.
+
+Served by `llama-server -hf ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF --rerank
+-c 4096 -b 2048 -ub 2048`, instruction "Given a code search query, retrieve the
+most relevant code", `top_n` 25. eval-fast, keyword, the baseline index:
+
+| /search, 40 q | recall@1 | recall@5 | recall@10 | MRR | span@10 | never found | median |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| no reranker | 0.500 | 0.675 | **0.750** | 0.574 | 0.550 | 8 | 1 ms |
+| **+ Qwen3-Reranker-0.6B** | **0.600** | **0.725** | 0.725 | **0.656** | **0.575** | 8 | 2623 ms |
+
+recall@1 +0.100 and MRR +0.082 on forty questions is four answers moving to the
+top, and it says again what the older cross-encoder table said: this is the
+largest single lever in the pipeline. Two details are worth as much as the
+gains. **`never found` does not move**, which is the whole nature of the stage —
+a reranker reorders what retrieval returned and cannot reach what it did not.
+And `recall@10` gives back one question: a cross-encoder that promotes
+confidently also demotes confidently, which is the same shape the 278M model
+showed at `top_n` 50.
+
+The latency is the price and it is higher than the 278M model's: 2.6 s per
+query at `top_n` 25 against roughly 1 s, on a laptop and without a GPU to
+itself. `top_n` remains the dial.
+
+**What is missing.** The runs that would have closed the open question — the
+same reranker over the `paths` index and over `split`+`paths` — did not
+complete. Holding a 1.2 GB model beside an index of the corpus evicted 2.3 GB
+of other processes within twenty seconds on the machine this was measured on,
+three times, at both corpus sizes; the runs were stopped rather than allowed to
+thrash. So the question stands as posed: both index changes trade precision at
+the top for reach, a cross-encoder is the stage that repairs the top, and
+whether it repairs *this* damage is unmeasured. The baseline row above is what a
+future run compares against, and the commands are:
+
+```sh
+llama-server -hf ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF --rerank \
+  --port 8090 -c 4096 -b 2048 -ub 2048
+tools/eval/run.py --corpus _corpus --variant nopaths --variant rerank \
+  --rerank-url http://localhost:8090 --rerank-top-n 25 \
+  --rerank-instruction "Given a code search query, retrieve the most relevant code"
+# then --variant paths, then --variant split --variant paths
+```
+
 ## Reading the numbers
 
 - The set is a fixed 103 questions; two runs of it are comparable, one run of it
