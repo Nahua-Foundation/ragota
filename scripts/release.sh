@@ -45,11 +45,25 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 DIST="dist/$VERSION"
 
+# changelog_section prints the CHANGELOG.md section whose heading names the
+# version — "## v0.2.0", with anything allowed after the version on the
+# heading line — and nothing when the file or the section is missing.
+changelog_section() {
+    [ -f CHANGELOG.md ] || return 0
+    awk -v v="$1" '
+        /^## / { if (found) exit; if ($2 == v) found = 1; next }
+        found { print }
+    ' CHANGELOG.md
+}
+
 if [ "$MODE" = tag ]; then
     [ -z "$(git status --porcelain)" ] || { echo "release.sh: the tree is dirty; a release builds exactly what a tag names" >&2; exit 1; }
     if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
         echo "release.sh: tag $VERSION already exists" >&2
         exit 1
+    fi
+    if [ -z "$(changelog_section "$VERSION")" ]; then
+        echo "note: CHANGELOG.md has no \"## $VERSION\" section — the release notes will be the raw git log"
     fi
     # Annotated and pushed; the release workflow does the rest.
     git tag -a "$VERSION" -m "ragota $VERSION"
@@ -108,8 +122,13 @@ if [ "$MODE" = snapshot ]; then
     exit 0
 fi
 
-PREV="$(git describe --tags --abbrev=0 "$VERSION^" 2>/dev/null || true)"
-NOTES="$(git log --oneline ${PREV:+$PREV..}"$VERSION" | sed 's/^/- /')"
+# The version's CHANGELOG.md section is the notes when it has one — the
+# curated story; the raw git log is the fallback, never silence.
+NOTES="$(changelog_section "$VERSION")"
+if [ -z "$NOTES" ]; then
+    PREV="$(git describe --tags --abbrev=0 "$VERSION^" 2>/dev/null || true)"
+    NOTES="$(git log --oneline ${PREV:+$PREV..}"$VERSION" | sed 's/^/- /')"
+fi
 gh release create "$VERSION" "$DIST"/*.tar.gz "$DIST/checksums.txt" \
     --verify-tag --title "ragota $VERSION" --notes "$NOTES"
 echo "published: $(gh release view "$VERSION" --json url -q .url)"

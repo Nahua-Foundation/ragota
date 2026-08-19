@@ -34,7 +34,7 @@ Grab the archive for your platform from the [releases page](https://github.com/N
 tar -xzf ragota_v*_darwin_arm64.tar.gz && sudo mv ragota_v*_darwin_arm64/ragota /usr/local/bin/
 ```
 
-A release is a pushed tag: `make release VERSION=vX.Y.Z` tags and pushes, and the release workflow builds the matrix — darwin arm64/amd64 and musl-static linux amd64/arm64 — and publishes it; `make release-snapshot` proves the same artifacts locally without publishing. Building from source needs Go 1.26+ and a C compiler (the tree-sitter grammars).
+A release is a pushed tag: `make release VERSION=vX.Y.Z` tags and pushes, and the release workflow builds the matrix — darwin arm64/amd64 and musl-static linux amd64/arm64 — and publishes it with the version's [CHANGELOG](CHANGELOG.md) section as the notes; `make release-snapshot` proves the same artifacts locally without publishing. Building from source needs Go 1.26+ and a C compiler (the tree-sitter grammars).
 
 ## Quick start
 
