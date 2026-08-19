@@ -78,6 +78,8 @@ func toDiagnostics(meta map[string]interface{}) *SearchDiagnostics {
 	out.Reranked, _ = meta["reranked"].(bool)
 	out.RerankCandidates, _ = meta["rerank_candidates"].(int)
 	out.RerankError, _ = meta["rerank_error"].(string)
+	out.Fusion, _ = meta["fusion"].(string)
+	out.MergedSpans, _ = meta["merged_spans"].(int)
 	return out
 }
 

@@ -1722,6 +1722,105 @@ Rebuilding all twelve repositories from scratch on the new schema returns
 side's 289 s, so neither the ranking above nor the indexing cost depends on
 which database the two sides shared.
 
+## What the keyword channel was missing (2026-08-19)
+
+Three things were built for the lexical leg and measured on `eval-fast` — 40
+questions, six repositories, keyword mode, one index per configuration. The
+caveat above applies in full: this set is a regression check against itself,
+not a corpus a default can be decided on. Baseline, binary `dev (8e6a331)`:
+recall@1 0.500, recall@5 0.675, recall@10 0.750, MRR 0.574, span@10 0.550,
+8 never found.
+
+The reason all three exist is one measurement of the analyser itself. Bleve's
+default tokenizer follows UAX#29, where `_` joins words rather than separating
+them, and nothing splits camelCase, so
+
+```
+func getUserByID(loginAttempt *LoginAttempt) error
+  → func getuserbyid loginattempt loginattempt error
+```
+
+The keyword leg has been an exact-identifier matcher wearing a full-text
+interface: "get user by id" and "login attempt" reach none of that, and a path
+is worse still — `file_path` is a keyword field, one indivisible term, and the
+indexed text carries no path at all.
+
+### The path is worth its own field, at full weight
+
+| /search, 40 q | recall@1 | recall@5 | MRR | span@10 | never found |
+| --- | --- | --- | --- | --- | --- |
+| baseline | 0.500 | 0.675 | 0.574 | 0.550 | 8 |
+| `path_boost` 0.15 | 0.475 | 0.650 | 0.552 | 0.575 | 9 |
+| `path_boost` 0.3 | 0.475 | 0.650 | 0.554 | 0.575 | 8 |
+| `path_boost` 0.5 | 0.475 | 0.675 | 0.554 | 0.600 | 8 |
+| **`path_boost` 1.0** | **0.500** | 0.675 | **0.576** | **0.625** | **6** |
+| `path_boost` 1.5 | 0.500 | **0.700** | **0.583** | **0.625** | **6** |
+| `path_boost` 2.0 | 0.500 | 0.700 | 0.580 | 0.625 | 7 |
+
+**A timid clause is the worst of both**: it perturbs the ranking without buying
+the answers. At full weight nothing regresses and span@10 gains 0.075 — the
+same shape the vector side saw when the path went into the symbol card, and for
+the same reason. 1.5 scores marginally higher again, but by one question out of
+forty, which this document's own rule says is not evidence; the default is 1.0.
+
+Per query at 1.0, 14 moved, 7 each way, and the direction is legible: questions
+whose subject is a **place** gain — `boutique-checkout-route` 12 → 3,
+`conductor-decide-after-system-task` never found → 3, `petclinic-owner-resource`
+and `boutique-choose-ad` and `eshop-order-paid-consumer` all from never found
+into the list — while questions whose subject is a **thing inside a file** pay:
+`jellyfin-activitylog-table` 3 → 14, `eshop-rabbitmq-publish` 4 → 12. Four
+rescued against two lost.
+
+A smoke run on this repository's own sources predicted the opposite, and is
+worth recording as a warning about smoke runs: a heavy path clause put two
+files merely *named* `*rerank_test.go` above the code defining
+`rerankMaxDocBytes`, because test files are named after what they test. That
+effect is real and the eval says it is outweighed. Ground truth decides.
+
+### Splitting identifiers has not earned its place yet
+
+| /search, 40 q | recall@1 | MRR | span@10 | never found |
+| --- | --- | --- | --- | --- |
+| baseline | 0.500 | 0.574 | 0.550 | 8 |
+| `split_boost` 0.1 | 0.500 | 0.573 | 0.550 | 8 |
+| `split_boost` 0.35 | 0.500 | 0.573 | 0.550 | 8 |
+| `split_boost` 0.5 | 0.475 | 0.554 | 0.575 | 8 |
+| `split_boost` 1.0 | 0.450 | 0.537 | — | 8 |
+
+At equal weight, nine questions move and seven are worse. An identifier taken
+apart contributes ordinary English — get, service, order, event — to a field
+that matches many documents weakly, and that noise outvotes the literal match
+it was meant to supplement. Turned down far enough not to hurt, it stops doing
+anything at all.
+
+Two things keep it from being a closed question. It rescued
+`eshop-order-paid-consumer` (never found → 12) and lifted
+`petclinic-gateway-owner-call` 18 → 9 at weight 1.0 — exactly the vocabulary-gap
+shape it was built for. And that shape lives in the three big repositories
+`eval-fast` leaves out: elasticsearch's misses are recorded above as
+vocabulary-free questions no channel reaches. **The full corpus decides this
+one.** It stays off until then.
+
+Composed with the path field it is worse than the path field alone: recall@5
+0.700, MRR 0.578, span@10 0.625 — but 8 never found rather than 6, so two of
+the four rescues come back out.
+
+### Collapsing a file's overlapping chunks changes nothing here, and why
+
+`no_merge_spans` off against on: **identical on every metric and every shape,
+to three decimals**, including span@10. The reason is visible in the answers
+rather than the totals. A file does reach the top twenty several times — one
+`demo_pb2_grpc.py` takes 8 of 20 slots — but those chunks are windows 0, 3 and
+6 of the file, not consecutive ones, so nothing overlaps and nothing merges.
+The graph's contract promotions land as single lines (64-64, 69-69, 74-74 in
+one `VisitResource.java`) and are added after ranking, where the collapse
+cannot see them and should not.
+
+So the redundancy this was built for is real and is a **different shape than
+the one addressed**: same file, distant regions. Capping hits per file is what
+that asks for, and it trades diversity against span@10 in a way this stage does
+not — a separate experiment, not a tweak to this one.
+
 ## Reading the numbers
 
 - The set is a fixed 103 questions; two runs of it are comparable, one run of it

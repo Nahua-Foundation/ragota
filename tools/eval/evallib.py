@@ -830,6 +830,8 @@ def variant_split(cfg, opt):
     "get user by id" can reach getUserByID. It shapes the index, so a comparison
     that uses it cannot run with --no-reindex."""
     cfg["indexes"]["bm25"]["split_identifiers"] = True
+    if opt.get("split_boost"):
+        cfg["indexes"]["bm25"]["split_boost"] = opt["split_boost"]
     return cfg
 
 

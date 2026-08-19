@@ -486,6 +486,7 @@ func initBM25Indexer(cfg *config.Config) (index.Indexer, error) {
 		B:                b,
 		NoCompact:        cfg.Indexes.BM25.NoCompact,
 		SplitIdentifiers: cfg.Indexes.BM25.SplitIdentifiers,
+		SplitBoost:       cfg.Indexes.BM25.SplitBoost,
 		IndexPaths:       cfg.Indexes.BM25.IndexPaths,
 		PathBoost:        cfg.Indexes.BM25.PathBoost,
 	})

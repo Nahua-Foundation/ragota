@@ -280,6 +280,13 @@ type SearchDiagnostics struct {
 	// RerankCandidates is how many leading hits the reranker was shown.
 	RerankCandidates int    `json:"rerank_candidates,omitempty"`
 	RerankError      string `json:"rerank_error,omitempty"`
+	// Fusion names the function that combined the indexes ("rrf", "convex").
+	// Only the hybrid mode fuses, so a single-index mode reports none.
+	Fusion string `json:"fusion,omitempty"`
+	// MergedSpans is how many hits were absorbed into another covering the
+	// same lines of the same file. Absent means none were: either the answer
+	// held no two chunks of one file, or merging is off.
+	MergedSpans int `json:"merged_spans,omitempty"`
 }
 
 // SearchHit is one retrieval result as the API presents it.

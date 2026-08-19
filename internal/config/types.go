@@ -355,6 +355,12 @@ type BM25IndexConfig struct {
 	// a forced reindex, and the server says so at startup when the two
 	// disagree.
 	SplitIdentifiers bool `yaml:"split_identifiers,omitempty"`
+	// SplitBoost weights the code-aware view against the literal one (default
+	// 0.35). Query-time: it takes effect on restart and sweeps without a
+	// reindex. At equal weight the split view measured as a regression — an
+	// identifier taken apart contributes ordinary English, which matches many
+	// documents weakly and outvotes the literal match it should supplement.
+	SplitBoost float64 `yaml:"split_boost,omitempty"`
 	// IndexPaths makes a document's path searchable as words, so that
 	// "checkout service" can reach src/checkoutservice/main.go. Without it the
 	// path is one indivisible term and the indexed text holds no path at all.

@@ -51,9 +51,10 @@ type Indexer struct {
 	// can add; see New.
 	splitIdentifiers bool
 	indexPaths       bool
-	// pathBoost weights the path clause; it is query-time, so unlike the two
-	// above it is the config's to decide on every start.
-	pathBoost float64
+	// pathBoost and splitBoost weight those clauses; they are query-time, so
+	// unlike the two above they are the config's to decide on every start.
+	pathBoost  float64
+	splitBoost float64
 
 	closeOnce sync.Once
 	closeErr  error
@@ -78,6 +79,9 @@ type Config struct {
 	// PathBoost weights the path clause against the text (0 or less means
 	// defaultPathBoost). It is query-time: changing it needs no reindex.
 	PathBoost float64
+	// SplitBoost weights the code-aware clause against the literal one (0 or
+	// less means defaultSplitBoost). Query-time, like PathBoost.
+	SplitBoost float64
 }
 
 // applyBM25Params points bleve at the BM25 scoring model and installs k1/b.
@@ -152,6 +156,10 @@ func New(cfg *Config) (*Indexer, error) {
 	if pathBoost <= 0 {
 		pathBoost = defaultPathBoost
 	}
+	splitBoost := cfg.SplitBoost
+	if splitBoost <= 0 {
+		splitBoost = defaultSplitBoost
+	}
 
 	return &Indexer{
 		index:            idx,
@@ -161,6 +169,7 @@ func New(cfg *Config) (*Indexer, error) {
 		splitIdentifiers: split,
 		indexPaths:       paths,
 		pathBoost:        pathBoost,
+		splitBoost:       splitBoost,
 	}, nil
 }
 
@@ -603,6 +612,7 @@ func (i *Indexer) Search(ctx context.Context, q *index.SearchQuery) (res *index.
 	if i.splitIdentifiers {
 		split := bleve.NewMatchQuery(q.Query)
 		split.SetField(codeSplitField)
+		split.SetBoost(i.splitBoost)
 		views = append(views, split)
 	}
 	if i.indexPaths {
@@ -764,17 +774,32 @@ const codeSplitField = "content_split"
 // reranker at all — more span@10 than the reranker itself buys. This is the
 // same fact offered to the other channel.
 //
-// The weight is why it is a separate clause rather than more text. The path was
-// measured on the vector side as one line among a card's forty; as a field of
-// its own it is four tokens, and BM25's length normalisation lets a directory
-// name outscore a body that answers the question. Observed at weight 1.0 on
-// this repository: "rerank max doc bytes" lost the chunk that defines
-// rerankMaxDocBytes to two files merely named *rerank_test.go. Hence
-// defaultPathBoost below, and indexes.bm25.path_boost to move it — unlike the
-// fields, a weight is query-time, so sweeping it needs no reindex.
+// The weight is why it is a separate clause rather than more text, and it was
+// swept rather than guessed. Smoked on this repository's own sources, a heavy
+// path clause looked dangerous — "rerank max doc bytes" lost the chunk that
+// defines rerankMaxDocBytes to two files merely named *rerank_test.go, because
+// test files are named after what they test. The eval says the opposite, and
+// the eval is the one with ground truth. eval-fast, 40 questions, six
+// repositories, keyword mode, one index per column:
+//
+//	path_boost   recall@1  recall@5   mrr   span@10  never found
+//	off             0.500     0.675  0.574    0.550            8
+//	0.15            0.475     0.650  0.552    0.575            9
+//	0.3             0.475     0.650  0.554    0.575            8
+//	0.5             0.475     0.675  0.554    0.600            8
+//	1.0             0.500     0.675  0.576    0.625            6
+//	1.5             0.500     0.700  0.583    0.625            6
+//	2.0             0.500     0.700  0.580    0.625            7
+//
+// A timid clause is the worst of both: it perturbs the ranking without buying
+// the answers. At full weight nothing regresses and span@10 gains 0.075, which
+// is the shape the vector side saw when the path went into the card. 1.5 scores
+// marginally higher still, but by one question out of forty — not evidence — so
+// the default is the round number the peak sits on, and path_boost moves it.
+// A weight is query-time: sweeping it needs no reindex.
 const (
 	pathTextField    = "path_text"
-	defaultPathBoost = 0.3
+	defaultPathBoost = 1.0
 )
 
 // codeAnalyzer and codeDelimiters name the analysis chain that splits
@@ -797,9 +822,34 @@ const (
 // named for. And there is no stop-word filter on purpose: "is", "by", "to"
 // and "all" are load-bearing parts of identifiers (isValid, byID, toString,
 // getAll), while idf already discounts what is common.
+// The weight of the split view against the literal one is a setting, and the
+// measurement so far says the field has not earned its place. eval-fast, 40
+// questions, keyword mode, against a baseline of recall@1 0.500 / MRR 0.574 /
+// span@10 0.550 / 8 never found:
+//
+//	split_boost   recall@1    mrr   span@10  never found
+//	0.1              0.500  0.573     0.550            8
+//	0.35             0.500  0.573     0.550            8
+//	0.5              0.475  0.554     0.575            8
+//	1.0              0.450  0.537        —             8
+//
+// At equal weight it is a clear regression: nine questions move, seven of them
+// worse. An identifier taken apart contributes ordinary English — get, service,
+// order, event — to a field that matches many documents weakly, and that noise
+// outvotes the literal match it was meant to supplement. Turned down far enough
+// not to hurt, it also stops doing anything: at 0.35 every metric is the
+// baseline's to three decimals.
+//
+// This is not the same as "it does not work". The two questions it rescued at
+// 1.0 are exactly the vocabulary-gap kind it was built for, and that kind lives
+// in the three big repositories eval-fast leaves out — the journal records
+// elasticsearch's misses as vocabulary-free questions no channel reaches. The
+// full corpus is where this setting is decided; until then it stays off, and
+// the weight is here to be swept, query-time, with no reindex.
 const (
-	codeAnalyzer   = "code"
-	codeDelimiters = "code_delimiters"
+	codeAnalyzer      = "code"
+	codeDelimiters    = "code_delimiters"
+	defaultSplitBoost = 0.35
 )
 
 // buildMapping creates the Bleve index mapping. splitIdentifiers and
