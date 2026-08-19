@@ -1,0 +1,12 @@
+# Per-repository settings for ragota itself (see README, "Per-repository
+# settings"). These are added to the server's repos.ignore for this repository.
+#
+# _corpus holds twelve real repositories cloned for the retrieval benchmark —
+# roughly a hundred thousand indexable files, none of them this project's code.
+# The indexer now reads .gitignore, which already excludes it, so this line is
+# what keeps `--source ~/projects/ragota` from indexing elasticsearch for
+# anyone who turns repos.use_gitignore off. node_modules under testdata is not
+# gitignored anywhere and needs saying regardless.
+ignore:
+  - "**/_corpus/**"
+  - "**/testdata/**/node_modules/**"

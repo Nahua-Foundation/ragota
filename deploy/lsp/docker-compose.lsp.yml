@@ -1,0 +1,69 @@
+# Per-language LSP servers for the ragota refinement pass.
+#
+# Each container bridges a stdio language server to TCP with socat (fork mode:
+# one server process per connection, reconnect-safe). Indexed repositories
+# must live under RAGOTA_LSP_HOST_ROOT on the host; that directory is mounted
+# read-only at /workspace, matching lsp.host_root / lsp.mount_root in the
+# ragota config.
+#
+# Host ports: go 7301, typescript 7302, java 7303, csharp 7304 — published on
+# 127.0.0.1 only. These servers are unauthenticated and can read (for C#:
+# write) the whole mounted tree, so binding them to 0.0.0.0 exposes the source
+# of every indexed repository to the network. Set RAGOTA_LSP_BIND to reach them
+# from another host, and put a tunnel or firewall in front when you do.
+#
+# Requires Compose v2: deploy.resources.limits is ignored by docker-compose v1,
+# and the .NET server needs its memory limit to size its GC heap (see below).
+
+services:
+  lsp-go:
+    build:
+      context: .
+      dockerfile: Dockerfile.gopls
+    ports:
+      - "${RAGOTA_LSP_BIND:-127.0.0.1}:7301:2087"
+    volumes:
+      - "${RAGOTA_LSP_HOST_ROOT:-.}:/workspace:ro"
+    restart: unless-stopped
+
+  lsp-typescript:
+    build:
+      context: .
+      dockerfile: Dockerfile.typescript
+    ports:
+      - "${RAGOTA_LSP_BIND:-127.0.0.1}:7302:2087"
+    volumes:
+      - "${RAGOTA_LSP_HOST_ROOT:-.}:/workspace:ro"
+    restart: unless-stopped
+
+  lsp-java:
+    build:
+      context: .
+      dockerfile: Dockerfile.jdtls
+    ports:
+      - "${RAGOTA_LSP_BIND:-127.0.0.1}:7303:2087"
+    volumes:
+      - "${RAGOTA_LSP_HOST_ROOT:-.}:/workspace:ro"
+    restart: unless-stopped
+
+  lsp-csharp:
+    build:
+      context: .
+      dockerfile: Dockerfile.csharp
+    ports:
+      - "${RAGOTA_LSP_BIND:-127.0.0.1}:7304:2087"
+    volumes:
+      # Read-write on purpose: MSBuild's design-time build must write obj/
+      # next to each .csproj, and OmniSharp fails to load projects otherwise.
+      - "${RAGOTA_LSP_HOST_ROOT:-.}:/workspace"
+    restart: unless-stopped
+    # A cgroup limit is load-bearing, not just protective: the .NET server GC
+    # sizes its heap from the container limit (DOTNET_RUNNING_IN_CONTAINER).
+    # Without one it targets the whole VM and gets OOM-killed before ever
+    # collecting.
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+    environment:
+      - DOTNET_gcServer=0

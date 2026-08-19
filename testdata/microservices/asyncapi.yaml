@@ -1,0 +1,13 @@
+asyncapi: "2.6.0"
+info:
+  title: Orders Events
+  version: "1.0.0"
+channels:
+  orders.created:
+    description: Order lifecycle events
+    publish:
+      message:
+        name: OrderCreated
+    subscribe:
+      message:
+        name: OrderCreated

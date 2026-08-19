@@ -1,0 +1,48 @@
+# Model services for the ragota stack: Ollama (chat + embeddings) and a
+# reranker. Kept separate from docker-compose.yml so they can run on a GPU host
+# while the service runs elsewhere.
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.models.yml up -d
+#
+# Pull the models once the stack is up:
+#   docker compose exec ollama ollama pull nomic-embed-text
+#   docker compose exec ollama ollama pull qwen2.5
+#
+# config.docker.yaml already points at these service names (ollama:11434,
+# reranker:80). Uncomment the vector index and the rerank block there to use
+# them.
+
+name: ragota
+
+services:
+  ollama:
+    image: ollama/ollama:0.5.7
+    ports:
+      - "${RAGOTA_BIND:-127.0.0.1}:11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+    # Uncomment on a GPU host (needs the NVIDIA container toolkit).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Text Embeddings Inference in reranker mode. It answers POST /rerank with
+  # [{"index","score"}], which is exactly what search.rerank speaks; a vLLM or
+  # Cohere endpoint would need base_url ending in /v1 instead.
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    command: ["--model-id", "${RERANK_MODEL:-BAAI/bge-reranker-base}", "--port", "80"]
+    ports:
+      - "${RAGOTA_BIND:-127.0.0.1}:8090:80"
+    volumes:
+      - hfcache:/data
+    restart: unless-stopped
+
+volumes:
+  ollama:
+  hfcache:

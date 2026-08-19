@@ -1,0 +1,35 @@
+# C# language server (OmniSharp-Roslyn, LSP mode) exposed over TCP via socat.
+# socat's fork option starts one server process per connection, so the server
+# survives client reconnects.
+#
+# OmniSharp is used instead of csharp-ls: csharp-ls 0.15 has a runaway
+# allocation on linux-arm64 (it OOMs any memory limit right after initialize).
+FROM mcr.microsoft.com/dotnet/sdk:8.0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends socat curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG OMNISHARP_VERSION=v1.39.12
+RUN mkdir -p /omnisharp \
+    && arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+         arm64) asset="omnisharp-linux-arm64-net6.0.tar.gz" ;; \
+         amd64) asset="omnisharp-linux-x64-net6.0.tar.gz" ;; \
+         *) echo "unsupported arch: $arch" && exit 1 ;; \
+       esac \
+    && curl -fsSL -o /tmp/omnisharp.tar.gz \
+         "https://github.com/OmniSharp/omnisharp-roslyn/releases/download/${OMNISHARP_VERSION}/${asset}" \
+    && tar -xzf /tmp/omnisharp.tar.gz -C /omnisharp \
+    && rm /tmp/omnisharp.tar.gz
+
+# The net6.0 build runs on the SDK image's .NET 8 runtime via roll-forward.
+ENV DOTNET_ROLL_FORWARD=LatestMajor
+
+# OmniSharp -lsp resolves its source root from the process working directory
+# (it ignores the LSP rootUri/rootPath), so anchor the process at the volume
+# mount. It discovers and loads every .csproj under this tree.
+WORKDIR /workspace
+
+EXPOSE 2087
+CMD ["socat", "TCP-LISTEN:2087,reuseaddr,fork", "EXEC:'dotnet /omnisharp/OmniSharp.dll -lsp'"]

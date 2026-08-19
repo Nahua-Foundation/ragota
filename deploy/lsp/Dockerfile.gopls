@@ -1,0 +1,18 @@
+# Go language server (gopls) exposed over TCP via socat.
+# socat's fork option starts one gopls process per connection, so the server
+# survives client reconnects.
+#
+# golang:1.26 (not 1.22): gopls v0.23+ requires Go >= 1.26 to build.
+FROM golang:1.26-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends socat \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pinned: "@latest" silently changes the server (and its Go requirement)
+# between two builds of the same commit.
+ARG GOPLS_VERSION=v0.23.0
+RUN go install golang.org/x/tools/gopls@${GOPLS_VERSION}
+
+EXPOSE 2087
+CMD ["socat", "TCP-LISTEN:2087,reuseaddr,fork", "EXEC:gopls serve"]

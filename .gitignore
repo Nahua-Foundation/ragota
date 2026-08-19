@@ -1,24 +1,86 @@
 # Binaries
-/ai-tools
-ragota
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/ragota
 
-# Data and logs
-/.ai-tools/
-/.ragota/
-/logs/
-*.log
+# Test binary
 *.test
 
-# IDEs
-.idea/
-.vscode/
+# Coverage
+*.out
+coverage.html
+coverage.txt
+*.coverprofile
+coverage.json
 
-# Go
+# Dependencies
 vendor/
 
-# OS
+# Go workspace
+go.work
+go.work.sum
+
+# Build artifacts
+build/
+dist/
+bin/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.bleve
+*.index
+
+# Config (keep example)
+config.yaml
+config.local.yaml
+
+# Data directories
+data/
+repos_data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 .DS_Store
 
-# AGENTS
-.junie
-.qwen
+# Air live reload
+.air.toml
+
+# opencode agent
+.opencode/
+
+# .NET design-time build output (written next to .csproj files by the LSP
+# csharp container's MSBuild during project load) — scoped to testdata so a
+# legitimate top-level bin/ would not be hidden by accident.
+testdata/**/obj/
+testdata/**/bin/
+
+# Python bytecode from the corpus tooling
+__pycache__/
+*.pyc
+
+# Benchmark corpus checkouts (make corpus-clone, CORPUS_DIR). Other people's
+# source, tens of gigabytes, and named with a leading underscore so the go tool
+# skips it when expanding "./..." — see CORPUS_DIR in the Makefile.
+/_corpus/
+
+# Project-local .ragota/ — v1 wrote its index here, and a stray home-relative
+# run could recreate it; either way it is runtime data, not source.
+/.ragota/
