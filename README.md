@@ -28,7 +28,7 @@ them when the index beats their own grep — and when it does not.
 
 ## Install
 
-Grab the archive for your platform from the [releases page](https://github.com/Nahua-Foundation/ragota/releases), unpack, and put `ragota` on your PATH — it is the whole product: the server, `repos` administration and the MCP server are subcommands of one file.
+Grab the archive for your platform from the [releases page](https://github.com/Nahua-Foundation/ragota/releases), unpack, and put `ragota` on your PATH — it is the whole product: the server, `repos` administration and the MCP server are subcommands of one file, and the example config and the agent skills are written by it (`ragota init`, `ragota skills install`), always matching the version you run.
 
 ```bash
 tar -xzf ragota_v*_darwin_arm64.tar.gz && sudo mv ragota_v*_darwin_arm64/ragota /usr/local/bin/
@@ -53,7 +53,7 @@ claude mcp add ragota -e RAGOTA_URL=http://localhost:8080 -- $(pwd)/bin/ragota m
 and install the skills into the workspace the agent analyzes code in:
 
 ```bash
-mkdir -p .claude/skills && cp -R path/to/ragota/skills/ragota-* .claude/skills/
+./bin/ragota skills install ~/your-workspace/.claude/skills
 ```
 
 First questions, without an agent:

@@ -24,16 +24,19 @@ The skills are plain [Agent Skills](https://agentskills.io) directories — a
 `SKILL.md` with YAML frontmatter — so any harness that supports the format
 can load them as-is.
 
-**Claude Code** — copy (or symlink) into a skills directory; project-level
-wins for a team, user-level for yourself:
+**Claude Code** — the binary carries them and writes them itself, so the
+skill text always matches the tool descriptions of the `ragota mcp` you run:
 
 ```bash
-# project: the workspace you analyze code in (not this repository)
-mkdir -p .claude/skills && cp -R path/to/ragota/skills/ragota-* .claude/skills/
+# project: run in the workspace you analyze code in (not this repository)
+ragota skills install
 
 # or user-wide
-mkdir -p ~/.claude/skills && cp -R path/to/ragota/skills/ragota-* ~/.claude/skills/
+ragota skills install ~/.claude/skills
 ```
+
+Copying (or symlinking) from a checkout works too:
+`cp -R path/to/ragota/skills/ragota-* .claude/skills/`.
 
 **Any other harness** (opencode, crush, a bespoke qwen loop): either point
 its skills directory at `skills/`, or inline the three `SKILL.md` bodies into

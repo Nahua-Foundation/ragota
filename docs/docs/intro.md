@@ -53,6 +53,8 @@ Around them, in this repository:
 
 ## Where to go next
 
+- [Install & run](./install.md) — from a release archive to a connected
+  agent, optional services (PostgreSQL, vector search, a reranker) included.
 - [Getting started](./getting-started.md) — build, index a directory, ask
   the first question.
 - [Connecting an agent](./mcp.md) — wire `ragota mcp` into Claude Code or

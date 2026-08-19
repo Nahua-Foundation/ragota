@@ -5,6 +5,9 @@ title: Getting started
 
 # Getting started
 
+Installing a release instead of building — and the optional services
+(PostgreSQL, vector search, a reranker): [Install & run](./install.md).
+
 ## Build
 
 Go 1.26+ with cgo enabled (the AST extractors use tree-sitter):

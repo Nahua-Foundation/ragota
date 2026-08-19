@@ -1,5 +1,5 @@
 ---
-sidebar_position: 6
+sidebar_position: 7
 title: Agent skills
 ---
 
@@ -39,10 +39,14 @@ Two reasons, both measured:
 **Claude Code** — into the workspace where the agent analyzes code:
 
 ```bash
-mkdir -p .claude/skills && cp -R path/to/ragota/skills/ragota-* .claude/skills/
+ragota skills install                      # .claude/skills of the current directory
+ragota skills install ~/.claude/skills     # or user-wide
 ```
 
-(or `~/.claude/skills/` for user-wide.)
+The binary writes its own embedded copies, so the skill text always matches
+the tool descriptions of the `ragota mcp` you run; reinstall after
+upgrading. Copying from a checkout works too:
+`cp -R path/to/ragota/skills/ragota-* .claude/skills/`.
 
 **Other harnesses** — point the skills directory at `skills/`, or paste the
 three `SKILL.md` bodies into the system prompt; they total a few KB and are
