@@ -1,3 +1,8 @@
+---
+sidebar_position: 2
+title: Getting started
+---
+
 # Getting started
 
 Everything local: install ragota, index your projects, connect a coding

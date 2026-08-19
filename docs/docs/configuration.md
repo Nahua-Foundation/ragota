@@ -1,7 +1,12 @@
+---
+sidebar_position: 4
+title: Configuration
+---
+
 # Configuration
 
 Configuration lives in one YAML file (`--config`, default `./config.yaml`,
-env `RAGOTA_CONFIG`); [`config.example.yaml`](../config.example.yaml)
+env `RAGOTA_CONFIG`); [`config.example.yaml`](https://github.com/Nahua-Foundation/ragota/blob/master/config.example.yaml)
 documents every key with its reasoning. This page covers the decisions that
 matter, not every knob.
 

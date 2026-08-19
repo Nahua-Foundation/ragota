@@ -1,3 +1,8 @@
+---
+sidebar_position: 3
+title: Running a server
+---
+
 # Running a server
 
 ragota as a long-lived service: a config file, API keys, PostgreSQL, and —
@@ -15,7 +20,7 @@ $EDITOR config.yaml
 ragota --check-config
 ```
 
-`init` writes [`config.example.yaml`](../config.example.yaml) verbatim —
+`init` writes [`config.example.yaml`](https://github.com/Nahua-Foundation/ragota/blob/master/config.example.yaml) verbatim —
 every key documented with its reasoning, everything optional commented
 out — and refuses to overwrite an existing file. `--check-config` validates
 the result and probes every dependency it names: exit 0 all good, 1 the
@@ -91,7 +96,7 @@ Embeddings are built by an index pass: restart the `--source` run or
 
 The largest single quality lever measured on `tools/eval` — larger than the
 vector index it reorders (the measured table lives in
-[`config.example.yaml`](../config.example.yaml); its conclusion:
+[`config.example.yaml`](https://github.com/Nahua-Foundation/ragota/blob/master/config.example.yaml); its conclusion:
 `top_n: 25` and a small model, not a big one).
 
 On a CPU host, llama.cpp serves the 0.6B in one line — the port matters
@@ -133,7 +138,7 @@ Optional compiler-grade call edges through per-language language servers in
 Docker. This is the one piece that wants a clone of the repository — the
 containers build from `deploy/lsp/` (`make lsp-up`) — and the `lsp:` block
 needs the `host_root`/`mount_root` mapping explained in
-[`config.example.yaml`](../config.example.yaml).
+[`config.example.yaml`](https://github.com/Nahua-Foundation/ragota/blob/master/config.example.yaml).
 
 ## The whole thing as one stack
 

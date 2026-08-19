@@ -1,3 +1,9 @@
+---
+sidebar_position: 1
+slug: /
+title: What ragota is
+---
+
 # ragota
 
 ragota indexes every repository you point it at and answers questions about

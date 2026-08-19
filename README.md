@@ -22,7 +22,7 @@ them when the index beats their own grep — and when it does not.
 | `cmd/ragota` → `bin/ragota` | The server: indexing, watching, HTTP API, terminal dashboard |
 | `ragota mcp` | Read-only MCP server over the same binary: ten tools for any MCP client, on stdio |
 | [`skills/`](skills/README.md) | Agent Skills: when to use the index vs glob/grep/read, the graph tools, the empty-answer protocol |
-| [`docs/`](docs/) | The documentation: plain markdown, readable right here on GitHub |
+| [`docs/`](docs/) | The documentation site (Docusaurus), published at [nahua-foundation.github.io/ragota](https://nahua-foundation.github.io/ragota/) |
 | `tools/eval` | The measured retrieval benchmark behind every quality claim |
 | `e2e/` | The shipped binary driven from outside, both doors: `make e2e`, ~6 s |
 
@@ -63,8 +63,8 @@ curl -s localhost:8080/api/v1/search -d '{"query":"where is the retry budget con
 curl -s localhost:8080/api/v1/services | jq .
 ```
 
-Full walkthrough, configuration, API and MCP reference: the
-[documentation](docs/).
+Full walkthrough, configuration, API and MCP reference:
+[the documentation](https://nahua-foundation.github.io/ragota/).
 
 ## Quality, honestly
 
@@ -77,7 +77,7 @@ away; symbol lookup on a known identifier resolves at MRR 0.71. The tool
 descriptions, the docs and the skills are all written to that operating
 point — scan the list, read the named range, never report an empty answer
 as absence unchecked. Numbers, harness and history:
-[Quality](docs/quality.md).
+[Quality](https://nahua-foundation.github.io/ragota/quality).
 
 ## Development
 
