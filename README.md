@@ -70,12 +70,13 @@ Full walkthrough, configuration, API and MCP reference: the
 
 Retrieval claims here come from `tools/eval` — 103 questions over twelve
 real repositories, ground truth pinned to file and line, deterministic
-run-to-run. The baseline (AST + BM25 over SQLite, nothing external): search
-answers with the right file first about half the time and in the top ten
-far more often; symbol lookup on a known identifier resolves at MRR 0.71.
-The tool descriptions, the docs and the skills are all written to that
-operating point — scan the list, read the named range, never report an
-empty answer as absence unchecked. Numbers, harness and history:
+run-to-run. The baseline (AST + BM25 over SQLite, nothing external): the
+top search hit answers about a third of the questions, the right file is in
+the top ten for two out of three, and the misses are counted, not rounded
+away; symbol lookup on a known identifier resolves at MRR 0.71. The tool
+descriptions, the docs and the skills are all written to that operating
+point — scan the list, read the named range, never report an empty answer
+as absence unchecked. Numbers, harness and history:
 [Quality](docs/docs/quality.md).
 
 ## Development

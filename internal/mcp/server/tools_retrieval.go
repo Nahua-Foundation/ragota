@@ -69,7 +69,7 @@ Ranked code locations for a question asked in prose, across every indexed reposi
 Choose between this and ragota_symbol by what you are holding, not by what you want to end up with:
   - a QUESTION, phrased as a sentence -> ragota_search
   - an IDENTIFIER you already have, out of a stack trace, a diff, a log line or an earlier answer -> ragota_symbol
-Measured over the same 21 benchmark questions on one corpus, this endpoint answers a prose question at MRR 0.587 while ragota_symbol answers a known identifier at 0.714, and the ordering reverses when the input is the other kind. Choosing wrong is the largest avoidable loss of answer quality on this server. This endpoint also applies no exact-over-substring tiering and does not demote generated files, so an identifier sent here meets the generated stubs that share its name.
+Measured over the same 21 benchmark questions on one corpus, this endpoint finds a known identifier at MRR 0.587 while ragota_symbol finds it at 0.714, and the ordering reverses when the input is a prose question. Choosing wrong is the largest avoidable loss of answer quality on this server. This endpoint also applies no exact-over-substring tiering and does not demote generated files, so an identifier sent here meets the generated stubs that share its name.
 
 This is not a grep. It resolves what the question is about — an HTTP route, a gRPC method, a Kafka topic, a database table — and promotes the code that carries that contract, so ask the question as it was put to you rather than decomposing it into keywords first. Use your own file search for a literal string you already know is in the source.
 

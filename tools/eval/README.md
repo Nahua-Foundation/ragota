@@ -30,6 +30,14 @@ the ranked results. Nothing it touches lives outside `--work`. Python 3
 standard library only; the API client and the repository list are reused from
 `tools/corpus/corpuslib.py`.
 
+Past [Comparing two runs](#comparing-two-runs) this file stops being a
+manual and becomes the measurement journal, in the order the findings were
+made — which means a number is current only until a later section moves it.
+The newest full-set line is the 103-question tables in
+[Across a service boundary, and across a repository](#across-a-service-boundary-and-across-a-repository);
+the newest `eval-fast` line is in
+[Running this on a laptop](#running-this-on-a-laptop).
+
 ## The query set
 
 `queries.jsonl` — 103 questions over 12 corpus repositories, one JSON object
@@ -351,7 +359,12 @@ returns that searcher's order, for all 52 questions, at every rank. Anyone
 choosing `hybrid` for a BM25-only install is paying nothing and getting
 nothing, and that is now checkable rather than arguable.
 
-## Current baseline
+## The 80-question baseline (2026-08-12)
+
+> Superseded on 2026-08-13, when the query set grew to 103 — the current
+> full-set line is in [Across a service boundary, and across a
+> repository](#across-a-service-boundary-and-across-a-repository). Kept
+> because the sections after it compare against these numbers.
 
 Measured on 2026-08-12 on an Apple-silicon laptop, binary
 `ragota dev (b76eb21) darwin/arm64 go1.26.5` built from `cmd/ragota` on
