@@ -5,12 +5,11 @@ title: Running a server
 
 # Running a server
 
-ragota as a long-lived service: a config file, API keys, PostgreSQL, and —
-each one optional — the retrieval muscle: a vector index, a reranker, the
-LSP precision pass. Every block on this page changes the
-[measured line](./quality.md) when enabled, and every one is probed by
-`--check-config` once configured. The laptop setup with none of this is
-[Getting started](./getting-started.md).
+ragota as a long-lived service: a config file, API keys, PostgreSQL,
+server-grade models, the LSP precision pass. Every block on this page
+changes the [measured line](./quality.md) when enabled, and every one is
+probed by `--check-config` once configured. The laptop setup — models
+included — is [Getting started](./getting-started.md).
 
 ## The config file
 
@@ -58,16 +57,15 @@ storage:
   postgres: {dsn: "postgres://ragota:ragota@localhost:5432/ragota?sslmode=disable"}
 ```
 
-## Vector search: Qwen3-Embedding over Ollama, Qdrant as the store
+## The models on a server
 
-Two services: Ollama serves the embedder, Qdrant stores the vectors
-(required as soon as `indexes.vector` is on).
+The vector index and the reranker are configured exactly as in
+[Getting started](./getting-started.md#start-the-models) — the same
+`storage.qdrant`, `indexes.vector` and `search.rerank` blocks, pointing at
+your model hosts instead of localhost. What changes at server scale:
 
-```bash
-ollama pull qwen3-embedding:0.6b        # 639 MB; :4b and :8b for GPU hosts
-docker run -d --name ragota-qdrant -p 127.0.0.1:6333:6333 \
-  -v ragota-qdrant:/qdrant/storage qdrant/qdrant:v1.12.4
-```
+**Bigger embedders.** The 0.6B is the laptop pick; a GPU host affords the
+larger tags:
 
 | Model | Pull size | Dimensions |
 |---|---|---|
@@ -77,39 +75,11 @@ docker run -d --name ragota-qdrant -p 127.0.0.1:6333:6333 \
 
 The three sized tags are in the built-in dimensions table; the bare
 `qwen3-embedding` tag is deliberately not — which size it resolves to is
-Ollama's choice, so it requires an explicit `dimensions:`.
+Ollama's choice, so it requires an explicit `dimensions:`. Changing the
+embedder changes the collection: reindex after switching.
 
-```yaml
-storage:
-  qdrant: {url: http://localhost:6333}
-indexes:
-  vector:
-    enabled: true
-    embedder: {provider: ollama, model: "qwen3-embedding:0.6b"}
-    chunking: {method: cards}   # symbol cards — measured better than line windows on every shape but one
-```
-
-Embeddings are built by an index pass: restart the `--source` run or
-`POST /api/v1/repos/{id}/index` per repository after enabling.
-
-## Reranker: Qwen3-Reranker
-
-The largest single quality lever measured on `tools/eval` — larger than the
-vector index it reorders (the measured table lives in
-[`config.example.yaml`](https://github.com/Nahua-Foundation/ragota/blob/master/config.example.yaml); its conclusion:
-`top_n: 25` and a small model, not a big one).
-
-On a CPU host, llama.cpp serves the 0.6B in one line — the port matters
-(ragota holds 8080) and so does `-ub`, without which any code snippet past
-~500 tokens is rejected and search quietly keeps its original order:
-
-```bash
-llama-server -hf ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF --rerank \
-  --port 8090 -c 8192 -b 4096 -ub 4096
-```
-
-On a GPU host, vLLM serves the 4B (a causal LM scored from its yes/no
-logits, hence the override):
+**A GPU reranker.** vLLM serves the 4B (a causal LM scored from its
+yes/no logits, hence the override):
 
 ```bash
 vllm serve Qwen/Qwen3-Reranker-4B --port 8090 --hf_overrides \
@@ -119,18 +89,18 @@ vllm serve Qwen/Qwen3-Reranker-4B --port 8090 --hf_overrides \
 ```yaml
 search:
   rerank:
-    enabled: true
-    base_url: http://localhost:8090   # append /v1 for vLLM, Cohere or Jina; bare for llama.cpp and TEI
-    model: Qwen/Qwen3-Reranker-4B     # required by vLLM; llama.cpp ignores it
-    top_n: 25
-    instruction: "Given a code search query, retrieve the most relevant code"
+    base_url: http://your-gpu-host:8090/v1   # /v1 for vLLM, Cohere and Jina; bare for llama.cpp and TEI
+    model: Qwen/Qwen3-Reranker-4B            # required by vLLM; llama.cpp ignores it
 ```
 
-Qwen3-Reranker is instruction-aware and takes the task description inside
-the query text — that is what `instruction:` renders. A reranker failure
-never fails a search: the original order is kept and logged. (No GPU and no
-llama.cpp? `text-embeddings-inference` with `BAAI/bge-reranker-base` is the
-CPU fallback the [compose stack](#the-whole-thing-as-one-stack) ships.)
+Before reaching for it, read the measured table in
+[`config.example.yaml`](https://github.com/Nahua-Foundation/ragota/blob/master/config.example.yaml):
+`top_n: 25` with the small model is the peak, and a bigger model is not
+the upgrade it looks like.
+
+**No GPU anywhere?** `text-embeddings-inference` with
+`BAAI/bge-reranker-base` is the CPU fallback the
+[compose stack](#the-whole-thing-as-one-stack) ships.
 
 ## LSP precision pass
 
