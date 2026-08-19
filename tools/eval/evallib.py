@@ -846,6 +846,14 @@ def variant_paths(cfg, opt):
     return cfg
 
 
+def variant_nomerge(cfg, opt):
+    """Leave a file's overlapping chunks in the answer as separate hits — the
+    behaviour before they were collapsed, so the collapse can be measured against
+    it. Query-time: it composes with anything and needs no reindex."""
+    cfg.setdefault("search", {})["no_merge_spans"] = True
+    return cfg
+
+
 def variant_convex(cfg, opt):
     """Fuse the two legs by their scores instead of their ranks: each leg scaled
     against the best score it returned, then added in the proportion
@@ -878,6 +886,7 @@ VARIANTS = {
     "split": variant_split,
     "paths": variant_paths,
     "convex": variant_convex,
+    "nomerge": variant_nomerge,
 }
 
 # What each variant needs from the outside world. Checked before the server is

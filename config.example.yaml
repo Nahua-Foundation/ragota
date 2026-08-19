@@ -219,6 +219,15 @@ indexes:
 #   # vector leg carries seven tenths of the sum and the keyword leg the rest.
 #   # fusion: rrf
 #   # vector_weight: 0.5     # convex only; unset leaves both legs equal
+#   #
+#   # A file's overlapping chunks come back as one hit, widened over the ones it
+#   # absorbed: line windows are cut with an overlap, so the same evidence
+#   # arrives two or three times and spends slots and bytes other files could
+#   # have used. It happens after reranking, so the surviving chunk is the one
+#   # the cross-encoder chose. Set this to keep every chunk — which is mostly
+#   # useful for measuring what the collapse is worth:
+#   #   make eval-compare EVAL_ARGS="--a-variant nomerge"
+#   # no_merge_spans: false
 #   rerank:
 #     enabled: true
 #     # Rerank service: POST {base_url}{path} with

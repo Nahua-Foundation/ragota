@@ -506,6 +506,7 @@ func searchConfig(cfg *config.Config) *search.Config {
 	if strings.EqualFold(cfg.Search.Fusion, string(search.FusionConvex)) {
 		sc.Method = search.FusionConvex
 	}
+	sc.NoMerge = cfg.Search.NoMergeSpans
 	// A weight is only meaningful once scores are compared, which Validate
 	// enforces; under convex fusion the two legs share one.
 	if w := cfg.Search.VectorWeight; w > 0 && w < 1 && sc.Method == search.FusionConvex {

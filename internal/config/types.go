@@ -94,7 +94,12 @@ type SearchConfig struct {
 	Fusion string `yaml:"fusion,omitempty"`
 	// VectorWeight is the vector leg's share under "convex" fusion, between 0
 	// and 1; the keyword leg gets the rest. Unset (0) leaves both legs equal.
-	VectorWeight float64       `yaml:"vector_weight,omitempty"`
+	VectorWeight float64 `yaml:"vector_weight,omitempty"`
+	// NoMergeSpans leaves a file's overlapping chunks in the answer as separate
+	// hits. They are merged by default: line windows are cut with an overlap,
+	// so the same evidence arrives two or three times and spends slots and
+	// bytes that other files could have used.
+	NoMergeSpans bool          `yaml:"no_merge_spans,omitempty"`
 	Rerank       *RerankConfig `yaml:"rerank,omitempty"`
 }
 

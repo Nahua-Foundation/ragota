@@ -35,6 +35,13 @@ type Config struct {
 	RRFK float64
 	// Weights for each indexer type.
 	Weights map[index.IndexType]float32
+	// NoMerge leaves a file's overlapping chunks in the answer as separate
+	// hits. Merging them is the default because it cannot cost either metric —
+	// a file keeps its best-ranked representative, so recall@k by file can only
+	// gain the slots the copies were spending, and a widened range can only
+	// make the answer's line more likely to fall inside a hit — but a default
+	// with no way to turn it off cannot be measured, and this one is.
+	NoMerge bool
 }
 
 // DefaultConfig returns default search configuration.
@@ -217,7 +224,11 @@ func (s *Service) CandidatesFrom(ctx context.Context, typ index.IndexType, query
 // Rank is the ranking half of Search: rerank the leading candidates, collapse
 // the ones covering the same lines, and cut the list down to limit.
 func (s *Service) Rank(ctx context.Context, query string, hits []*index.Hit, meta map[string]interface{}, limit int) []*index.Hit {
-	return truncate(mergeSpans(s.applyRerank(ctx, query, hits, meta), meta), limit)
+	ranked := s.applyRerank(ctx, query, hits, meta)
+	if s.config == nil || !s.config.NoMerge {
+		ranked = mergeSpans(ranked, meta)
+	}
+	return truncate(ranked, limit)
 }
 
 // mergeSpans collapses hits that cover the same lines of the same file into

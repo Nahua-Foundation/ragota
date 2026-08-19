@@ -105,6 +105,25 @@ func TestMergeSpansRunsAfterTheReranker(t *testing.T) {
 	}
 }
 
+// TestNoMergeKeepsEveryChunk: the collapse is on by default, so measuring what
+// it is worth needs a way to turn it off — search.no_merge_spans is it.
+func TestNoMergeKeepsEveryChunk(t *testing.T) {
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeBM25: &mockSearcher{name: index.IndexTypeBM25, hits: windowHits()},
+	}, &Config{RRFK: 60, NoMerge: true})
+
+	result, err := svc.Search(context.Background(), &index.SearchQuery{Query: "test", Limit: 10}, true)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(result.Hits) != 4 {
+		t.Errorf("got %d hits, want all 4 kept apart; %s", len(result.Hits), ranges(result.Hits))
+	}
+	if _, ok := result.Metadata["merged_spans"]; ok {
+		t.Error("metadata claims spans were merged")
+	}
+}
+
 func ranges(hits []*index.Hit) string {
 	var b strings.Builder
 	for i, h := range hits {
