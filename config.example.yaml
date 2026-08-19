@@ -206,6 +206,19 @@ indexes:
 #   # (the default) detects the intent from the phrasing; "off" disables
 #   # detection — an explicit "intent" in a request is always honoured.
 #   intent: auto
+#   # How the keyword and vector legs are combined. "rrf" (the default) adds
+#   # reciprocal ranks: it needs no score normalisation and is what every number
+#   # recorded in tools/eval was measured under. "convex" adds the scores
+#   # instead, each leg scaled against the best score it returned.
+#   #
+#   # The difference shows up in the weight. Under rrf a weight compares
+#   # positions, and a leg weighted below roughly three quarters of the other has
+#   # its ENTIRE range beneath the other's last rank — measured once as "hybrid"
+#   # silently retrieving vector-only, which is why weights are refused there.
+#   # Under convex a weight is a proportion, so vector_weight 0.7 means the
+#   # vector leg carries seven tenths of the sum and the keyword leg the rest.
+#   # fusion: rrf
+#   # vector_weight: 0.5     # convex only; unset leaves both legs equal
 #   rerank:
 #     enabled: true
 #     # Rerank service: POST {base_url}{path} with

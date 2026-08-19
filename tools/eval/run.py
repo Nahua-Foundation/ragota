@@ -89,6 +89,8 @@ def add_common_args(ap):
                     help="embedding dimensions override for models outside the built-in table")
     ap.add_argument("--embed-query-instruction", default="",
                     help="query-side instruction for instruction-aware embedders (variant: qinstr)")
+    ap.add_argument("--vector-weight", type=float, default=0.0,
+                    help="the vector leg's share under convex fusion, 0..1 (variant: convex)")
     ap.add_argument("--path-boost", type=float, default=0.0,
                     help="weight of the path clause against the text (variant: paths; 0 = the server's default)")
     ap.add_argument("--assistant-provider", default="ollama", help="assistant provider (variant: rewrite)")
@@ -109,6 +111,7 @@ def options_from(args):
         "embed_dimensions": args.embed_dimensions,
         "embed_query_instruction": args.embed_query_instruction,
         "path_boost": getattr(args, "path_boost", 0.0),
+        "vector_weight": getattr(args, "vector_weight", 0.0),
         "assistant_provider": args.assistant_provider,
         "assistant_url": args.assistant_url,
         "assistant_model": args.assistant_model,

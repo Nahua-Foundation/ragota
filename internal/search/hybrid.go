@@ -22,10 +22,15 @@ type FusionMethod string
 const (
 	// FusionRRF uses Reciprocal Rank Fusion.
 	FusionRRF FusionMethod = "rrf"
+	// FusionConvex adds the sources' normalised scores in the proportion the
+	// weights name; see fuseConvex.
+	FusionConvex FusionMethod = "convex"
 )
 
 // Config is the configuration for the search app.
 type Config struct {
+	// Method selects the fusion function (default FusionRRF).
+	Method FusionMethod
 	// RRF constant k (default 60).
 	RRFK float64
 	// Weights for each indexer type.
@@ -45,7 +50,8 @@ type Config struct {
 // ranked first fell out of the top twenty entirely.
 func DefaultConfig() *Config {
 	return &Config{
-		RRFK: 60.0,
+		Method: FusionRRF,
+		RRFK:   60.0,
 		Weights: map[index.IndexType]float32{
 			index.IndexTypeVector: 1.0,
 			index.IndexTypeBM25:   1.0,
@@ -163,9 +169,26 @@ func (s *Service) Candidates(ctx context.Context, query *index.SearchQuery) ([]*
 		}
 		return []*index.Hit{}, meta, nil
 	}
-	hits := s.fuseRRF(results)
+	hits := s.fuse(results)
 	addFailureMetadata(meta, results, failures)
+	meta["fusion"] = string(s.method())
 	return hits, meta, nil
+}
+
+// method is the configured fusion function, defaulting to RRF.
+func (s *Service) method() FusionMethod {
+	if s.config != nil && s.config.Method == FusionConvex {
+		return FusionConvex
+	}
+	return FusionRRF
+}
+
+// fuse merges the sources' result lists into one ranked list.
+func (s *Service) fuse(results []indexedResult) []*index.Hit {
+	if s.method() == FusionConvex {
+		return s.fuseConvex(results)
+	}
+	return s.fuseRRF(results)
 }
 
 // CandidatesFrom is Candidates for a single searcher (the keyword-only and
@@ -425,29 +448,109 @@ type cluster struct {
 	reasons  []string
 }
 
-// fuseRRF fuses results using Reciprocal Rank Fusion. Hits covering the same
-// file region are merged even when the indexes chunk differently (BM25 uses
-// line windows while the vector index may use symbol cards), otherwise the
-// same code competes with itself and never earns cross-retriever agreement.
-// Only hits from *different* searchers are merged: overlapping windows from
-// one searcher are separate candidates by construction.
+// fuseRRF fuses results using Reciprocal Rank Fusion: a hit is worth what its
+// position says and nothing else, which is why it needs no normalisation and
+// why the weights behave the way DefaultConfig warns they do.
 func (s *Service) fuseRRF(results []indexedResult) []*index.Hit {
 	k := s.config.RRFK
 	if k == 0 {
 		k = 60.0
 	}
+	return s.fuseBy(results, func(source index.IndexType, rank int, _ *index.Hit) float32 {
+		return float32(1.0/(k+float64(rank+1))) * s.getWeight(source)
+	})
+}
 
+// fuseConvex adds the sources' scores in the proportion the weights name, each
+// normalised inside its own list first — the score-based fusion the literature
+// finds better than a rank-based one when there is data to tune the single
+// parameter with, which this project has in tools/eval.
+//
+// The normalisation is what makes the addition meaningful at all: BM25 scores
+// are unbounded and depend on the corpus, cosine similarities sit near one, and
+// adding them raw would let the keyword leg's units decide the ranking. Each
+// leg is scaled against the best score it returned and the floor its scoring
+// function has — zero for both, unless a similarity actually came back negative,
+// in which case that leg's own minimum is the floor.
+//
+// The floor is not a detail. Scaling between the observed *minimum* and maximum
+// instead is the textbook min-max, and it makes every leg's last candidate
+// contribute exactly nothing however good it was: a vector list of 0.81 and
+// 0.79 would score its second hit at zero, and a file both legs found could
+// then lose to a file only one of them found. Agreement between retrievers is
+// the one signal fusion exists to reward, so the scale keeps the distance
+// between a good score and no score.
+//
+// Two consequences worth knowing before reading a number from this. It is still
+// relative to the list, so the best candidate of a hopeless query scores 1.0 —
+// this fuses, it does not measure confidence. And a leg whose hits all tie says
+// nothing about their order, so each of them gets the full weight rather than
+// none.
+//
+// Unlike under RRF, the weights here mean what they look like: a source at 0.3
+// against one at 0.7 contributes three tenths of the total, and no weight can
+// silently disable a leg the way it can when only ranks are compared.
+func (s *Service) fuseConvex(results []indexedResult) []*index.Hit {
+	type bounds struct{ min, max float32 }
+	span := make(map[index.IndexType]bounds, len(results))
+	for _, indexed := range results {
+		var b bounds
+		first := true
+		for _, hit := range indexed.result.Hits {
+			if hit == nil {
+				continue
+			}
+			if first {
+				b = bounds{hit.Score, hit.Score}
+				first = false
+				continue
+			}
+			if hit.Score < b.min {
+				b.min = hit.Score
+			}
+			if hit.Score > b.max {
+				b.max = hit.Score
+			}
+		}
+		span[indexed.source] = b
+	}
+
+	return s.fuseBy(results, func(source index.IndexType, _ int, hit *index.Hit) float32 {
+		b := span[source]
+		floor := float32(0)
+		if b.min < 0 {
+			floor = b.min
+		}
+		normalised := float32(1.0)
+		if b.max > floor {
+			normalised = (hit.Score - floor) / (b.max - floor)
+		}
+		return normalised * s.getWeight(source)
+	})
+}
+
+// fuseBy is the clustering both fusion functions share, and the part that is
+// about code rather than about arithmetic. Hits covering the same file region
+// are merged even when the indexes chunk differently (BM25 uses line windows
+// while the vector index may use symbol cards), otherwise the same code
+// competes with itself and never earns cross-retriever agreement. Only hits
+// from *different* searchers are merged: overlapping windows from one searcher
+// are separate candidates by construction, and what is left of them after the
+// rank stage is collapsed by mergeSpans.
+//
+// contribute says what one hit is worth to its cluster; everything else here is
+// the same whichever fusion function asked.
+func (s *Service) fuseBy(results []indexedResult, contribute func(index.IndexType, int, *index.Hit) float32) []*index.Hit {
 	byKey := map[string]*cluster{}
 	byFile := map[string][]*cluster{}
 	var order []*cluster
 
 	for _, indexed := range results {
-		weight := s.getWeight(indexed.source)
 		for rank, hit := range indexed.result.Hits {
 			if hit == nil {
 				continue
 			}
-			contribution := float32(1.0/(k+float64(rank+1))) * weight
+			contribution := contribute(indexed.source, rank, hit)
 
 			key := hit.Key()
 			fileKey := hit.RepoID + "\x00" + hit.FilePath

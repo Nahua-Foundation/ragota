@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/Nahua-Foundation/ragota/internal/app"
 	"github.com/Nahua-Foundation/ragota/internal/config"
@@ -175,7 +176,7 @@ func Build(ctx context.Context, cfg *config.Config) (_ *app.Service, retErr erro
 			searchers[idx.Type()] = srch
 		}
 	}
-	searchSvc := search.New(searchers, search.DefaultConfig())
+	searchSvc := search.New(searchers, searchConfig(cfg))
 
 	// Optional rerank stage over search results.
 	if cfg.Search != nil && cfg.Search.Rerank != nil && cfg.Search.Rerank.Enabled {
@@ -492,6 +493,26 @@ func initBM25Indexer(cfg *config.Config) (index.Indexer, error) {
 		return nil, err
 	}
 	return bm25Indexer, nil
+}
+
+// searchConfig turns the retrieval settings into the search service's own
+// configuration. Anything the config does not name keeps the measured default:
+// reciprocal rank fusion with both legs equal.
+func searchConfig(cfg *config.Config) *search.Config {
+	sc := search.DefaultConfig()
+	if cfg.Search == nil {
+		return sc
+	}
+	if strings.EqualFold(cfg.Search.Fusion, string(search.FusionConvex)) {
+		sc.Method = search.FusionConvex
+	}
+	// A weight is only meaningful once scores are compared, which Validate
+	// enforces; under convex fusion the two legs share one.
+	if w := cfg.Search.VectorWeight; w > 0 && w < 1 && sc.Method == search.FusionConvex {
+		sc.Weights[index.IndexTypeVector] = float32(w)
+		sc.Weights[index.IndexTypeBM25] = float32(1 - w)
+	}
+	return sc
 }
 
 // initLocalSource initializes local repository source.

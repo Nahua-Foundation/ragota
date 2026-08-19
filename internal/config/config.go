@@ -391,6 +391,23 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateModels()...)
 	errs = append(errs, c.validateLSP()...)
 
+	if c.Search != nil {
+		if !oneOf(c.Search.Fusion, []string{"", "rrf", "convex"}) {
+			errs = append(errs, fmt.Errorf("search.fusion must be rrf or convex (got %q)", c.Search.Fusion))
+		}
+		if c.Search.VectorWeight < 0 || c.Search.VectorWeight >= 1 {
+			errs = append(errs, fmt.Errorf("search.vector_weight must be between 0 and 1, exclusive (got %v)", c.Search.VectorWeight))
+		}
+		// Under RRF a weight is not a proportion: with k=60 and twenty
+		// candidates a side, a leg weighted below ~0.76 of the other has its
+		// entire score range under the other's last rank, which measured as
+		// "hybrid" retrieving vector-only. Naming a weight there is asking for
+		// that, so it is refused rather than warned about.
+		if c.Search.VectorWeight > 0 && c.Search.Fusion != "convex" {
+			errs = append(errs, fmt.Errorf("search.vector_weight needs search.fusion: convex; under rrf a weight compares ranks, not scores, and an unequal one disables the lighter leg"))
+		}
+	}
+
 	if c.Search != nil && c.Search.Rerank != nil && c.Search.Rerank.Enabled {
 		if c.Search.Rerank.BaseURL == "" {
 			errs = append(errs, fmt.Errorf("search.rerank.base_url is required when reranking is enabled"))

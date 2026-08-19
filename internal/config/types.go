@@ -86,8 +86,16 @@ type SearchConfig struct {
 	// the code graph rather than text retrieval alone): "auto" (the default)
 	// detects the intent from the query phrasing, "off" disables detection.
 	// An intent set explicitly on a request is always honoured.
-	Intent string        `yaml:"intent,omitempty"`
-	Rerank *RerankConfig `yaml:"rerank,omitempty"`
+	Intent string `yaml:"intent,omitempty"`
+	// Fusion is how the keyword and vector legs are combined: "rrf" (the
+	// default) adds reciprocal ranks and ignores the scores themselves;
+	// "convex" adds the scores after normalising each leg inside its own
+	// result list, which is what makes VectorWeight mean what it says.
+	Fusion string `yaml:"fusion,omitempty"`
+	// VectorWeight is the vector leg's share under "convex" fusion, between 0
+	// and 1; the keyword leg gets the rest. Unset (0) leaves both legs equal.
+	VectorWeight float64       `yaml:"vector_weight,omitempty"`
+	Rerank       *RerankConfig `yaml:"rerank,omitempty"`
 }
 
 // RerankConfig enables LLM-based reranking of search results: POST

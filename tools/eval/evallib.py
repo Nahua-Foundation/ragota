@@ -846,6 +846,18 @@ def variant_paths(cfg, opt):
     return cfg
 
 
+def variant_convex(cfg, opt):
+    """Fuse the two legs by their scores instead of their ranks: each leg scaled
+    against the best score it returned, then added in the proportion
+    --vector-weight names. It only says anything next to a vector leg, so compose
+    it with `window` or `cards`; --qdrant-url is required for that reason."""
+    search = cfg.setdefault("search", {})
+    search["fusion"] = "convex"
+    if opt.get("vector_weight"):
+        search["vector_weight"] = opt["vector_weight"]
+    return cfg
+
+
 def variant_norewrite(cfg, opt):
     models = cfg.get("models", {})
     if "assistant" in models:
@@ -865,6 +877,7 @@ VARIANTS = {
     "norewrite": variant_norewrite,
     "split": variant_split,
     "paths": variant_paths,
+    "convex": variant_convex,
 }
 
 # What each variant needs from the outside world. Checked before the server is
@@ -876,6 +889,7 @@ VARIANT_REQUIRES = {
     "cards": ["qdrant_url", "embed_model"],
     "qinstr": ["embed_query_instruction"],
     "rewrite": ["assistant_url", "assistant_model"],
+    "convex": ["qdrant_url"],
 }
 
 
