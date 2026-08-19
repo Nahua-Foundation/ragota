@@ -101,3 +101,7 @@ API-first indexing server) and its MCP server (now the `mcp` subcommand),
 merged into one module under one name. Their commit histories live in their
 original repositories; the v1 local tool this repository used to hold is
 `master`'s history from before the v2 merge.
+
+## License
+
+[Apache-2.0](LICENSE).
