@@ -47,10 +47,11 @@ Around them, in this repository:
 
 ## The pages, in reading order
 
-1. [Install & run](./install.md) — from a release archive to a connected
-   agent, optional services (PostgreSQL, vector search, a reranker) included.
-2. [Getting started](./getting-started.md) — build from source, index a
-   directory, ask the first question.
+1. [Getting started](./getting-started.md) — install, index your projects,
+   connect an agent: the whole local setup on one page.
+2. [Running a server](./server.md) — a config file, API keys, PostgreSQL,
+   and the optional retrieval muscle: vector search, a reranker, the LSP
+   pass.
 3. [Configuration](./configuration.md) — the decisions that matter, not
    every knob.
 4. [HTTP API](./http-api.md) — the map of the contract.
