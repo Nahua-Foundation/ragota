@@ -79,7 +79,10 @@ build() {
     local out="$DIST/$name"
     echo "  $goos/$goarch"
     mkdir -p "$out"
-    CGO_ENABLED=1 GOOS="$goos" GOARCH="$goarch" ${cc:+CC="$cc"} \
+    # CC defaults to the system compiler; a quoted assignment survives the
+    # spaces in "zig cc -target …", which ${cc:+CC="$cc"} did not — that
+    # word-split into CC=zig plus a command named cc.
+    CGO_ENABLED=1 GOOS="$goos" GOARCH="$goarch" CC="${cc:-cc}" \
         go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$out/ragota" ./cmd/ragota
     cp README.md "$out/"
     tar -czf "$DIST/$name.tar.gz" -C "$DIST" "$name"
