@@ -97,6 +97,19 @@ indexes:
     # pass and transiently needs room for a second copy of the index; setting
     # this skips it, and two passes over the same sources then disagree.
     # no_compact: false
+    #
+    # Index every chunk a second time through a code-aware analyser, so that an
+    # identifier is also findable as the words it is made of. Without this the
+    # keyword leg matches whole identifiers only: bleve's tokenizer follows
+    # UAX#29, where "_" joins words rather than separating them, and nothing
+    # splits camelCase — "func getUserByID(loginAttempt *LoginAttempt)" indexes
+    # as `func getuserbyid loginattempt`, which "get user by id" and "login
+    # attempt" both miss. It costs index size (a second postings list over the
+    # same text) and it shapes the index, so turning it on takes effect after a
+    # forced reindex; the server warns at startup when the setting and the
+    # index on disk disagree. Measure it before trusting it:
+    #   make eval-compare EVAL_ARGS="--b-variant split"
+    # split_identifiers: false
    # vector:
    #   enabled: true
    #   embedder:

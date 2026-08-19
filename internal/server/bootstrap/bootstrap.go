@@ -480,10 +480,11 @@ func initBM25Indexer(cfg *config.Config) (index.Indexer, error) {
 		b = 0.75
 	}
 	bm25Indexer, err := bm25.New(&bm25.Config{
-		Path:      bm25Path,
-		K1:        k1,
-		B:         b,
-		NoCompact: cfg.Indexes.BM25.NoCompact,
+		Path:             bm25Path,
+		K1:               k1,
+		B:                b,
+		NoCompact:        cfg.Indexes.BM25.NoCompact,
+		SplitIdentifiers: cfg.Indexes.BM25.SplitIdentifiers,
 	})
 	if err != nil {
 		return nil, err

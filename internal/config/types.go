@@ -335,6 +335,13 @@ type BM25IndexConfig struct {
 	// copy of the index. Setting this trades reproducible scores for that
 	// disk and time.
 	NoCompact bool `yaml:"no_compact,omitempty"`
+	// SplitIdentifiers indexes every chunk a second time through a code-aware
+	// analyser, so that getUserByID and login_attempt are also findable as the
+	// words they are made of. Without it the keyword leg matches whole
+	// identifiers only. It shapes the index: turning it on takes effect after
+	// a forced reindex, and the server says so at startup when the two
+	// disagree.
+	SplitIdentifiers bool `yaml:"split_identifiers,omitempty"`
 }
 
 // ModelsConfig represents AI models configuration.

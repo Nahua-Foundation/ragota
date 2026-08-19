@@ -15,7 +15,12 @@ import (
 	"github.com/Nahua-Foundation/ragota/internal/index/ast"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/analysis/analyzer/custom"
 	"github.com/blevesearch/bleve/v2/analysis/analyzer/keyword"
+	regexpchar "github.com/blevesearch/bleve/v2/analysis/char/regexp"
+	"github.com/blevesearch/bleve/v2/analysis/token/camelcase"
+	"github.com/blevesearch/bleve/v2/analysis/token/lowercase"
+	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
 	"github.com/blevesearch/bleve/v2/index/scorch"
 	"github.com/blevesearch/bleve/v2/index/scorch/mergeplan"
 	"github.com/blevesearch/bleve/v2/mapping"
@@ -39,6 +44,11 @@ type Indexer struct {
 	// compactMu serialises compactions: bleve refuses a second force merge
 	// while one is running, and two repositories can finish a pass at once.
 	compactMu sync.Mutex
+	// splitIdentifiers says whether this index carries the code-aware view of
+	// its text. It is read from the index on disk rather than from the config,
+	// because indexing and querying have to agree about a field that only a
+	// reindex can add; see New.
+	splitIdentifiers bool
 
 	closeOnce sync.Once
 	closeErr  error
@@ -53,6 +63,10 @@ type Config struct {
 	// It makes scores depend on how many segments the background merger got
 	// through, so it is off by default; see Compact.
 	NoCompact bool
+	// SplitIdentifiers indexes a second, code-aware view of every chunk; see
+	// codeAnalyzer. It shapes the index, so it applies when one is created and
+	// a running index keeps whatever it was built with.
+	SplitIdentifiers bool
 }
 
 // applyBM25Params points bleve at the BM25 scoring model and installs k1/b.
@@ -82,14 +96,20 @@ func New(cfg *Config) (*Indexer, error) {
 	switch {
 	case err == nil:
 	case errors.Is(err, bleve.ErrorIndexPathDoesNotExist):
-		mapping := buildMapping()
+		mapping, mErr := buildMapping(cfg.SplitIdentifiers)
+		if mErr != nil {
+			return nil, mErr
+		}
 		if idx, err = bleve.New(cfg.Path, mapping); err != nil {
 			return nil, fmt.Errorf("create index at %s: %w", cfg.Path, err)
 		}
 	case (errors.Is(err, bleve.ErrorIndexMetaMissing) || errors.Is(err, bleve.ErrorIndexMetaCorrupt)) && dirIsEmpty(cfg.Path):
 		// An existing but empty directory is the normal case for a freshly
 		// mounted volume, and bleve.New accepts it.
-		mapping := buildMapping()
+		mapping, mErr := buildMapping(cfg.SplitIdentifiers)
+		if mErr != nil {
+			return nil, mErr
+		}
 		if idx, err = bleve.New(cfg.Path, mapping); err != nil {
 			return nil, fmt.Errorf("create index at %s: %w", cfg.Path, err)
 		}
@@ -107,12 +127,35 @@ func New(cfg *Config) (*Indexer, error) {
 		return nil, fmt.Errorf("open index at %s: %w", cfg.Path, err)
 	}
 
+	// A mapping is written once, when the index is created, and bleve.Open
+	// takes it from disk — so what the index actually carries is the only
+	// answer both indexing and querying can be built on. Reading the config
+	// here instead would mean asking a query for a field no document has, and
+	// calling the result a measurement.
+	split := indexSplitsIdentifiers(idx)
+	if split != cfg.SplitIdentifiers {
+		slog.Warn("indexes.bm25.split_identifiers does not match the index on disk; it shapes the index, so it takes effect on the next forced reindex",
+			"configured", cfg.SplitIdentifiers, "index", split, "path", cfg.Path)
+	}
+
 	return &Indexer{
-		index:   idx,
-		path:    cfg.Path,
-		chunker: index.NewWindowChunker(index.ChunkConfig{}),
-		compact: !cfg.NoCompact,
+		index:            idx,
+		path:             cfg.Path,
+		chunker:          index.NewWindowChunker(index.ChunkConfig{}),
+		compact:          !cfg.NoCompact,
+		splitIdentifiers: split,
 	}, nil
+}
+
+// indexSplitsIdentifiers reports whether an index was built with the
+// code-aware field, by asking the mapping it carries.
+func indexSplitsIdentifiers(idx bleve.Index) bool {
+	im, ok := idx.Mapping().(*mapping.IndexMappingImpl)
+	if !ok || im.DefaultMapping == nil {
+		return false
+	}
+	_, ok = im.DefaultMapping.Properties[codeSplitField]
+	return ok
 }
 
 // Name returns the indexer name.
@@ -237,6 +280,10 @@ func (i *Indexer) indexChunks(batch *bleve.Batch, repoID string, cf chunkedFile,
 		if symbol, kind := dominantUnit(syms, chunk.StartLine, chunk.EndLine); symbol != "" {
 			doc["symbol"] = symbol
 			doc["kind"] = kind
+		}
+		if i.splitIdentifiers {
+			// The same text a second time, for the analyser to take apart.
+			doc[codeSplitField] = chunk.Text
 		}
 
 		docID := chunkDocID(repoID, cf.file.Path, chunkIdx)
@@ -514,7 +561,20 @@ func (i *Indexer) Search(ctx context.Context, q *index.SearchQuery) (res *index.
 	// and matches nothing.
 	qry := bleve.NewMatchQuery(q.Query)
 
-	clauses := []query.Query{qry}
+	// The literal view of the query is the one above: identifiers as they are
+	// written. When the index carries the code-aware field, the same words are
+	// asked of it too, analysed the same way on both sides — so a question
+	// spelled in words reaches an identifier that spells them without spaces.
+	// The two clauses both score, so a candidate that matches an identifier
+	// literally still outranks one that matches only its parts.
+	text := query.Query(qry)
+	if i.splitIdentifiers {
+		split := bleve.NewMatchQuery(q.Query)
+		split.SetField(codeSplitField)
+		text = bleve.NewDisjunctionQuery(qry, split)
+	}
+
+	clauses := []query.Query{text}
 
 	if len(q.Repos) > 0 {
 		repoQueries := make([]query.Query, len(q.Repos))
@@ -539,7 +599,7 @@ func (i *Indexer) Search(ctx context.Context, q *index.SearchQuery) (res *index.
 		clauses = append(clauses, pq)
 	}
 
-	var searchQuery query.Query = qry
+	searchQuery := text
 	if len(clauses) > 1 {
 		searchQuery = bleve.NewConjunctionQuery(clauses...)
 	}
@@ -643,8 +703,42 @@ func (i *Indexer) Stats(ctx context.Context) (*index.IndexerStats, error) {
 	}, nil
 }
 
-// buildMapping creates the Bleve index mapping.
-func buildMapping() *mapping.IndexMappingImpl {
+// codeSplitField is a second, code-aware view of a chunk's text: the same
+// content analysed by codeAnalyzer. It is indexed but not stored — a snippet
+// still comes from "content" — and deliberately kept out of "_all", so that it
+// enters a query as one clause with one weight rather than as a silent
+// addition to every other field's.
+const codeSplitField = "content_split"
+
+// codeAnalyzer and codeDelimiters name the analysis chain that splits
+// identifiers into the words they are made of.
+//
+// The default analyser does neither half of that. Bleve's unicode tokenizer
+// follows UAX#29, where "_" *joins* words rather than separating them, and
+// nothing splits camelCase at all, so
+//
+//	func getUserByID(loginAttempt *LoginAttempt)
+//
+// indexes as `func getuserbyid loginattempt loginattempt` — "get user by id"
+// matches none of it, and neither does "login attempt". The keyword leg is an
+// exact-identifier matcher wearing a full-text interface, which is why a
+// question phrased in words has only ever reached the vector leg.
+//
+// Three details of the chain are load-bearing. The char filter replaces one
+// delimiter with one space, so every token keeps the offsets of the source it
+// came from. camelCase runs before to_lower because it needs the case it is
+// named for. And there is no stop-word filter on purpose: "is", "by", "to"
+// and "all" are load-bearing parts of identifiers (isValid, byID, toString,
+// getAll), while idf already discounts what is common.
+const (
+	codeAnalyzer   = "code"
+	codeDelimiters = "code_delimiters"
+)
+
+// buildMapping creates the Bleve index mapping. splitIdentifiers adds the
+// code-aware field; it is a property of the index rather than of a query, so
+// it is fixed when the index is created.
+func buildMapping(splitIdentifiers bool) (*mapping.IndexMappingImpl, error) {
 	// Create document mapping
 	docMapping := bleve.NewDocumentMapping()
 
@@ -683,13 +777,40 @@ func buildMapping() *mapping.IndexMappingImpl {
 
 	// Create index mapping
 	indexMapping := bleve.NewIndexMapping()
+
+	if splitIdentifiers {
+		if err := indexMapping.AddCustomCharFilter(codeDelimiters, map[string]interface{}{
+			"type":    regexpchar.Name,
+			"regexp":  `[_./\-]`,
+			"replace": " ",
+		}); err != nil {
+			return nil, fmt.Errorf("define %s char filter: %w", codeDelimiters, err)
+		}
+		if err := indexMapping.AddCustomAnalyzer(codeAnalyzer, map[string]interface{}{
+			"type":          custom.Name,
+			"char_filters":  []string{codeDelimiters},
+			"tokenizer":     unicode.Name,
+			"token_filters": []string{camelcase.Name, lowercase.Name},
+		}); err != nil {
+			return nil, fmt.Errorf("define %s analyzer: %w", codeAnalyzer, err)
+		}
+
+		splitFieldMapping := bleve.NewTextFieldMapping()
+		splitFieldMapping.Analyzer = codeAnalyzer
+		splitFieldMapping.Index = true
+		splitFieldMapping.Store = false
+		splitFieldMapping.IncludeTermVectors = false
+		splitFieldMapping.IncludeInAll = false
+		docMapping.AddFieldMappingsAt(codeSplitField, splitFieldMapping)
+	}
+
 	indexMapping.AddDocumentMapping("doc", docMapping)
 	indexMapping.DefaultMapping = docMapping
 	// Bleve scores with tf-idf unless told otherwise; without this the
 	// configured k1/b would have nothing to tune.
 	indexMapping.ScoringModel = bleveIndexAPI.BM25Scoring
 
-	return indexMapping
+	return indexMapping, nil
 }
 
 // buildDocument creates a Bleve document from file content.

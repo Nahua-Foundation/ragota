@@ -824,6 +824,15 @@ def variant_rewrite(cfg, opt):
     return cfg
 
 
+def variant_split(cfg, opt):
+    """The code-aware keyword field: every chunk indexed a second time through an
+    analyser that splits identifiers into the words they are made of, so that
+    "get user by id" can reach getUserByID. It shapes the index, so a comparison
+    that uses it cannot run with --no-reindex."""
+    cfg["indexes"]["bm25"]["split_identifiers"] = True
+    return cfg
+
+
 def variant_norewrite(cfg, opt):
     models = cfg.get("models", {})
     if "assistant" in models:
@@ -841,6 +850,7 @@ VARIANTS = {
     "qinstr": variant_qinstr,
     "rewrite": variant_rewrite,
     "norewrite": variant_norewrite,
+    "split": variant_split,
 }
 
 # What each variant needs from the outside world. Checked before the server is

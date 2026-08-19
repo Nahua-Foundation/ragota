@@ -220,7 +220,11 @@ func TestBM25ConfigParamsApplied(t *testing.T) {
 	if bleveSearch.BM25_b != 0.4 {
 		t.Errorf("bleve b = %v, want the configured 0.4", bleveSearch.BM25_b)
 	}
-	if got := buildMapping().ScoringModel; got != bleveIndexAPI.BM25Scoring {
+	m, err := buildMapping(false)
+	if err != nil {
+		t.Fatalf("buildMapping: %v", err)
+	}
+	if got := m.ScoringModel; got != bleveIndexAPI.BM25Scoring {
 		t.Errorf("scoring model = %q, want %q", got, bleveIndexAPI.BM25Scoring)
 	}
 }
