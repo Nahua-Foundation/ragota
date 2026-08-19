@@ -13,7 +13,7 @@ with ground truth pinned to file and line and **validated against the
 sources, never against the system under test** (`make eval-validate`).
 
 ```bash
-make corpus-clone   # clone the corpus (shallow, ~15 GB)
+make corpus-clone   # clone the corpus (shallow, pinned, 2.7 GB)
 make eval           # index, ask all 103, score recall@k / MRR / nDCG@10
 make eval-fast      # the six small repositories, laptop-sized
 make eval-compare   # A/B: two binaries or two configs on the same set

@@ -7,7 +7,7 @@ RRF fusion by overlap, reranking after the limit instead of before, symbol
 cards, query rewriting — was made without one. This harness is that number.
 
 ```sh
-make corpus-clone CORPUS_DIR=/data/corpus       # once, ~15 GB
+make corpus-clone CORPUS_DIR=/data/corpus       # once, 2.7 GB at the pinned commits
 make eval-validate CORPUS_DIR=/data/corpus      # ground truth still true?
 make eval          CORPUS_DIR=/data/corpus      # baseline
 make eval-compare  CORPUS_DIR=/data/corpus \
@@ -174,10 +174,13 @@ holding the answer, is an error, as is a `cross-repo` question asked of one
 repository.
 
 A moved line is a warning with the new line number; a vanished anchor is an
-error, because the recorded claim is no longer true of the code. Corpus
-checkouts are `--depth 1` clones of moving branches, so this will fire — it is
-how the set is kept honest rather than quietly rotting. Nothing in validation
-touches the server or the index.
+error, because the recorded claim is no longer true of the code. Since
+2026-08-19 the corpus is pinned by commit in `tools/corpus/repos.tsv`, so a
+clean `--validate` is the normal state and a failure means either the pin was
+moved or the ground truth was edited — before that, checkouts were `--depth 1`
+of moving branches and the set drifted under itself. Repinning is deliberate:
+bump the commit, run `--validate`, repair what it names, and record why in the
+question's `why`. Nothing in validation touches the server or the index.
 
 ## The metrics
 
@@ -1743,13 +1746,19 @@ is worse still — `file_path` is a keyword field, one indivisible term, and the
 indexed text carries no path at all. Every question phrased in words has been
 reaching the vector leg alone.
 
-**A caveat on the corpus.** `clone.sh` takes `--depth 1` of each repository's
-current HEAD, so a fresh clone is whatever upstream is that day, not what the
-ground truth was written against. On this clone `--validate` reports one error
-(`eshop-orders-table-reader` points past the end of a file that has since
-shrunk) and two moved anchors. The comparisons below are unaffected — both
-sides index the same trees — but their absolute numbers are **not** comparable
-with the 2026-08-13 tables above.
+**A caveat on the corpus, and what came of it.** These runs were made on a
+fresh clone, and `clone.sh` took `--depth 1` of each repository's current HEAD
+— so the trees were whatever upstream was that day, not what the ground truth
+was written against. `--validate` said so: one error (`eshop-orders-table-reader`
+pointed past the end of a file that had since shrunk, upstream having moved its
+raw SQL into a repository class) and two moved anchors. The comparisons below
+are unaffected, both sides indexing the same trees, but their absolute numbers
+are **not** comparable with the 2026-08-13 tables above.
+
+That hole is now closed: `repos.tsv` pins every repository to a commit, and
+those commits are the trees measured here. The three drifted questions were
+repaired against them, so `--validate` is clean, and a run of this set next
+month reads the same code as this one.
 
 ### The four configurations, full set
 

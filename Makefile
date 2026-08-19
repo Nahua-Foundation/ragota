@@ -278,7 +278,8 @@ compose-logs:
 # library only and both work against a throwaway server they start themselves
 # (eval) or a running one (corpus).
 
-# Where the corpus checkouts live. ~15 GB with every repository cloned.
+# Where the corpus checkouts live. 2.7 GB with all sixteen repositories
+# cloned at the commits tools/corpus/repos.tsv pins.
 #
 # The leading underscore is load-bearing: the corpus is other people's source,
 # including Go packages with their own imports, and `go build ./...` walks

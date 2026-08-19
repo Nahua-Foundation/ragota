@@ -6,10 +6,18 @@ better" is a claim someone can check: clone, index, measure, compare with the
 numbers below.
 
 ```sh
-./clone.sh -d /data/corpus                 # shallow clones, ~15 GB
+./clone.sh -d /data/corpus                 # shallow clones at the pinned commits
 ./bench.py  --corpus /data/corpus --db ~/.ragota/data/ragota.db
 ./measure.py --corpus /data/corpus --db ~/.ragota/data/ragota.db
 ```
+
+Each row of `repos.tsv` carries a checkout directory and a commit. The
+directory is the name a repository answers to downstream — `tools/eval`'s
+ground truth says `petclinic`, not `spring-petclinic-microservices` — and the
+commit is what makes the corpus a fixed thing: ground truth pinned to file and
+line is only true of one tree, and HEAD is a different tree every week. A
+checkout is a depth-1 fetch of that commit, so pinning costs no history.
+Repin deliberately, and run `tools/eval/run.py --validate` afterwards.
 
 `bench.py` needs a running server (`--server`, default `http://127.0.0.1:8080`)
 and read access to its metadata store (`--db`: a sqlite path or a postgres

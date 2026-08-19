@@ -42,11 +42,18 @@ EDGE_KIND_CONTRACT = {
 
 
 class Repo:
-    def __init__(self, name, url, pattern, stack):
+    def __init__(self, name, url, pattern, stack, dir="", commit=""):
         self.name = name
         self.url = url
         self.pattern = pattern
         self.stack = stack
+        # The checkout directory, and the name a repository answers to
+        # downstream: the eval's ground truth says "petclinic", not
+        # "spring-petclinic-microservices". Empty in the list means they match.
+        self.dir = dir or name
+        # The pinned commit. Ground truth pinned to file and line is only true
+        # of one tree; see repos.tsv.
+        self.commit = commit
 
     def __repr__(self):
         return "Repo(%s)" % self.name
@@ -61,9 +68,9 @@ def load_repos(path=REPOS_TSV, only=None):
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             parts = line.split("\t")
-            while len(parts) < 4:
+            while len(parts) < 6:
                 parts.append("")
-            repo = Repo(*parts[:4])
+            repo = Repo(*parts[:6])
             if only and repo.name not in only:
                 continue
             out.append(repo)

@@ -1,27 +1,40 @@
 # Benchmark corpus: the repositories the contract-extraction numbers are
 # measured on. One row per repository, tab-separated:
 #
-#   name<TAB>url<TAB>pattern<TAB>stack
+#   name<TAB>url<TAB>pattern<TAB>stack<TAB>dir<TAB>commit
 #
 # "pattern" is why the repository is in the corpus — the way it declares or
 # calls out to its contracts, which is what the extractor either understands
 # or does not. Adding a repository is only useful if it brings a pattern the
 # corpus does not already have.
 #
+# "dir" is the checkout directory, and it is the name a repository answers to
+# everywhere downstream — tools/eval/queries.jsonl pins its ground truth to
+# "petclinic", not to "spring-petclinic-microservices". Empty means the same
+# as "name".
+#
+# "commit" pins the tree. Without it a clone is whatever upstream HEAD is that
+# day: the ground truth in tools/eval is pinned to file and line, so a corpus
+# that moves silently invalidates it — measured on 2026-08-19, a fresh clone
+# put one expected answer past the end of its file and moved two anchors. Two
+# runs of the eval are only comparable if they read the same trees, and this
+# column is what makes that true across machines and across months. Repin
+# deliberately, with `--validate` run afterwards, never as a drive-by.
+#
 # Lines starting with # and blank lines are ignored.
-nats-server	https://github.com/nats-io/nats-server	messaging-broker	go
-kafka	https://github.com/apache/kafka	messaging-broker	java,scala
-umbraco	https://github.com/umbraco/Umbraco-CMS	annotation-routing	dotnet
-n8n	https://github.com/n8n-io/n8n	custom-http-helper	typescript
-microservices-demo	https://github.com/GoogleCloudPlatform/microservices-demo	grpc-polyglot	go,python,java,dotnet,nodejs
-robot-shop	https://github.com/instana/robot-shop	polyglot-http-queue	nodejs,java,python,go,php
-eShop	https://github.com/dotnet/eShop	annotation-routing	dotnet
-spring-petclinic-microservices	https://github.com/spring-petclinic/spring-petclinic-microservices	annotation-routing	java
-conductor	https://github.com/Netflix/conductor	custom-registry	java
-elasticsearch	https://github.com/elastic/elasticsearch	custom-registry	java
-grafana	https://github.com/grafana/grafana	explicit-routing	go,typescript
-consul	https://github.com/hashicorp/consul	explicit-routing	go
-argo-cd	https://github.com/argoproj/argo-cd	grpc-gateway	go
-jellyfin	https://github.com/jellyfin/jellyfin	annotation-routing	dotnet
-medusa	https://github.com/medusajs/medusa	orm-file-routing	typescript
-airflow	https://github.com/apache/airflow	orm-plugin-registry	python
+nats-server	https://github.com/nats-io/nats-server	messaging-broker	go	nats-server	b1507e0545a83223bd774034c0e541b9feec805a
+kafka	https://github.com/apache/kafka	messaging-broker	java,scala	kafka	7565048a5c7da092d1540bdb03f9d0846336e9d7
+umbraco	https://github.com/umbraco/Umbraco-CMS	annotation-routing	dotnet	umbraco	c1fa32eeda53b36391eb78c9c482ef215b0f343d
+n8n	https://github.com/n8n-io/n8n	custom-http-helper	typescript	n8n	8c6d469c1982c4322ee5496a481db6543aec8c9e
+microservices-demo	https://github.com/GoogleCloudPlatform/microservices-demo	grpc-polyglot	go,python,java,dotnet,nodejs	boutique	34ffea9175946982c3088ed84994fe6019ad6e92
+robot-shop	https://github.com/instana/robot-shop	polyglot-http-queue	nodejs,java,python,go,php	robotshop	55292e2199f2fb00a165b1f7d3045fe7f8922038
+eShop	https://github.com/dotnet/eShop	annotation-routing	dotnet	eshop	ae71a0610162c6712c885f64e7706a9b7b54f2ee
+spring-petclinic-microservices	https://github.com/spring-petclinic/spring-petclinic-microservices	annotation-routing	java	petclinic	305a1f13e4f961001d4e6cb50a9db51dc3fc5967
+conductor	https://github.com/Netflix/conductor	custom-registry	java	conductor	548f386c2c6c1e4d467b8551edbb6182881004ae
+elasticsearch	https://github.com/elastic/elasticsearch	custom-registry	java	elasticsearch	016b222570b96740adc4f21840c57e97abc7b273
+grafana	https://github.com/grafana/grafana	explicit-routing	go,typescript	grafana	9d2137c452fac64bdf176e30638986f215c36ea4
+consul	https://github.com/hashicorp/consul	explicit-routing	go	consul	dc9943454d68aa30e4ea411c565d502f711c5922
+argo-cd	https://github.com/argoproj/argo-cd	grpc-gateway	go	argocd	fe367bf4371df12a2c957ddf597885ce72d60d85
+jellyfin	https://github.com/jellyfin/jellyfin	annotation-routing	dotnet	jellyfin	19d919f8be44f9f863d5839ac411216b0f1dee4e
+medusa	https://github.com/medusajs/medusa	orm-file-routing	typescript	medusa	39173f512da29c8824bbec123d596410f9cc093f
+airflow	https://github.com/apache/airflow	orm-plugin-registry	python	airflow	9c8d7512a2050990c295b53965ac76d90afa21b4

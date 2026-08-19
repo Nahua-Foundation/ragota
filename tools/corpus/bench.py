@@ -137,7 +137,7 @@ def main():
 
     results = []
     for repo in repos:
-        path = os.path.abspath(os.path.join(args.corpus, repo.name))
+        path = os.path.abspath(os.path.join(args.corpus, repo.dir))
         if not os.path.isdir(path):
             print("skip    %-32s not cloned" % repo.name)
             continue
