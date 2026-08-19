@@ -10,8 +10,7 @@ import (
 	"time"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/httpx"
-	"github.com/Nahua-Foundation/ragota/internal/obs"
+	"github.com/Nahua-Foundation/ragota/pkg/httpx"
 )
 
 const (
@@ -141,7 +140,7 @@ type rerankEntry struct {
 	Relevance *float64 `json:"relevance_score"`
 }
 
-// Rerank scores documents against the query via the remote service. The whole
+// Rerank scores documents against the query via the remote app. The whole
 // stage — including the retry — is bounded by the configured timeout.
 func (r *HTTPReranker) Rerank(ctx context.Context, query string, documents []string) ([]float64, error) {
 	if len(documents) == 0 {
@@ -162,12 +161,12 @@ func (r *HTTPReranker) Rerank(ctx context.Context, query string, documents []str
 		Model:     r.model,
 	}
 	if err := r.client.PostJSON(ctx, r.path, req, &raw); err != nil {
-		obs.Inc("ragota_rerank_request_failures_total", 1)
+		rerankRequestFailures.Inc()
 		return nil, fmt.Errorf("rerank: %w", err)
 	}
 	entries, err := parseRerankResponse(raw)
 	if err != nil {
-		obs.Inc("ragota_rerank_request_failures_total", 1)
+		rerankRequestFailures.Inc()
 		return nil, err
 	}
 
@@ -177,7 +176,7 @@ func (r *HTTPReranker) Rerank(ctx context.Context, query string, documents []str
 	scored := make([]bool, len(documents))
 	for _, e := range entries {
 		if e.Index < 0 || e.Index >= len(documents) {
-			obs.Inc("ragota_rerank_request_failures_total", 1)
+			rerankRequestFailures.Inc()
 			return nil, fmt.Errorf("rerank: index %d out of range (%d documents)", e.Index, len(documents))
 		}
 		switch {
@@ -192,7 +191,7 @@ func (r *HTTPReranker) Rerank(ctx context.Context, query string, documents []str
 	}
 	for i, ok := range scored {
 		if !ok {
-			obs.Inc("ragota_rerank_request_failures_total", 1)
+			rerankRequestFailures.Inc()
 			return nil, fmt.Errorf("rerank: no score for document %d of %d", i, len(documents))
 		}
 	}

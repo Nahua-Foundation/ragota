@@ -13,9 +13,10 @@ import (
 	"testing"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/indexing"
-	"github.com/Nahua-Foundation/ragota/internal/obs"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/index"
+	"github.com/Nahua-Foundation/ragota/internal/store"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // --- fake language server ---------------------------------------------------
@@ -130,25 +131,25 @@ func symbol(name string, kind, startLine, endLine int) map[string]any {
 // fakeStorage implements only the methods the refiner touches; the embedded
 // nil interface makes any other call panic loudly instead of compiling away.
 type fakeStorage struct {
-	storage.Storage
+	store.Storage
 
-	units map[string][]*storage.ASTUnit // file path -> units
+	units map[string][]*domain.ASTUnit // file path -> units
 
 	mu    sync.Mutex
-	edges []*storage.Edge
+	edges []*domain.Edge
 }
 
 func newFakeStorage() *fakeStorage {
-	return &fakeStorage{units: map[string][]*storage.ASTUnit{}}
+	return &fakeStorage{units: map[string][]*domain.ASTUnit{}}
 }
 
-func (f *fakeStorage) GetASTUnits(_ context.Context, opts storage.QueryOpts) ([]*storage.ASTUnit, error) {
+func (f *fakeStorage) GetASTUnits(_ context.Context, opts domain.QueryOpts) ([]*domain.ASTUnit, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.units[opts.FilePath], nil
 }
 
-func (f *fakeStorage) StoreASTUnit(_ context.Context, u *storage.ASTUnit) error {
+func (f *fakeStorage) StoreASTUnit(_ context.Context, u *domain.ASTUnit) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u.ID = fmt.Sprintf("u%d", len(f.units[u.FilePath])+100)
@@ -156,7 +157,7 @@ func (f *fakeStorage) StoreASTUnit(_ context.Context, u *storage.ASTUnit) error 
 	return nil
 }
 
-func (f *fakeStorage) StoreEdge(_ context.Context, e *storage.Edge) error {
+func (f *fakeStorage) StoreEdge(_ context.Context, e *domain.Edge) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.edges = append(f.edges, e)
@@ -180,7 +181,7 @@ func writeRepo(t *testing.T, files map[string]string) string {
 	return dir
 }
 
-func goRefiner(t *testing.T, st storage.Storage, addr string) *Refiner {
+func goRefiner(t *testing.T, st store.Storage, addr string) *Refiner {
 	t.Helper()
 	return NewRefiner(st, &config.LSPConfig{
 		Enabled:        true,
@@ -189,10 +190,10 @@ func goRefiner(t *testing.T, st storage.Storage, addr string) *Refiner {
 	})
 }
 
-func indexReq(repoPath string, force bool, paths ...string) *indexing.IndexRequest {
-	req := &indexing.IndexRequest{RepoID: "r1", RepoPath: repoPath, RepoName: "repo", Force: force}
+func indexReq(repoPath string, force bool, paths ...string) *index.IndexRequest {
+	req := &index.IndexRequest{RepoID: "r1", RepoPath: repoPath, RepoName: "repo", Force: force}
 	for _, p := range paths {
-		req.Files = append(req.Files, &indexing.FileToIndex{Path: p, Language: "go"})
+		req.Files = append(req.Files, &index.FileToIndex{Path: p, Language: "go"})
 	}
 	return req
 }
@@ -200,7 +201,6 @@ func indexReq(repoPath string, force bool, paths ...string) *indexing.IndexReque
 // --- tests ------------------------------------------------------------------
 
 func TestIndex_AddsUnitsTheParsersMissed(t *testing.T) {
-	obs.Reset()
 	repo := writeRepo(t, map[string]string{
 		"a.go": "package main\n\nfunc Alpha() {}\n\nfunc Gamma() {}\n",
 	})
@@ -209,7 +209,7 @@ func TestIndex_AddsUnitsTheParsersMissed(t *testing.T) {
 	}, nil)
 
 	st := newFakeStorage()
-	st.units["a.go"] = []*storage.ASTUnit{
+	st.units["a.go"] = []*domain.ASTUnit{
 		{ID: "1", RepoID: "r1", FilePath: "a.go", Kind: "function", Name: "Alpha", StartLine: 3, EndLine: 3},
 	}
 
@@ -220,7 +220,7 @@ func TestIndex_AddsUnitsTheParsersMissed(t *testing.T) {
 	if res.FilesIndexed != 1 {
 		t.Errorf("FilesIndexed = %d, want 1", res.FilesIndexed)
 	}
-	var added *storage.ASTUnit
+	var added *domain.ASTUnit
 	for _, u := range st.units["a.go"] {
 		if u.Name == "Gamma" {
 			added = u
@@ -238,12 +238,12 @@ func TestIndex_AddsUnitsTheParsersMissed(t *testing.T) {
 }
 
 func TestIndex_LanguageWithoutSymbolsCountsAsFailure(t *testing.T) {
-	obs.Reset()
 	repo := writeRepo(t, map[string]string{"a.go": "package main\n\nfunc Alpha() {}\n"})
 	// A server that sees nothing at the mapped path: the classic wrong
 	// host_root/mount_root symptom.
 	srv := startFakeServer(t, map[string][]map[string]any{}, nil)
 
+	before := testutil.ToFloat64(lspEmptyLanguages)
 	st := newFakeStorage()
 	res, err := goRefiner(t, st, srv.addr).Index(context.Background(), indexReq(repo, false, "a.go"))
 	if err == nil {
@@ -255,13 +255,12 @@ func TestIndex_LanguageWithoutSymbolsCountsAsFailure(t *testing.T) {
 	if len(res.Errors) == 0 || !strings.Contains(res.Errors[0], "no symbols") {
 		t.Errorf("Errors = %v, want one mentioning the empty result", res.Errors)
 	}
-	if v := obs.Value(obs.MetricLSPEmptyLanguages); v != 1 {
-		t.Errorf("%s = %d, want 1", obs.MetricLSPEmptyLanguages, v)
+	if v := testutil.ToFloat64(lspEmptyLanguages) - before; v != 1 {
+		t.Errorf("ragota_lsp_empty_languages delta = %g, want 1", v)
 	}
 }
 
 func TestIndex_NoServersConfiguredIsAnError(t *testing.T) {
-	obs.Reset()
 	r := NewRefiner(newFakeStorage(), &config.LSPConfig{Enabled: true})
 
 	res, err := r.Index(context.Background(), indexReq(t.TempDir(), false, "a.go"))
@@ -281,9 +280,10 @@ func TestInit_EmptyServersFails(t *testing.T) {
 }
 
 func TestInit_ProbesEveryServer(t *testing.T) {
-	obs.Reset()
 	srv := startFakeServer(t, nil, nil)
 
+	checksBefore := testutil.ToFloat64(lspDialChecks)
+	failuresBefore := testutil.ToFloat64(lspDialFailures)
 	r := NewRefiner(newFakeStorage(), &config.LSPConfig{
 		Enabled:        true,
 		TimeoutSeconds: 2,
@@ -296,10 +296,10 @@ func TestInit_ProbesEveryServer(t *testing.T) {
 	if err := r.Init(context.Background(), nil); err != nil {
 		t.Fatalf("Init() error = %v (an unreachable server must not fail startup)", err)
 	}
-	if v := obs.Value(obs.MetricLSPDialChecks); v != 2 {
-		t.Errorf("%s = %d, want 2", obs.MetricLSPDialChecks, v)
+	if v := testutil.ToFloat64(lspDialChecks) - checksBefore; v != 2 {
+		t.Errorf("ragota_lsp_dial_checks delta = %g, want 2", v)
 	}
-	if v := obs.Value(obs.MetricLSPDialFailures); v != 1 {
-		t.Errorf("%s = %d, want 1", obs.MetricLSPDialFailures, v)
+	if v := testutil.ToFloat64(lspDialFailures) - failuresBefore; v != 1 {
+		t.Errorf("ragota_lsp_dial_failures delta = %g, want 1", v)
 	}
 }

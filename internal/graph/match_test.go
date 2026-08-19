@@ -6,15 +6,16 @@ import (
 	"time"
 
 	"github.com/Nahua-Foundation/ragota/internal/contract"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
-func rpcUnit(id, repoID, qualified string) *storage.ASTUnit {
-	return &storage.ASTUnit{ID: id, RepoID: repoID, Kind: storage.KindRPCMethod, Qualified: qualified}
+func rpcUnit(id, repoID, qualified string) *domain.ASTUnit {
+	return &domain.ASTUnit{ID: id, RepoID: repoID, Kind: store.KindRPCMethod, Qualified: qualified}
 }
 
 func TestMatchRPC(t *testing.T) {
-	units := []*storage.ASTUnit{
+	units := []*domain.ASTUnit{
 		rpcUnit("1", "repoB", "grpc:orders.OrderService/CreateOrder"),
 		rpcUnit("2", "repoB", "grpc:billing.BillingService/Charge"),
 	}
@@ -49,7 +50,7 @@ func TestMatchRPC(t *testing.T) {
 // carries no proto package, so both orders.v1.OrderService and
 // orders.v2.OrderService match by suffix and neither may win at ConfExact.
 func TestMatchRPCAmbiguousSuffix(t *testing.T) {
-	units := []*storage.ASTUnit{
+	units := []*domain.ASTUnit{
 		rpcUnit("1", "repoB", "grpc:orders.v1.OrderService/CreateOrder"),
 		rpcUnit("2", "repoB", "grpc:orders.v2.OrderService/CreateOrder"),
 	}
@@ -72,7 +73,7 @@ func TestMatchRPCAmbiguousSuffix(t *testing.T) {
 // TestMatchRPCSuffixWinsOverUnrelatedService: a single suffix match is still
 // exact, and it outranks same-named methods of other services.
 func TestMatchRPCSuffixBeatsMethodOnly(t *testing.T) {
-	units := []*storage.ASTUnit{
+	units := []*domain.ASTUnit{
 		rpcUnit("other", "repoC", "grpc:billing.PaymentService/CreateOrder"),
 		rpcUnit("match", "repoB", "grpc:orders.OrderService/CreateOrder"),
 	}
@@ -82,56 +83,56 @@ func TestMatchRPCSuffixBeatsMethodOnly(t *testing.T) {
 	}
 }
 
-func routeUnit(id, repoID, qualified string) *storage.ASTUnit {
-	return &storage.ASTUnit{ID: id, RepoID: repoID, Kind: storage.KindHTTPRoute, Qualified: qualified}
+func routeUnit(id, repoID, qualified string) *domain.ASTUnit {
+	return &domain.ASTUnit{ID: id, RepoID: repoID, Kind: store.KindHTTPRoute, Qualified: qualified}
 }
 
 func TestMatchRoute(t *testing.T) {
 	tests := []struct {
 		name    string
-		units   []*storage.ASTUnit
+		units   []*domain.ASTUnit
 		key     string
 		srcRepo string
 		wantID  string
 	}{
 		{
 			name:    "exact match",
-			units:   []*storage.ASTUnit{routeUnit("1", "b", "http:GET /api/users")},
+			units:   []*domain.ASTUnit{routeUnit("1", "b", "http:GET /api/users")},
 			key:     "http:GET /api/users",
 			srcRepo: "a",
 			wantID:  "1",
 		},
 		{
 			name:    "template segment {id}",
-			units:   []*storage.ASTUnit{routeUnit("1", "b", "http:GET /users/{id}")},
+			units:   []*domain.ASTUnit{routeUnit("1", "b", "http:GET /users/{id}")},
 			key:     "http:GET /users/123",
 			srcRepo: "a",
 			wantID:  "1",
 		},
 		{
 			name:    "template segment :id",
-			units:   []*storage.ASTUnit{routeUnit("1", "b", "http:GET /users/:id")},
+			units:   []*domain.ASTUnit{routeUnit("1", "b", "http:GET /users/:id")},
 			key:     "http:GET /users/42",
 			srcRepo: "a",
 			wantID:  "1",
 		},
 		{
 			name:    "ANY method",
-			units:   []*storage.ASTUnit{routeUnit("1", "b", "http:ANY /health")},
+			units:   []*domain.ASTUnit{routeUnit("1", "b", "http:ANY /health")},
 			key:     "http:POST /health",
 			srcRepo: "a",
 			wantID:  "1",
 		},
 		{
 			name:    "segment count mismatch",
-			units:   []*storage.ASTUnit{routeUnit("1", "b", "http:GET /api/users/{id}")},
+			units:   []*domain.ASTUnit{routeUnit("1", "b", "http:GET /api/users/{id}")},
 			key:     "http:GET /api/users",
 			srcRepo: "a",
 			wantID:  "",
 		},
 		{
 			name: "prefers cross-repo route",
-			units: []*storage.ASTUnit{
+			units: []*domain.ASTUnit{
 				routeUnit("same", "a", "http:GET /api/users"),
 				routeUnit("cross", "b", "http:GET /api/users"),
 			},
@@ -161,7 +162,7 @@ func TestMatchRoute(t *testing.T) {
 // same-repo route must not lose to a fuzzier cross-repo one. The cross-repo
 // preference is only a tie-break between equally good matches.
 func TestMatchRouteQualityBeatsRepoPreference(t *testing.T) {
-	units := []*storage.ASTUnit{
+	units := []*domain.ASTUnit{
 		routeUnit("same", "a", "http:GET /api/orders/42"),
 		routeUnit("cross", "b", "http:GET /api/orders/{id}"),
 	}
@@ -175,7 +176,7 @@ func TestMatchRouteQualityBeatsRepoPreference(t *testing.T) {
 
 	// Equal quality: the cross-repo route wins, and the pair is not treated
 	// as ambiguous because they differ in repo relationship.
-	equal := []*storage.ASTUnit{
+	equal := []*domain.ASTUnit{
 		routeUnit("same", "a", "http:GET /api/orders"),
 		routeUnit("cross", "b", "http:GET /api/orders"),
 	}
@@ -215,12 +216,12 @@ func TestRouteMatchScore(t *testing.T) {
 	}
 }
 
-func tableUnit(id, repoID, qualified string) *storage.ASTUnit {
-	return &storage.ASTUnit{ID: id, RepoID: repoID, Kind: storage.KindDBTable, Qualified: qualified}
+func tableUnit(id, repoID, qualified string) *domain.ASTUnit {
+	return &domain.ASTUnit{ID: id, RepoID: repoID, Kind: store.KindDBTable, Qualified: qualified}
 }
 
 func TestMatchTable(t *testing.T) {
-	units := []*storage.ASTUnit{
+	units := []*domain.ASTUnit{
 		tableUnit("other", "b", "db:orders"),
 		tableUnit("same", "a", "db:orders"),
 	}
@@ -254,7 +255,7 @@ func TestMatchTable(t *testing.T) {
 // TestMatchTableKeepsSchema: schema-qualified tables are distinct tables, and
 // a bare table name reaches them only at a weaker tier.
 func TestMatchTableKeepsSchema(t *testing.T) {
-	units := []*storage.ASTUnit{
+	units := []*domain.ASTUnit{
 		tableUnit("analytics", "b", "db:analytics.users"),
 		tableUnit("public", "c", "db:public.users"),
 	}
@@ -275,7 +276,7 @@ func TestMatchTableKeepsSchema(t *testing.T) {
 	}
 
 	// An exact key never loses to a schema-inferred one.
-	withExact := append([]*storage.ASTUnit{tableUnit("exact", "b", "db:users")}, units...)
+	withExact := append([]*domain.ASTUnit{tableUnit("exact", "b", "db:users")}, units...)
 	u, conf = matchTable(withExact, "db:users", "a")
 	if u == nil || u.ID != "exact" || conf != contract.ConfHigh {
 		t.Errorf("matchTable exact over schema-inferred = (%+v, %v), want (exact, ConfHigh)", u, conf)
@@ -284,7 +285,7 @@ func TestMatchTableKeepsSchema(t *testing.T) {
 
 // entityTableUnit is a db_table unit declared under an explicit name, carrying
 // the entity it maps in its signature the way the ORM parsers publish it.
-func entityTableUnit(id, repoID, qualified, entity string) *storage.ASTUnit {
+func entityTableUnit(id, repoID, qualified, entity string) *domain.ASTUnit {
 	u := tableUnit(id, repoID, qualified)
 	u.Signature = "entity:" + entity
 	return u
@@ -294,7 +295,7 @@ func entityTableUnit(id, repoID, qualified, entity string) *storage.ASTUnit {
 // ToTable("Catalog") on CatalogItem while the ORM detector keys the write it
 // records db:catalog_items. The two halves join through the entity name.
 func TestMatchTableThroughEntity(t *testing.T) {
-	units := []*storage.ASTUnit{
+	units := []*domain.ASTUnit{
 		entityTableUnit("ef", "a", "db:catalog", "CatalogItem"),
 	}
 
@@ -309,14 +310,14 @@ func TestMatchTableThroughEntity(t *testing.T) {
 	}
 
 	// An exact key never loses to an entity-derived match.
-	withExact := append([]*storage.ASTUnit{tableUnit("exact", "a", "db:catalog_items")}, units...)
+	withExact := append([]*domain.ASTUnit{tableUnit("exact", "a", "db:catalog_items")}, units...)
 	if u, conf := matchTable(withExact, "db:catalog_items", "a"); u == nil || u.ID != "exact" || conf != contract.ConfExact {
 		t.Errorf("matchTable exact over entity = (%+v, %v), want (exact, ConfExact)", u, conf)
 	}
 
 	// A table that names no entity is unreachable this way: the fallback is
 	// inert until the parsers publish the signature.
-	plain := []*storage.ASTUnit{tableUnit("plain", "a", "db:catalog")}
+	plain := []*domain.ASTUnit{tableUnit("plain", "a", "db:catalog")}
 	if u, _ := matchTable(plain, "db:catalog_items", "a"); u != nil {
 		t.Errorf("matchTable without entity signature = %+v, want nil", u)
 	}
@@ -325,7 +326,7 @@ func TestMatchTableThroughEntity(t *testing.T) {
 // TestMatchTableThroughEntityAmbiguous: several entities mapping to the same
 // derived key are a guess, so they all reach disambiguation.
 func TestMatchTableThroughEntityAmbiguous(t *testing.T) {
-	units := []*storage.ASTUnit{
+	units := []*domain.ASTUnit{
 		entityTableUnit("catalog", "b", "db:catalog", "CatalogItem"),
 		entityTableUnit("legacy", "c", "db:legacy_catalog", "CatalogItem"),
 	}
@@ -341,7 +342,7 @@ func TestMatchTableThroughEntityAmbiguous(t *testing.T) {
 	}
 }
 
-// TestEntityTableName pins the derivation to the one internal/indexing/ast
+// TestEntityTableName pins the derivation to the one internal/index/ast
 // applies, which is what produced the key on the edge side.
 func TestEntityTableName(t *testing.T) {
 	tests := []struct{ entity, want string }{
@@ -362,9 +363,9 @@ func TestEntityTableName(t *testing.T) {
 	}
 }
 
-func configUnit(id, repoID, qualified, name, value string) *storage.ASTUnit {
-	return &storage.ASTUnit{
-		ID: id, RepoID: repoID, Kind: storage.KindConfigKey,
+func configUnit(id, repoID, qualified, name, value string) *domain.ASTUnit {
+	return &domain.ASTUnit{
+		ID: id, RepoID: repoID, Kind: store.KindConfigKey,
 		Qualified: qualified, Name: name, Signature: value,
 	}
 }
@@ -372,7 +373,7 @@ func configUnit(id, repoID, qualified, name, value string) *storage.ASTUnit {
 func TestMatchConfigKey(t *testing.T) {
 	t.Run("suffix match with normalization", func(t *testing.T) {
 		// ORDERS_TOPIC must match kafka.orders-topic (normalized suffix).
-		keys := []*storage.ASTUnit{
+		keys := []*domain.ASTUnit{
 			configUnit("1", "a", "config:kafka.orders-topic", "orders-topic", "orders.created"),
 		}
 		if got := matchConfigKey(keys, "ORDERS_TOPIC", "a"); got != "orders.created" {
@@ -381,7 +382,7 @@ func TestMatchConfigKey(t *testing.T) {
 	})
 
 	t.Run("prefers same repo", func(t *testing.T) {
-		keys := []*storage.ASTUnit{
+		keys := []*domain.ASTUnit{
 			configUnit("1", "other", "config:ORDERS_TOPIC", "ORDERS_TOPIC", "other.value"),
 			configUnit("2", "mine", "config:ORDERS_TOPIC", "ORDERS_TOPIC", "mine.value"),
 		}
@@ -391,7 +392,7 @@ func TestMatchConfigKey(t *testing.T) {
 	})
 
 	t.Run("no match", func(t *testing.T) {
-		keys := []*storage.ASTUnit{
+		keys := []*domain.ASTUnit{
 			configUnit("1", "a", "config:db.host", "host", "localhost"),
 		}
 		if got := matchConfigKey(keys, "ORDERS_TOPIC", "a"); got != "" {
@@ -408,7 +409,7 @@ func TestMatchConfigKey(t *testing.T) {
 	// A one-word leaf ("topic") is too generic to answer ORDERS_TOPIC, even
 	// from the referencing repo itself.
 	t.Run("generic leaf does not match", func(t *testing.T) {
-		keys := []*storage.ASTUnit{
+		keys := []*domain.ASTUnit{
 			configUnit("1", "mine", "config:kafka.topic", "topic", "audit-events"),
 		}
 		if got := matchConfigKey(keys, "ORDERS_TOPIC", "mine"); got != "" {
@@ -418,7 +419,7 @@ func TestMatchConfigKey(t *testing.T) {
 
 	// A full-path match in a shared config repo outranks a leaf match at home.
 	t.Run("full path outranks leaf", func(t *testing.T) {
-		keys := []*storage.ASTUnit{
+		keys := []*domain.ASTUnit{
 			configUnit("1", "mine", "config:kafka.orders.topic.name", "orders-topic", "wrong.value"),
 			configUnit("2", "shared", "config:kafka.orders-topic", "orders-topic", "orders.created"),
 		}
@@ -429,7 +430,7 @@ func TestMatchConfigKey(t *testing.T) {
 
 	// Components must align: "orders-topics" is not "orders-topic".
 	t.Run("component alignment", func(t *testing.T) {
-		keys := []*storage.ASTUnit{
+		keys := []*domain.ASTUnit{
 			configUnit("1", "a", "config:kafka.myorders-topic", "myorders-topic", "wrong.value"),
 		}
 		if got := matchConfigKey(keys, "ORDERS_TOPIC", "a"); got != "" {
@@ -441,12 +442,12 @@ func TestMatchConfigKey(t *testing.T) {
 // linearMatchConfigKey is the matcher as it read before the keys were indexed:
 // a scan over every key, splitting its components per reference. It is kept
 // here as the reference the bucketed index must answer identically to.
-func linearMatchConfigKey(keys []*storage.ASTUnit, ref, repoID string) string {
+func linearMatchConfigKey(keys []*domain.ASTUnit, ref, repoID string) string {
 	refComps := wordComponents(ref)
 	if len(refComps) == 0 {
 		return ""
 	}
-	var best *storage.ASTUnit
+	var best *domain.ASTUnit
 	bestScore := 0
 	for _, k := range keys {
 		path := wordComponents(contract.TrimKind(k.Qualified, contract.KindConfig))
@@ -483,7 +484,7 @@ func TestConfigIndexMatchesLinearScan(t *testing.T) {
 	middles := []string{"", "orders-", "orders-v2-", "payments-", "users-"}
 	trailers := []string{"topic", "topics", "url", "name", "orders"}
 
-	var keys []*storage.ASTUnit
+	var keys []*domain.ASTUnit
 	for i, p := range prefixes {
 		for j, m := range middles {
 			for k, tr := range trailers {
@@ -556,8 +557,8 @@ var benchConfigTrailers = []string{
 
 // configCorpus builds nKeys config keys spread over 12 repositories and nRefs
 // references into them, together with the value each reference must resolve to.
-func configCorpus(nKeys, nRefs int) (keys []*storage.ASTUnit, refs, want []string) {
-	keys = make([]*storage.ASTUnit, nKeys)
+func configCorpus(nKeys, nRefs int) (keys []*domain.ASTUnit, refs, want []string) {
+	keys = make([]*domain.ASTUnit, nKeys)
 	for i := range keys {
 		leaf := fmt.Sprintf("setting%d-%s", i, benchConfigTrailers[i%len(benchConfigTrailers)])
 		keys[i] = configUnit(
@@ -668,7 +669,7 @@ func TestWordComponents(t *testing.T) {
 }
 
 func TestReceiverMatches(t *testing.T) {
-	unit := &storage.ASTUnit{Name: "Save", Qualified: "repo.UserRepo.Save"}
+	unit := &domain.ASTUnit{Name: "Save", Qualified: "repo.UserRepo.Save"}
 	tests := []struct {
 		recv string
 		want bool
@@ -685,7 +686,7 @@ func TestReceiverMatches(t *testing.T) {
 		}
 	}
 	// A package-level function has no owner to match.
-	if receiverMatches(&storage.ASTUnit{Name: "Save", Qualified: "Save"}, "repo") {
+	if receiverMatches(&domain.ASTUnit{Name: "Save", Qualified: "Save"}, "repo") {
 		t.Error("an unqualified function must not match a receiver")
 	}
 }

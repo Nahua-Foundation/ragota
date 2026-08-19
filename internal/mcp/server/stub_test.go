@@ -12,8 +12,6 @@ import (
 
 	"github.com/Nahua-Foundation/ragota/client"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/Nahua-Foundation/ragota/internal/mcp/config"
 )
 
 // Repository ids as ragota derives them: the name, then a hash of name and
@@ -146,13 +144,13 @@ func (s *stub) calls(path string) int {
 
 // --- harness ---
 
-func testConfig(s *stub, mutate ...func(*config.Config)) *config.Config {
-	cfg := &config.Config{
+func testConfig(s *stub, mutate ...func(*Config)) *Config {
+	cfg := &Config{
 		BaseURL:   s.srv.URL,
 		APIKey:    "test-key",
-		AuthStyle: config.AuthAPIKey,
+		AuthStyle: AuthAPIKey,
 		Timeout:   5 * time.Second,
-		MaxBytes:  config.DefaultMaxBytes,
+		MaxBytes:  DefaultMaxBytes,
 	}
 	for _, m := range mutate {
 		m(cfg)
@@ -162,7 +160,7 @@ func testConfig(s *stub, mutate ...func(*config.Config)) *config.Config {
 
 // newServer builds a Server against the stub without connecting a session, for
 // the tests that are about StartupCheck rather than about a tool.
-func newServer(s *stub, mutate ...func(*config.Config)) *Server {
+func newServer(s *stub, mutate ...func(*Config)) *Server {
 	cfg := testConfig(s, mutate...)
 	c := client.New(cfg.BaseURL,
 		client.WithAPIKey(cfg.APIKey),
@@ -178,7 +176,7 @@ func newServer(s *stub, mutate ...func(*config.Config)) *Server {
 // in-memory transport, so that every tool assertion below goes through real
 // protocol framing, schema validation and result encoding rather than calling a
 // handler directly.
-func connect(t *testing.T, s *stub, mutate ...func(*config.Config)) *mcp.ClientSession {
+func connect(t *testing.T, s *stub, mutate ...func(*Config)) *mcp.ClientSession {
 	t.Helper()
 	srv := newServer(s, mutate...)
 	if _, err := srv.StartupCheck(t.Context()); err != nil {

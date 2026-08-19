@@ -50,7 +50,7 @@ func createOrder(ctx context.Context, userID string, amount float64) (*pb.Create
 	})
 }
 
-// GetOrderHandler proxies order lookup to the orders service.
+// GetOrderHandler proxies order lookup to the orders app.
 func GetOrderHandler(w http.ResponseWriter, r *http.Request) {
 	orderID := r.PathValue("id")
 	client := pb.NewOrderServiceClient(ordersConn)

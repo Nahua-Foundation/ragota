@@ -9,8 +9,6 @@ import (
 	"github.com/Nahua-Foundation/ragota/client"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/Nahua-Foundation/ragota/internal/mcp/config"
 )
 
 const searchPath = "/api/v1/search"
@@ -156,7 +154,7 @@ func TestStartupCheckRejectsAnOlderContract(t *testing.T) {
 
 func TestStartupCheckReportsAnUnreachableServer(t *testing.T) {
 	s := newStub(t)
-	srv := newServer(s, func(c *config.Config) {
+	srv := newServer(s, func(c *Config) {
 		// A port nothing listens on: the failure must name the address, because
 		// that is the thing the operator has to fix.
 		c.BaseURL = "http://127.0.0.1:1"
@@ -185,7 +183,7 @@ func TestStartupCheckRejectsABadKeyBeforeTheFirstQuestion(t *testing.T) {
 
 func TestStartupCheckRejectsAnUnknownDefaultScope(t *testing.T) {
 	s := newStub(t)
-	srv := newServer(s, func(c *config.Config) { c.Repos = []string{"nope"} })
+	srv := newServer(s, func(c *Config) { c.Repos = []string{"nope"} })
 
 	_, err := srv.StartupCheck(t.Context())
 	if err == nil {
@@ -236,8 +234,8 @@ func TestSearchBudgetsTheAnswerAndAsksForDiagnostics(t *testing.T) {
 	if got := body["snippet"]; got != client.SnippetLine {
 		t.Errorf("snippet default is %v, wanted %q — the whole chunk is the largest thing in a response", got, client.SnippetLine)
 	}
-	if got := body["max_bytes"]; got != float64(config.DefaultMaxBytes) {
-		t.Errorf("max_bytes is %v, wanted the configured default %d", got, config.DefaultMaxBytes)
+	if got := body["max_bytes"]; got != float64(DefaultMaxBytes) {
+		t.Errorf("max_bytes is %v, wanted the configured default %d", got, DefaultMaxBytes)
 	}
 	if got := body["diagnostics"]; got != true {
 		t.Errorf("diagnostics is %v: without it a degraded answer cannot be told from a thin one", got)
@@ -389,7 +387,7 @@ func TestScopeRefusesAnUnknownRepositoryInsteadOfAnsweringEmpty(t *testing.T) {
 func TestConfiguredScopeAppliesWhenTheCallNamesNone(t *testing.T) {
 	s := newStub(t)
 	s.reply(searchPath, client.SearchResponse{Query: "q", Mode: "hybrid"})
-	cs := connect(t, s, func(c *config.Config) { c.Repos = []string{"billing"} })
+	cs := connect(t, s, func(c *Config) { c.Repos = []string{"billing"} })
 
 	call(t, cs, "ragota_search", map[string]any{"query": "q"})
 	repos, _ := s.lastBody(t, searchPath)["repos"].([]any)
@@ -435,7 +433,7 @@ func TestContextRendersTheGraphAroundEachHit(t *testing.T) {
 		}
 	}
 	body := s.lastBody(t, "/api/v1/context")
-	if body["max_bytes"] != float64(config.DefaultMaxBytes) || body["snippet"] != client.SnippetLine {
+	if body["max_bytes"] != float64(DefaultMaxBytes) || body["snippet"] != client.SnippetLine {
 		t.Errorf("context call was not budgeted: %v", body)
 	}
 }

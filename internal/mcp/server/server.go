@@ -37,19 +37,17 @@ import (
 	"github.com/Nahua-Foundation/ragota/client"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/Nahua-Foundation/ragota/internal/mcp/config"
 )
 
 // Server holds what every tool handler needs.
 type Server struct {
-	cfg   *config.Config
+	cfg   *Config
 	c     *client.Client
 	repos *repoIndex
 }
 
 // New builds a Server over an already-constructed client.
-func New(cfg *config.Config, c *client.Client) *Server {
+func New(cfg *Config, c *client.Client) *Server {
 	return &Server{cfg: cfg, c: c, repos: newRepoIndex(c)}
 }
 

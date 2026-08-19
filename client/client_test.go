@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/Nahua-Foundation/ragota/client"
-	"github.com/Nahua-Foundation/ragota/internal/api"
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/setup"
-	"github.com/Nahua-Foundation/ragota/internal/testutil"
+	"github.com/Nahua-Foundation/ragota/internal/server/api"
+	"github.com/Nahua-Foundation/ragota/internal/server/bootstrap"
+	"github.com/Nahua-Foundation/ragota/internal/servertest"
 )
 
 // The client exists to encode a contract, so it is checked against the server
@@ -21,14 +21,14 @@ import (
 // a real socket. A test against hand-written JSON would agree with whatever the
 // client sends and prove nothing about the other side.
 
-// indexWait bounds the wait for the fixture repository to finish indexing.
+// indexWait bounds the wait for the fixture repository to finish index.
 const indexWait = 60 * time.Second
 
 // newClient starts a server with no authentication configured and returns a
 // client for it.
 func newClient(t *testing.T) *client.Client {
 	t.Helper()
-	srv, _ := testutil.SetupServer(t)
+	srv, _ := servertest.SetupServer(t)
 	return client.New(srv.URL)
 }
 
@@ -39,10 +39,10 @@ func newAuthedServer(t *testing.T, keys ...string) string {
 	t.Helper()
 	t.Setenv("RAGOTA_BM25_PATH", t.TempDir())
 
-	cfg := testutil.TestConfig(t)
+	cfg := servertest.TestConfig(t)
 	cfg.Server.Auth = config.AuthConfig{Type: "api_key", APIKeys: keys}
 
-	svc, err := setup.Build(context.Background(), cfg)
+	svc, err := bootstrap.Build(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("setup build: %v", err)
 	}
@@ -62,7 +62,7 @@ func indexFixture(t *testing.T, ctx context.Context, c *client.Client) *client.R
 	repo, err := c.AddRepo(ctx, &client.AddRepoRequest{
 		Name:   "calculator",
 		Source: "local",
-		Path:   testutil.TestdataPath(t, "go-test-project"),
+		Path:   servertest.TestdataPath(t, "go-test-project"),
 	})
 	if err != nil {
 		t.Fatalf("AddRepo: %v", err)
@@ -478,7 +478,7 @@ func TestScopes(t *testing.T) {
 	t.Run("AdminKeyMayMutate", func(t *testing.T) {
 		c := client.New(url, client.WithAPIKey(adminKey))
 		if _, err := c.AddRepo(ctx, &client.AddRepoRequest{
-			Name: "fixture", Source: "local", Path: testutil.TestdataPath(t, "go-test-project"),
+			Name: "fixture", Source: "local", Path: servertest.TestdataPath(t, "go-test-project"),
 		}); err != nil {
 			t.Fatalf("AddRepo with an admin key: %v", err)
 		}
@@ -503,9 +503,9 @@ func TestRateLimited(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("RAGOTA_BM25_PATH", t.TempDir())
 
-	cfg := testutil.TestConfig(t)
+	cfg := servertest.TestConfig(t)
 	cfg.Server.RateLimit = &config.RateLimitConfig{Enabled: true, RequestsPerMinute: 1, Burst: 1}
-	svc, err := setup.Build(ctx, cfg)
+	svc, err := bootstrap.Build(ctx, cfg)
 	if err != nil {
 		t.Fatalf("setup build: %v", err)
 	}

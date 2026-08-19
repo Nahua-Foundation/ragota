@@ -4,10 +4,10 @@ package client
 //
 // They live here rather than beside the handlers because this is the package
 // another repository imports: an MCP server, a CLI, anything outside this
-// module. internal/api aliases every one of them, so there is a single
+// module. internal/server/api aliases every one of them, so there is a single
 // definition of each and a field cannot be added on one side only.
 //
-// What a caller gets is chosen here, not inherited from storage. The
+// What a caller gets is chosen here, not inherited from store. The
 // alternative was serializing the database rows themselves, which made the
 // schema the HTTP contract: a client saw start_byte, end_byte, the content
 // hash and a raw JSON meta string, and a field added for the indexer's own use
@@ -172,7 +172,7 @@ type Coverage struct {
 	// repo; the counters are then meaningless rather than zero.
 	Reported bool `json:"reported"`
 	// UpdatedAt is when the summary was written, IndexedAt when the repo last
-	// finished indexing. A summary older than the index is stale.
+	// finished index. A summary older than the index is stale.
 	UpdatedAt int64          `json:"updated_at,omitempty"`
 	IndexedAt int64          `json:"indexed_at"`
 	Kinds     []CoverageKind `json:"kinds"`

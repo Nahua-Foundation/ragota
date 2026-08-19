@@ -19,7 +19,7 @@ func TestIsTestPath(t *testing.T) {
 	}
 	for _, p := range []string{
 		"src/shippingservice/main.go", "internal/latest/x.go",
-		"src/contest/handler.go", "cmd/server/main.go",
+		"src/contest/handler.go", "cmd/ragota/main.go",
 	} {
 		if IsTestPath(p) {
 			t.Errorf("IsTestPath(%q) = true, want false", p)

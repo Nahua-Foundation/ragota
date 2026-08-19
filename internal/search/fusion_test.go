@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nahua-Foundation/ragota/internal/indexing"
+	"github.com/Nahua-Foundation/ragota/internal/index"
 )
 
 // recordingSearcher remembers the query it was asked and can fail or stall.
 type recordingSearcher struct {
-	hits    []*indexing.Hit
+	hits    []*index.Hit
 	err     error
 	delay   time.Duration
 	mu      sync.Mutex
@@ -23,7 +23,7 @@ type recordingSearcher struct {
 	calls   int
 }
 
-func (r *recordingSearcher) Search(ctx context.Context, q *indexing.SearchQuery) (*indexing.SearchResult, error) {
+func (r *recordingSearcher) Search(ctx context.Context, q *index.SearchQuery) (*index.SearchResult, error) {
 	if r.delay > 0 {
 		select {
 		case <-time.After(r.delay):
@@ -43,7 +43,7 @@ func (r *recordingSearcher) Search(ctx context.Context, q *indexing.SearchQuery)
 	if q.Limit > 0 && len(hits) > q.Limit {
 		hits = hits[:q.Limit]
 	}
-	return &indexing.SearchResult{Hits: hits, Total: len(hits), Query: q.Query}, nil
+	return &index.SearchResult{Hits: hits, Total: len(hits), Query: q.Query}, nil
 }
 
 func (r *recordingSearcher) limit() int {
@@ -70,10 +70,10 @@ func (c *countingReranker) Rerank(ctx context.Context, query string, documents [
 	return scores, nil
 }
 
-func manyHits(n int) []*indexing.Hit {
-	hits := make([]*indexing.Hit, n)
+func manyHits(n int) []*index.Hit {
+	hits := make([]*index.Hit, n)
 	for i := range hits {
-		hits[i] = &indexing.Hit{
+		hits[i] = &index.Hit{
 			RepoID:   "r1",
 			FilePath: fmt.Sprintf("/f%02d.go", i),
 			Path:     fmt.Sprintf("/f%02d.go", i),
@@ -96,23 +96,23 @@ func TestRerankSeesMoreCandidatesThanLimit(t *testing.T) {
 	for _, mode := range []string{"hybrid", "keyword", "semantic"} {
 		t.Run(mode, func(t *testing.T) {
 			srch := &recordingSearcher{hits: manyHits(20)}
-			searchers := map[indexing.IndexType]indexing.Searcher{}
+			searchers := map[index.IndexType]index.Searcher{}
 			switch mode {
 			case "keyword":
-				searchers[indexing.IndexTypeBM25] = srch
+				searchers[index.IndexTypeBM25] = srch
 			case "semantic":
-				searchers[indexing.IndexTypeVector] = srch
+				searchers[index.IndexTypeVector] = srch
 			default:
-				searchers[indexing.IndexTypeBM25] = srch
+				searchers[index.IndexTypeBM25] = srch
 			}
 
 			svc := New(searchers, nil)
 			rr := &countingReranker{}
 			svc.SetReranker(rr, 10)
 
-			query := &indexing.SearchQuery{Query: "test", Limit: 3}
+			query := &index.SearchQuery{Query: "test", Limit: 3}
 			var (
-				result *indexing.SearchResult
+				result *index.SearchResult
 				err    error
 			)
 			switch mode {
@@ -148,9 +148,9 @@ func TestRerankSeesMoreCandidatesThanLimit(t *testing.T) {
 
 func TestRerankWindowNotAppliedWithoutReranker(t *testing.T) {
 	srch := &recordingSearcher{hits: manyHits(20)}
-	svc := New(map[indexing.IndexType]indexing.Searcher{indexing.IndexTypeBM25: srch}, nil)
+	svc := New(map[index.IndexType]index.Searcher{index.IndexTypeBM25: srch}, nil)
 
-	if _, err := svc.KeywordSearch(context.Background(), &indexing.SearchQuery{Query: "q", Limit: 3}); err != nil {
+	if _, err := svc.KeywordSearch(context.Background(), &index.SearchQuery{Query: "q", Limit: 3}); err != nil {
 		t.Fatalf("KeywordSearch() error = %v", err)
 	}
 	if got := srch.limit(); got != 3 {
@@ -164,16 +164,16 @@ func TestRerankWindowNotAppliedWithoutReranker(t *testing.T) {
 func TestFuseMergesOverlappingRegions(t *testing.T) {
 	ctx := context.Background()
 
-	card := &indexing.Hit{RepoID: "r1", FilePath: "/a.go", Line: 55, EndLine: 58, Reason: "semantic"}
-	window := &indexing.Hit{RepoID: "r1", FilePath: "/a.go", Line: 1, EndLine: 60, Reason: "keyword"}
-	other := &indexing.Hit{RepoID: "r1", FilePath: "/b.go", Line: 1, EndLine: 60, Reason: "keyword"}
+	card := &index.Hit{RepoID: "r1", FilePath: "/a.go", Line: 55, EndLine: 58, Reason: "semantic"}
+	window := &index.Hit{RepoID: "r1", FilePath: "/a.go", Line: 1, EndLine: 60, Reason: "keyword"}
+	other := &index.Hit{RepoID: "r1", FilePath: "/b.go", Line: 1, EndLine: 60, Reason: "keyword"}
 
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: &mockSearcher{hits: []*indexing.Hit{card}},
-		indexing.IndexTypeBM25:   &mockSearcher{hits: []*indexing.Hit{window, other}},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: &mockSearcher{hits: []*index.Hit{card}},
+		index.IndexTypeBM25:   &mockSearcher{hits: []*index.Hit{window, other}},
 	}, nil)
 
-	result, err := svc.Search(ctx, &indexing.SearchQuery{Query: "test", Limit: 10}, true)
+	result, err := svc.Search(ctx, &index.SearchQuery{Query: "test", Limit: 10}, true)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -208,16 +208,16 @@ func TestFuseMergesOverlappingRegions(t *testing.T) {
 // window chunks of one file overlap by design, and collapsing them would turn
 // a whole file into a single hit.
 func TestFuseKeepsOverlappingChunksOfOneSearcher(t *testing.T) {
-	hits := []*indexing.Hit{
+	hits := []*index.Hit{
 		{RepoID: "r1", FilePath: "/a.go", Line: 1, EndLine: 60, Reason: "keyword"},
 		{RepoID: "r1", FilePath: "/a.go", Line: 51, EndLine: 110, Reason: "keyword"},
 		{RepoID: "r1", FilePath: "/a.go", Line: 101, EndLine: 160, Reason: "keyword"},
 	}
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeBM25: &mockSearcher{hits: hits},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeBM25: &mockSearcher{hits: hits},
 	}, nil)
 
-	result, err := svc.Search(context.Background(), &indexing.SearchQuery{Query: "test", Limit: 10}, true)
+	result, err := svc.Search(context.Background(), &index.SearchQuery{Query: "test", Limit: 10}, true)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -229,13 +229,13 @@ func TestFuseKeepsOverlappingChunksOfOneSearcher(t *testing.T) {
 // TestSingleSourceReasonKeepsIndexerLabel checks provenance is not lost when
 // only one index contributes.
 func TestSingleSourceReasonKeepsIndexerLabel(t *testing.T) {
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: &mockSearcher{hits: []*indexing.Hit{
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: &mockSearcher{hits: []*index.Hit{
 			{RepoID: "r1", FilePath: "/a.go", Line: 1, EndLine: 4, Reason: "semantic"},
 		}},
 	}, nil)
 
-	result, err := svc.Search(context.Background(), &indexing.SearchQuery{Query: "test", Limit: 10}, true)
+	result, err := svc.Search(context.Background(), &index.SearchQuery{Query: "test", Limit: 10}, true)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -247,13 +247,13 @@ func TestSingleSourceReasonKeepsIndexerLabel(t *testing.T) {
 // TestSearchDegradesWithOneFailingSearcher: a failed searcher used to be
 // dropped silently along with its error, so a half-empty result looked normal.
 func TestSearchDegradesWithOneFailingSearcher(t *testing.T) {
-	hits := []*indexing.Hit{{RepoID: "r1", FilePath: "/a.go", Line: 1, Reason: "keyword"}}
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: &recordingSearcher{err: fmt.Errorf("embedder down")},
-		indexing.IndexTypeBM25:   &recordingSearcher{hits: hits},
+	hits := []*index.Hit{{RepoID: "r1", FilePath: "/a.go", Line: 1, Reason: "keyword"}}
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: &recordingSearcher{err: fmt.Errorf("embedder down")},
+		index.IndexTypeBM25:   &recordingSearcher{hits: hits},
 	}, nil)
 
-	result, err := svc.Search(context.Background(), &indexing.SearchQuery{Query: "test", Limit: 10}, true)
+	result, err := svc.Search(context.Background(), &index.SearchQuery{Query: "test", Limit: 10}, true)
 	if err != nil {
 		t.Fatalf("Search() must succeed while one searcher still answers, got %v", err)
 	}
@@ -264,7 +264,7 @@ func TestSearchDegradesWithOneFailingSearcher(t *testing.T) {
 		t.Errorf("Metadata = %v, want degraded=true", result.Metadata)
 	}
 	failed, _ := result.Metadata["failed_searchers"].([]string)
-	if len(failed) != 1 || failed[0] != string(indexing.IndexTypeVector) {
+	if len(failed) != 1 || failed[0] != string(index.IndexTypeVector) {
 		t.Errorf("failed_searchers = %v, want [vector]", failed)
 	}
 	if _, ok := result.Metadata["searcher_errors"]; !ok {
@@ -273,12 +273,12 @@ func TestSearchDegradesWithOneFailingSearcher(t *testing.T) {
 }
 
 func TestSearchFailsWhenEverySearcherFails(t *testing.T) {
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: &recordingSearcher{err: fmt.Errorf("embedder down")},
-		indexing.IndexTypeBM25:   &recordingSearcher{err: fmt.Errorf("index closed")},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: &recordingSearcher{err: fmt.Errorf("embedder down")},
+		index.IndexTypeBM25:   &recordingSearcher{err: fmt.Errorf("index closed")},
 	}, nil)
 
-	if _, err := svc.Search(context.Background(), &indexing.SearchQuery{Query: "test", Limit: 10}, true); err == nil {
+	if _, err := svc.Search(context.Background(), &index.SearchQuery{Query: "test", Limit: 10}, true); err == nil {
 		t.Fatal("Search() must fail when no searcher answered")
 	}
 }
@@ -287,13 +287,13 @@ func TestSearchFailsWhenEverySearcherFails(t *testing.T) {
 // searchers, one of which makes a synchronous embedding call.
 func TestSearchersRunConcurrently(t *testing.T) {
 	const delay = 200 * time.Millisecond
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: &recordingSearcher{delay: delay, hits: manyHits(2)},
-		indexing.IndexTypeBM25:   &recordingSearcher{delay: delay, hits: manyHits(2)},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: &recordingSearcher{delay: delay, hits: manyHits(2)},
+		index.IndexTypeBM25:   &recordingSearcher{delay: delay, hits: manyHits(2)},
 	}, nil)
 
 	start := time.Now()
-	if _, err := svc.Search(context.Background(), &indexing.SearchQuery{Query: "test", Limit: 10}, true); err != nil {
+	if _, err := svc.Search(context.Background(), &index.SearchQuery{Query: "test", Limit: 10}, true); err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
 	if elapsed := time.Since(start); elapsed >= 2*delay {
@@ -305,12 +305,12 @@ func TestSearchersRunConcurrently(t *testing.T) {
 // reranked head used to carry cross-encoder logits (negative) while the tail
 // kept RRF scores, so sorting the response by score reordered it.
 func TestRerankScoresStayComparableWithTheTail(t *testing.T) {
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeBM25: &mockSearcher{hits: manyHits(10)},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeBM25: &mockSearcher{hits: manyHits(10)},
 	}, nil)
 	svc.SetReranker(&countingReranker{}, 4)
 
-	result, err := svc.KeywordSearch(context.Background(), &indexing.SearchQuery{Query: "test", Limit: 10})
+	result, err := svc.KeywordSearch(context.Background(), &index.SearchQuery{Query: "test", Limit: 10})
 	if err != nil {
 		t.Fatalf("KeywordSearch() error = %v", err)
 	}
@@ -326,7 +326,7 @@ func TestRerankScoresStayComparableWithTheTail(t *testing.T) {
 		}
 	}
 
-	byScore := append([]*indexing.Hit(nil), result.Hits...)
+	byScore := append([]*index.Hit(nil), result.Hits...)
 	sort.SliceStable(byScore, func(i, j int) bool { return byScore[i].Score > byScore[j].Score })
 	for i, h := range byScore {
 		if h.FilePath != served[i] {
@@ -337,12 +337,12 @@ func TestRerankScoresStayComparableWithTheTail(t *testing.T) {
 }
 
 func TestSearchMetadataRecordsRerankFailure(t *testing.T) {
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeBM25: &mockSearcher{hits: manyHits(4)},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeBM25: &mockSearcher{hits: manyHits(4)},
 	}, nil)
 	svc.SetReranker(&fakeReranker{err: fmt.Errorf("upstream down")}, 4)
 
-	result, err := svc.Search(context.Background(), &indexing.SearchQuery{Query: "test", Limit: 4}, true)
+	result, err := svc.Search(context.Background(), &index.SearchQuery{Query: "test", Limit: 4}, true)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -371,24 +371,24 @@ func TestTiedScoresDoNotFollowSearcherOrder(t *testing.T) {
 
 	// Equal scores, so only the searcher's arrangement separates them, and
 	// paths whose alphabetical order is neither of the two orders below.
-	tied := func() []*indexing.Hit {
-		return []*indexing.Hit{
+	tied := func() []*index.Hit {
+		return []*index.Hit{
 			{RepoID: "r1", FilePath: "src/frontend/rpc.go", Line: 61, EndLine: 120, Score: 0.5},
 			{RepoID: "r1", FilePath: "src/frontend/handlers.go", Line: 241, EndLine: 300, Score: 0.5},
 			{RepoID: "r1", FilePath: "src/checkoutservice/main.go", Line: 1, EndLine: 60, Score: 0.5},
 		}
 	}
-	reversed := func() []*indexing.Hit {
+	reversed := func() []*index.Hit {
 		hits := tied()
-		return []*indexing.Hit{hits[2], hits[1], hits[0]}
+		return []*index.Hit{hits[2], hits[1], hits[0]}
 	}
 
-	order := func(hits []*indexing.Hit) []string {
+	order := func(hits []*index.Hit) []string {
 		t.Helper()
-		svc := New(map[indexing.IndexType]indexing.Searcher{
-			indexing.IndexTypeBM25: &mockSearcher{hits: hits},
+		svc := New(map[index.IndexType]index.Searcher{
+			index.IndexTypeBM25: &mockSearcher{hits: hits},
 		}, nil)
-		result, err := svc.Search(ctx, &indexing.SearchQuery{Query: "quote", Limit: 10}, true)
+		result, err := svc.Search(ctx, &index.SearchQuery{Query: "quote", Limit: 10}, true)
 		if err != nil {
 			t.Fatalf("Search() error = %v", err)
 		}

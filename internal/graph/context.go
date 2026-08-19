@@ -4,16 +4,17 @@ import (
 	"context"
 	"sort"
 
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
 // RelatedUnit is a unit reachable from a context item through the graph.
 type RelatedUnit struct {
-	Unit      *storage.ASTUnit `json:"unit"`
-	Service   string           `json:"service,omitempty"`
-	Via       string           `json:"via"`       // edge kind of the first hop
-	Direction string           `json:"direction"` // "out" (callee/target) or "in" (caller/source)
-	Distance  int              `json:"distance"`  // hops from the item unit
+	Unit      *domain.ASTUnit `json:"unit"`
+	Service   string          `json:"service,omitempty"`
+	Via       string          `json:"via"`       // edge kind of the first hop
+	Direction string          `json:"direction"` // "out" (callee/target) or "in" (caller/source)
+	Distance  int             `json:"distance"`  // hops from the item unit
 }
 
 // maxRelated caps graph expansion per context item.
@@ -66,7 +67,7 @@ func (g *Graph) Expand(ctx context.Context, unitID string, hops int) ([]*Related
 				next = append(next, frontierItem{id: s.Unit.ID, via: s.Edge.Kind})
 			}
 			// Incoming (callers, clients of this contract).
-			in, err := g.store.GetEdges(ctx, storage.QueryOpts{DstID: item.id})
+			in, err := g.store.GetEdges(ctx, domain.QueryOpts{DstID: item.id})
 			if err != nil {
 				return nil, err
 			}
@@ -101,22 +102,22 @@ func (g *Graph) Expand(ctx context.Context, unitID string, hops int) ([]*Related
 }
 
 // UnitAt returns the innermost unit containing the given line of a file.
-func (g *Graph) UnitAt(ctx context.Context, repoID, filePath string, line int) (*storage.ASTUnit, error) {
+func (g *Graph) UnitAt(ctx context.Context, repoID, filePath string, line int) (*domain.ASTUnit, error) {
 	return g.UnitInRange(ctx, repoID, filePath, line, line)
 }
 
 // UnitInRange returns the unit that best overlaps a line range: the one with
 // the largest overlap, ties broken toward the innermost (latest-starting)
 // unit. Search hits reference chunks, which rarely align with unit bounds.
-func (g *Graph) UnitInRange(ctx context.Context, repoID, filePath string, startLine, endLine int) (*storage.ASTUnit, error) {
+func (g *Graph) UnitInRange(ctx context.Context, repoID, filePath string, startLine, endLine int) (*domain.ASTUnit, error) {
 	if endLine < startLine {
 		endLine = startLine
 	}
-	units, err := g.store.GetASTUnits(ctx, storage.QueryOpts{RepoID: repoID, FilePath: filePath, Limit: 500})
+	units, err := g.store.GetASTUnits(ctx, domain.QueryOpts{RepoID: repoID, FilePath: filePath, Limit: 500})
 	if err != nil {
 		return nil, err
 	}
-	var best *storage.ASTUnit
+	var best *domain.ASTUnit
 	bestOverlap := 0
 	for _, u := range units {
 		lo, hi := max(u.StartLine, startLine), min(u.EndLine, endLine)
@@ -129,7 +130,7 @@ func (g *Graph) UnitInRange(ctx context.Context, repoID, filePath string, startL
 		}
 	}
 	if best == nil {
-		return nil, storage.ErrNotFound
+		return nil, store.ErrNotFound
 	}
 	return best, nil
 }

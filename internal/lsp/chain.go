@@ -5,11 +5,11 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/Nahua-Foundation/ragota/internal/indexing"
+	"github.com/Nahua-Foundation/ragota/internal/index"
 )
 
 // Compile-time interface assertion.
-var _ indexing.Indexer = (*chained)(nil)
+var _ index.Indexer = (*chained)(nil)
 
 // Chain composes two indexers so that refiner always runs after primary
 // within one Index call. The service iterates its indexer map in random
@@ -19,18 +19,18 @@ var _ indexing.Indexer = (*chained)(nil)
 //
 // The refiner is best-effort: its errors are logged and folded into the
 // result but never fail the indexing run.
-func Chain(primary, refiner indexing.Indexer) indexing.Indexer {
+func Chain(primary, refiner index.Indexer) index.Indexer {
 	return &chained{primary: primary, refiner: refiner}
 }
 
 type chained struct {
-	primary indexing.Indexer
-	refiner indexing.Indexer
+	primary index.Indexer
+	refiner index.Indexer
 }
 
 func (c *chained) Name() string { return c.primary.Name() + "+" + c.refiner.Name() }
 
-func (c *chained) Type() indexing.IndexType { return c.primary.Type() }
+func (c *chained) Type() index.IndexType { return c.primary.Type() }
 
 func (c *chained) Init(ctx context.Context, config map[string]interface{}) error {
 	if err := c.primary.Init(ctx, config); err != nil {
@@ -39,7 +39,7 @@ func (c *chained) Init(ctx context.Context, config map[string]interface{}) error
 	return c.refiner.Init(ctx, config)
 }
 
-func (c *chained) Index(ctx context.Context, req *indexing.IndexRequest) (*indexing.IndexResult, error) {
+func (c *chained) Index(ctx context.Context, req *index.IndexRequest) (*index.IndexResult, error) {
 	res, err := c.primary.Index(ctx, req)
 	if err != nil {
 		return res, err
@@ -63,7 +63,7 @@ func (c *chained) Remove(ctx context.Context, repoID string, paths []string) err
 	)
 }
 
-func (c *chained) Stats(ctx context.Context) (*indexing.IndexerStats, error) {
+func (c *chained) Stats(ctx context.Context) (*index.IndexerStats, error) {
 	return c.primary.Stats(ctx)
 }
 

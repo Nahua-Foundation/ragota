@@ -5,7 +5,8 @@ import (
 	"testing"
 
 	"github.com/Nahua-Foundation/ragota/internal/contract"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
 func TestConfidenceAfterResolve(t *testing.T) {
@@ -14,7 +15,7 @@ func TestConfidenceAfterResolve(t *testing.T) {
 	// With a base recorded in meta, the result is base*factor even though the
 	// stored Confidence already carries a folded-in factor (0.9*0.8) — the
 	// accumulated value must be ignored, or reindexing compounds it.
-	withMeta := &storage.Edge{
+	withMeta := &domain.Edge{
 		Confidence: contract.ConfHigh * contract.ConfCrossFile, // 0.72, already resolved once
 		Meta:       `{"base_conf":0.9}`,
 	}
@@ -23,7 +24,7 @@ func TestConfidenceAfterResolve(t *testing.T) {
 	}
 
 	// A legacy edge with no recorded base falls back to the stored Confidence.
-	legacy := &storage.Edge{Confidence: 0.9}
+	legacy := &domain.Edge{Confidence: 0.9}
 	if got, want := confidenceAfterResolve(legacy, factor), float32(0.9)*factor; got != want {
 		t.Errorf("legacy fallback: got %v, want %v", got, want)
 	}
@@ -40,17 +41,17 @@ func TestConfidenceStableAcrossReindex(t *testing.T) {
 
 	caller := storeFunc(t, st, "repoA", "CallThings", "(id string)")
 	storeRoute := func() {
-		storeUnit(t, st, &storage.ASTUnit{
+		storeUnit(t, st, &domain.ASTUnit{
 			RepoID: "repoB", FilePath: "b/routes.go", Language: "go",
-			Kind: storage.KindHTTPRoute, Name: "GET /api/things",
+			Kind: store.KindHTTPRoute, Name: "GET /api/things",
 			Qualified: "http:GET /api/things",
 		})
 	}
 	storeRoute()
 
 	// An http_call edge as the parser writes it: base recorded in meta.
-	storeEdge(t, st, &storage.Edge{
-		RepoID: "repoA", SrcID: caller.ID, Kind: storage.EdgeHTTPCall,
+	storeEdge(t, st, &domain.Edge{
+		RepoID: "repoA", SrcID: caller.ID, Kind: store.EdgeHTTPCall,
 		DstName: "http:GET /api/things", FilePath: "src/CallThings.go", Line: 10,
 		Confidence: contract.ConfHigh,
 		Meta:       `{"base_conf":0.9}`,

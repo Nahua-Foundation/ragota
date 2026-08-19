@@ -60,7 +60,7 @@ go 1.22
 `
 
 const gatewayMain = `// Command gateway fronts the shop: it accepts a checkout and forwards the
-// settlement to the payments service.
+// settlement to the payments app.
 package main
 
 import (
@@ -68,7 +68,7 @@ import (
 	"net/http"
 )
 
-// submitCheckout forwards the order total to the payments service.
+// submitCheckout forwards the order total to the payments app.
 func submitCheckout(w http.ResponseWriter, r *http.Request) {
 	body := bytes.NewReader([]byte(` + "`" + `{"amount_cents":1200}` + "`" + `))
 	req, err := http.NewRequest("POST", "http://payments.internal:9090/charges", body)

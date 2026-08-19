@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
 	"github.com/Nahua-Foundation/ragota/internal/repos"
 )
 
@@ -17,7 +18,7 @@ import (
 type Source struct {
 	workDir string
 	auth    *Auth
-	repos   map[string]*repos.Repo // repo ID -> repo tracking
+	repos   map[string]*domain.Repo // repo ID -> repo tracking
 	reposMu sync.RWMutex
 }
 
@@ -41,7 +42,7 @@ func New(cfg *Config) *Source {
 	return &Source{
 		workDir: cfg.WorkDir,
 		auth:    cfg.Auth,
-		repos:   make(map[string]*repos.Repo),
+		repos:   make(map[string]*domain.Repo),
 	}
 }
 
@@ -51,8 +52,8 @@ func (s *Source) Name() string {
 }
 
 // Type returns the source type.
-func (s *Source) Type() repos.SourceType {
-	return repos.SourceTypeGit
+func (s *Source) Type() domain.SourceType {
+	return domain.SourceTypeGit
 }
 
 // Init initializes the Git source.
@@ -62,7 +63,7 @@ func (s *Source) Init(ctx context.Context, config map[string]interface{}) error 
 }
 
 // Add adds a Git repository by cloning it.
-func (s *Source) Add(ctx context.Context, req *repos.AddRequest) (*repos.Repo, error) {
+func (s *Source) Add(ctx context.Context, req *domain.AddRequest) (*domain.Repo, error) {
 	if req.URL == "" {
 		return nil, fmt.Errorf("url is required for git source")
 	}
@@ -103,14 +104,14 @@ func (s *Source) Add(ctx context.Context, req *repos.AddRequest) (*repos.Repo, e
 		return nil, fmt.Errorf("clone: %w", err)
 	}
 
-	repo := &repos.Repo{
+	repo := &domain.Repo{
 		ID:        repos.GenerateID(req.Name, req.URL),
 		Name:      req.Name,
-		Source:    repos.SourceTypeGit,
+		Source:    domain.SourceTypeGit,
 		URL:       req.URL,
 		Path:      repoDir,
 		Branch:    branch,
-		Status:    repos.StatusIdle,
+		Status:    domain.StatusIdle,
 		CreatedAt: 0, // Set by caller
 	}
 
@@ -144,7 +145,7 @@ func (s *Source) Remove(ctx context.Context, repoID string) error {
 }
 
 // GetRepo retrieves a tracked repository by ID.
-func (s *Source) GetRepo(repoID string) (*repos.Repo, bool) {
+func (s *Source) GetRepo(repoID string) (*domain.Repo, bool) {
 	s.reposMu.RLock()
 	defer s.reposMu.RUnlock()
 	repo, ok := s.repos[repoID]
@@ -152,10 +153,10 @@ func (s *Source) GetRepo(repoID string) (*repos.Repo, bool) {
 }
 
 // ListRepos returns all tracked repositories.
-func (s *Source) ListRepos() []*repos.Repo {
+func (s *Source) ListRepos() []*domain.Repo {
 	s.reposMu.RLock()
 	defer s.reposMu.RUnlock()
-	list := make([]*repos.Repo, 0, len(s.repos))
+	list := make([]*domain.Repo, 0, len(s.repos))
 	for _, repo := range s.repos {
 		list = append(list, repo)
 	}
@@ -163,18 +164,18 @@ func (s *Source) ListRepos() []*repos.Repo {
 }
 
 // Update updates a repository by pulling latest changes.
-func (s *Source) Update(ctx context.Context, repo *repos.Repo) error {
+func (s *Source) Update(ctx context.Context, repo *domain.Repo) error {
 	return s.pull(ctx, repo.URL, repo.Path)
 }
 
-// GetFiles returns files in a repository for indexing. The walk itself is
+// GetFiles returns files in a repository for index. The walk itself is
 // shared with the local source.
-func (s *Source) GetFiles(ctx context.Context, repo *repos.Repo, ignorePatterns []string) ([]*repos.RepoFile, error) {
+func (s *Source) GetFiles(ctx context.Context, repo *domain.Repo, ignorePatterns []string) ([]*domain.RepoFile, error) {
 	return repos.WalkFiles(repo.Path, ignorePatterns)
 }
 
 // Clean removes repository files from disk.
-func (s *Source) Clean(ctx context.Context, repo *repos.Repo) error {
+func (s *Source) Clean(ctx context.Context, repo *domain.Repo) error {
 	s.reposMu.Lock()
 	defer s.reposMu.Unlock()
 
@@ -194,7 +195,7 @@ func (s *Source) Close() error {
 	s.reposMu.Lock()
 	defer s.reposMu.Unlock()
 	// Clear tracking
-	s.repos = make(map[string]*repos.Repo)
+	s.repos = make(map[string]*domain.Repo)
 	return nil
 }
 

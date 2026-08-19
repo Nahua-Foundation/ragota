@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/status"
+	"github.com/Nahua-Foundation/ragota/internal/server/progress"
 )
 
 // The rule the dashboard depends on: while it owns the terminal nothing may be
@@ -65,8 +65,8 @@ func TestLogSinkWithoutAFileDiscards(t *testing.T) {
 	onTerminal := captureStderr(t)
 
 	sink := newLogSink()
-	bus := status.NewBus(8)
-	log := slog.New(status.NewLogHandler(
+	bus := progress.NewBus(8)
+	log := slog.New(progress.NewLogHandler(
 		slog.NewTextHandler(sink, &slog.HandlerOptions{Level: slog.LevelInfo}), bus, slog.LevelWarn))
 
 	sink.toFile(nil)

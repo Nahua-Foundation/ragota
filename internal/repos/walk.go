@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
 )
 
 // WalkFiles returns the indexable files under root: everything the ignore
@@ -19,13 +20,13 @@ import (
 // while sharing the same dead pruning branch, and a walk that is wrong in one
 // source and right in the other makes retrieval depend on how a repository was
 // added.
-func WalkFiles(root string, ignorePatterns []string) ([]*RepoFile, error) {
+func WalkFiles(root string, ignorePatterns []string) ([]*domain.RepoFile, error) {
 	// Built once for the whole walk. IgnorePatterns caches its verdict per
 	// repository and path; constructing it inside the callback, as both walkers
 	// used to, threw that cache away before a single lookup could hit it.
 	ignore := config.NewIgnorePatterns(ignorePatterns)
 
-	var files []*RepoFile
+	var files []*domain.RepoFile
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -64,7 +65,7 @@ func WalkFiles(root string, ignorePatterns []string) ([]*RepoFile, error) {
 			return err
 		}
 
-		files = append(files, &RepoFile{
+		files = append(files, &domain.RepoFile{
 			Path:     relPath,
 			Hash:     "", // Computed by the caller once the content is read
 			Language: lang,

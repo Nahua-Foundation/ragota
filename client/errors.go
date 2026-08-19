@@ -11,7 +11,7 @@ import (
 // what a client branches on: the human-readable message beside it is free to
 // change between releases.
 //
-// internal/api serves these same constants, and openapi_test.go checks the set
+// internal/server/api serves these same constants, and openapi_test.go checks the set
 // against the `code` enum of the served spec in both directions, so a code that
 // exists here but nowhere else cannot survive a build.
 const (
@@ -56,7 +56,7 @@ type ErrorResponse struct {
 //		log.Printf("server accepts %d bytes", apiErr.LimitBytes)
 //	}
 type Error struct {
-	// StatusCode is the HTTP status. It is kept alongside Code because the two
+	// StatusCode is the HTTP progress. It is kept alongside Code because the two
 	// are not redundant: 409 is repo_busy or commit_gap, and a proxy in front
 	// of the server can answer with a status and no code at all.
 	StatusCode int

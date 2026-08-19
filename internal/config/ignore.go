@@ -8,7 +8,7 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 
-	"github.com/Nahua-Foundation/ragota/internal/gitignore"
+	"github.com/Nahua-Foundation/ragota/pkg/gitignore"
 )
 
 // noGitignore turns the checkout's own .gitignore rules off for every matcher

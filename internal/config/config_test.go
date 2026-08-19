@@ -131,7 +131,7 @@ func TestValidate_MissingSQLitePath(t *testing.T) {
 		t.Fatal("expected validation error for missing SQLite path")
 	}
 
-	if !containsStr(err.Error(), "storage.sqlite.path is required") {
+	if !containsStr(err.Error(), "store.sqlite.path is required") {
 		t.Errorf("expected error to mention sqlite path, got: %v", err)
 	}
 }
@@ -221,7 +221,7 @@ func TestValidate_NoStorage(t *testing.T) {
 		t.Fatal("expected validation error for no storage backend")
 	}
 
-	if !containsStr(err.Error(), "storage.sqlite or storage.postgres") {
+	if !containsStr(err.Error(), "store.sqlite or store.postgres") {
 		t.Errorf("expected error to mention storage backend, got: %v", err)
 	}
 }
@@ -237,7 +237,7 @@ func TestValidate_QdrantAloneIsNotARelationalBackend(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error: qdrant cannot back files/units/edges")
 	}
-	if !containsStr(err.Error(), "storage.sqlite or storage.postgres") {
+	if !containsStr(err.Error(), "store.sqlite or store.postgres") {
 		t.Errorf("expected error to mention the relational backend, got: %v", err)
 	}
 }
@@ -254,7 +254,7 @@ func TestValidate_QdrantWithoutURL(t *testing.T) {
 		t.Fatal("expected validation error for missing Qdrant URL")
 	}
 
-	if !containsStr(err.Error(), "storage.qdrant.url is required") {
+	if !containsStr(err.Error(), "store.qdrant.url is required") {
 		t.Errorf("expected error to mention qdrant url, got: %v", err)
 	}
 }
@@ -484,7 +484,7 @@ func TestValidate_QdrantInvalidMode(t *testing.T) {
 		t.Fatal("expected validation error for invalid qdrant mode")
 	}
 
-	if !containsStr(err.Error(), "storage.qdrant.mode must be") {
+	if !containsStr(err.Error(), "store.qdrant.mode must be") {
 		t.Errorf("expected error to mention qdrant mode, got: %v", err)
 	}
 }
@@ -519,7 +519,7 @@ func TestValidate_QdrantCloudRequiresAPIKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error for cloud qdrant without api_key")
 	}
-	if !containsStr(err.Error(), "storage.qdrant.api_key is required") {
+	if !containsStr(err.Error(), "store.qdrant.api_key is required") {
 		t.Errorf("expected error to mention qdrant api_key, got: %v", err)
 	}
 }
@@ -540,10 +540,10 @@ func TestValidate_MultipleErrors(t *testing.T) {
 	}
 
 	errStr := err.Error()
-	if !containsStr(errStr, "storage.sqlite.path is required") {
+	if !containsStr(errStr, "store.sqlite.path is required") {
 		t.Errorf("expected error to mention sqlite path, got: %v", err)
 	}
-	if !containsStr(errStr, "storage.sqlite.pool_size must be at least 1") {
+	if !containsStr(errStr, "store.sqlite.pool_size must be at least 1") {
 		t.Errorf("expected error to mention pool_size, got: %v", err)
 	}
 }
@@ -730,7 +730,7 @@ func TestValidate_VectorRequiresQdrant(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error: vector index without a vector store")
 	}
-	if !containsStr(err.Error(), "storage.qdrant must be configured") {
+	if !containsStr(err.Error(), "store.qdrant must be configured") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -964,7 +964,7 @@ func TestApplyDefaults_EnvOverridesBodyLimits(t *testing.T) {
 	if len(cfg.Server.TrustedProxies) != 2 || cfg.Server.TrustedProxies[1] != "192.168.1.1" {
 		t.Errorf("trusted proxies = %v, want [10.0.0.0/8 192.168.1.1]", cfg.Server.TrustedProxies)
 	}
-	if err := cfg.Validate(); err == nil || !containsStr(err.Error(), "storage.sqlite or storage.postgres") {
+	if err := cfg.Validate(); err == nil || !containsStr(err.Error(), "store.sqlite or store.postgres") {
 		t.Errorf("trusted proxies must validate cleanly, got: %v", err)
 	}
 }

@@ -8,7 +8,8 @@ import (
 	"strings"
 
 	"github.com/Nahua-Foundation/ragota/internal/contract"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
 // TraceRequest asks where a parameter of a function/method flows.
@@ -21,13 +22,13 @@ type TraceRequest struct {
 
 // TraceStep is one hop of a parameter flow chain.
 type TraceStep struct {
-	Unit       *storage.ASTUnit `json:"unit"`
-	Service    string           `json:"service,omitempty"`
-	Tracked    []string         `json:"tracked"`        // identifiers/fields followed at this step
-	Via        string           `json:"via,omitempty"`  // edge kind that led here
-	Note       string           `json:"note,omitempty"` // human-readable explanation
-	Line       int              `json:"line,omitempty"` // call/edge site line in the previous unit
-	Confidence float32          `json:"confidence"`
+	Unit       *domain.ASTUnit `json:"unit"`
+	Service    string          `json:"service,omitempty"`
+	Tracked    []string        `json:"tracked"`        // identifiers/fields followed at this step
+	Via        string          `json:"via,omitempty"`  // edge kind that led here
+	Note       string          `json:"note,omitempty"` // human-readable explanation
+	Line       int             `json:"line,omitempty"` // call/edge site line in the previous unit
+	Confidence float32         `json:"confidence"`
 }
 
 // TraceResult is the outcome of a parameter trace.
@@ -68,7 +69,7 @@ func (g *Graph) Trace(ctx context.Context, req *TraceRequest) (*TraceResult, err
 		g: g, ctx: ctx, ld: ld, maxDepth: maxDepth,
 		onPath: map[string]bool{},
 		seen:   map[string]bool{},
-		edges:  map[string][]*storage.Edge{},
+		edges:  map[string][]*domain.Edge{},
 	}
 	tr.dfs(unit, []string{req.Param}, []*TraceStep{start}, 1.0)
 	if tr.err != nil {
@@ -126,11 +127,11 @@ type tracer struct {
 	ctx        context.Context
 	ld         *loader // batches and memoizes unit and service lookups
 	maxDepth   int
-	expansions int                        // node expansions performed so far (global budget)
-	onPath     map[string]bool            // unit+tracked keys along the CURRENT path (cycle detection)
-	seen       map[string]bool            // keys of recorded chains (dedup)
-	edges      map[string][]*storage.Edge // memoized edge queries, by direction+kind+unit
-	discovered int                        // distinct chains found, including evicted ones
+	expansions int                       // node expansions performed so far (global budget)
+	onPath     map[string]bool           // unit+tracked keys along the CURRENT path (cycle detection)
+	seen       map[string]bool           // keys of recorded chains (dedup)
+	edges      map[string][]*domain.Edge // memoized edge queries, by direction+kind+unit
+	discovered int                       // distinct chains found, including evicted ones
 	completed  []traceChain
 	err        error // first storage error hit while querying edges, if any
 }
@@ -145,14 +146,14 @@ type traceChain struct {
 
 // hop is a candidate transition out of a unit.
 type hop struct {
-	edge    *storage.Edge
-	unit    *storage.ASTUnit
+	edge    *domain.Edge
+	unit    *domain.ASTUnit
 	tracked []string
 	note    string
 	factor  float32 // confidence multiplier for this hop
 }
 
-func (t *tracer) dfs(unit *storage.ASTUnit, tracked []string, path []*TraceStep, conf float32) {
+func (t *tracer) dfs(unit *domain.ASTUnit, tracked []string, path []*TraceStep, conf float32) {
 	if len(path) > t.maxDepth {
 		t.finish(path, noteDepthLimit)
 		return
@@ -291,7 +292,7 @@ func crossings(path []*TraceStep) int {
 	n := 0
 	for _, s := range path {
 		switch s.Via {
-		case storage.EdgeRPCCall, storage.EdgeHTTPCall, storage.EdgeKafkaFlow:
+		case store.EdgeRPCCall, store.EdgeHTTPCall, store.EdgeKafkaFlow:
 			n++
 		}
 	}
@@ -299,13 +300,13 @@ func crossings(path []*TraceStep) int {
 }
 
 // expand computes the hops out of a unit for the tracked identifiers.
-func (t *tracer) expand(unit *storage.ASTUnit, tracked []string) []*hop {
+func (t *tracer) expand(unit *domain.ASTUnit, tracked []string) []*hop {
 	var hops []*hop
 
 	// Contract nodes expand structurally, without argument matching.
 	switch unit.Kind {
-	case storage.KindRPCMethod:
-		for _, e := range t.reverseEdges(unit.ID, storage.EdgeImplementsRPC) {
+	case store.KindRPCMethod:
+		for _, e := range t.reverseEdges(unit.ID, store.EdgeImplementsRPC) {
 			if u := t.unitByID(e.SrcID); u != nil {
 				hops = append(hops, &hop{
 					edge: e, unit: u, tracked: tracked, factor: 1.0,
@@ -314,8 +315,8 @@ func (t *tracer) expand(unit *storage.ASTUnit, tracked []string) []*hop {
 			}
 		}
 		return hops
-	case storage.KindHTTPRoute:
-		for _, e := range t.outEdges(unit.ID, storage.EdgeHandledBy) {
+	case store.KindHTTPRoute:
+		for _, e := range t.outEdges(unit.ID, store.EdgeHandledBy) {
 			if e.DstID == "" {
 				continue
 			}
@@ -327,14 +328,14 @@ func (t *tracer) expand(unit *storage.ASTUnit, tracked []string) []*hop {
 			}
 		}
 		return hops
-	case storage.KindDBTable:
+	case store.KindDBTable:
 		return t.tableReaders(unit, tracked)
 	}
 
 	for _, e := range t.outEdges(unit.ID, "") {
-		meta := storage.DecodeEdgeMeta(e.Meta)
+		meta := store.DecodeEdgeMeta(e.Meta)
 		switch e.Kind {
-		case storage.EdgeCall:
+		case store.EdgeCall:
 			if e.DstID == "" {
 				continue
 			}
@@ -356,7 +357,7 @@ func (t *tracer) expand(unit *storage.ASTUnit, tracked []string) []*hop {
 				note: "passed as argument " + meta.Args[argIdx] + " to " + callee.Name,
 			})
 
-		case storage.EdgeRPCCall, storage.EdgeHTTPCall:
+		case store.EdgeRPCCall, store.EdgeHTTPCall:
 			if e.DstID == "" {
 				continue
 			}
@@ -373,12 +374,12 @@ func (t *tracer) expand(unit *storage.ASTUnit, tracked []string) []*hop {
 				continue
 			}
 			note := "sent via gRPC field " + strings.Join(fields, ", ")
-			if e.Kind == storage.EdgeHTTPCall {
+			if e.Kind == store.EdgeHTTPCall {
 				note = "sent via HTTP " + meta.Method + " " + meta.Path + " field " + strings.Join(fields, ", ")
 			}
 			hops = append(hops, &hop{edge: e, unit: dst, tracked: fields, factor: factor, note: note})
 
-		case storage.EdgeKafkaFlow:
+		case store.EdgeKafkaFlow:
 			if e.DstID == "" {
 				continue
 			}
@@ -397,7 +398,7 @@ func (t *tracer) expand(unit *storage.ASTUnit, tracked []string) []*hop {
 				note: "published to Kafka topic " + topic + " as " + strings.Join(fields, ", "),
 			})
 
-		case storage.EdgeWritesTo:
+		case store.EdgeWritesTo:
 			if e.DstID == "" {
 				continue
 			}
@@ -441,11 +442,11 @@ func (t *tracer) expand(unit *storage.ASTUnit, tracked []string) []*hop {
 // Readers are deduplicated by unit: a unit querying the same table several
 // times is one hop, not one per statement, so a hot table costs one branch per
 // reader. The global expansion budget and the chain dedup bound the rest.
-func (t *tracer) tableReaders(unit *storage.ASTUnit, tracked []string) []*hop {
+func (t *tracer) tableReaders(unit *domain.ASTUnit, tracked []string) []*hop {
 	table := contract.TrimKind(unit.Qualified, contract.KindDB)
 	var hops []*hop
 	seen := map[string]bool{}
-	for _, e := range t.reverseEdges(unit.ID, storage.EdgeReadsFrom) {
+	for _, e := range t.reverseEdges(unit.ID, store.EdgeReadsFrom) {
 		if e.SrcID == "" || seen[e.SrcID] {
 			continue
 		}
@@ -462,18 +463,18 @@ func (t *tracer) tableReaders(unit *storage.ASTUnit, tracked []string) []*hop {
 	return hops
 }
 
-func (t *tracer) outEdges(unitID, kind string) []*storage.Edge {
-	return t.edgesOf("out|"+kind+"|"+unitID, storage.QueryOpts{SrcID: unitID, Kind: kind})
+func (t *tracer) outEdges(unitID, kind string) []*domain.Edge {
+	return t.edgesOf("out|"+kind+"|"+unitID, domain.QueryOpts{SrcID: unitID, Kind: kind})
 }
 
-func (t *tracer) reverseEdges(unitID, kind string) []*storage.Edge {
-	return t.edgesOf("in|"+kind+"|"+unitID, storage.QueryOpts{DstID: unitID, Kind: kind})
+func (t *tracer) reverseEdges(unitID, kind string) []*domain.Edge {
+	return t.edgesOf("in|"+kind+"|"+unitID, domain.QueryOpts{DstID: unitID, Kind: kind})
 }
 
 // edgesOf runs one edge query, memoized: a DFS revisits the same unit along
 // every path that reaches it, and the graph does not change during a trace.
 // The units on the far side are batch-loaded into the loader in one go.
-func (t *tracer) edgesOf(key string, opts storage.QueryOpts) []*storage.Edge {
+func (t *tracer) edgesOf(key string, opts domain.QueryOpts) []*domain.Edge {
 	if edges, ok := t.edges[key]; ok {
 		return edges
 	}
@@ -503,7 +504,7 @@ func (t *tracer) edgesOf(key string, opts storage.QueryOpts) []*storage.Edge {
 	return edges
 }
 
-func (t *tracer) unitByID(id string) *storage.ASTUnit {
+func (t *tracer) unitByID(id string) *domain.ASTUnit {
 	u, err := t.ld.unit(t.ctx, id)
 	if err != nil {
 		return nil

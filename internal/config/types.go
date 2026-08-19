@@ -292,7 +292,7 @@ type EmbedderConfig struct {
 	// MaxChars caps the text sent to the embedder per chunk, in bytes
 	// (0 = default 4096). Every embedding model has a context limit, and
 	// some servers (llama.cpp) reject the whole batch when one input exceeds
-	// it — one minified file then fails its repository's indexing. Servers
+	// it — one minified file then fails its repository's index. Servers
 	// meter tokens, not bytes, and dense scripts (Arabic, CJK) run ~2
 	// bytes/token where code runs ~4, so the default stays under a
 	// 2048-token context for any script; raise it when the serving context

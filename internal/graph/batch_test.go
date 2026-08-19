@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/Nahua-Foundation/ragota/internal/storage"
-	"github.com/Nahua-Foundation/ragota/internal/storage/sqlite"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
+	"github.com/Nahua-Foundation/ragota/internal/store/sqlite"
 )
 
 // resolutionSpy counts how the linker reached storage and can fail one edge
@@ -21,14 +22,14 @@ type resolutionSpy struct {
 
 var errResolutionRejected = errors.New("resolution rejected")
 
-func (s *resolutionSpy) BatchUpdateEdgeResolutions(ctx context.Context, res []storage.EdgeResolution) ([]storage.EdgeResolutionFailure, error) {
+func (s *resolutionSpy) BatchUpdateEdgeResolutions(ctx context.Context, res []store.EdgeResolution) ([]store.EdgeResolutionFailure, error) {
 	s.batches++
-	pass := make([]storage.EdgeResolution, 0, len(res))
+	pass := make([]store.EdgeResolution, 0, len(res))
 	at := make([]int, 0, len(res)) // pass index -> res index
-	var failures []storage.EdgeResolutionFailure
+	var failures []store.EdgeResolutionFailure
 	for i, r := range res {
 		if r.EdgeID == s.failEdge {
-			failures = append(failures, storage.EdgeResolutionFailure{Index: i, EdgeID: r.EdgeID, Err: errResolutionRejected})
+			failures = append(failures, store.EdgeResolutionFailure{Index: i, EdgeID: r.EdgeID, Err: errResolutionRejected})
 			continue
 		}
 		pass = append(pass, r)
@@ -50,7 +51,7 @@ func (s *resolutionSpy) UpdateEdgeResolution(ctx context.Context, edgeID, dstID,
 // unbatchedStore hides the batching capability, as a test double or a backend
 // that never implemented it does.
 type unbatchedStore struct {
-	storage.Storage
+	store.Storage
 	rows int
 }
 
@@ -62,14 +63,14 @@ func (s *unbatchedStore) UpdateEdgeResolution(ctx context.Context, edgeID, dstID
 // storeCallGraph stores n functions in repoID and one call edge into each,
 // all from a single caller, so that resolveLocal has exactly n resolutions to
 // write and one candidate for each.
-func storeCallGraph(t *testing.T, st *sqlite.SQLite, repoID string, n int) []*storage.Edge {
+func storeCallGraph(t *testing.T, st *sqlite.SQLite, repoID string, n int) []*domain.Edge {
 	t.Helper()
 	ctx := context.Background()
 	caller := storeFunc(t, st, repoID, "Caller", "()")
-	targets := make([]*storage.ASTUnit, n)
+	targets := make([]*domain.ASTUnit, n)
 	for i := range targets {
 		name := fmt.Sprintf("Target%d", i)
-		targets[i] = &storage.ASTUnit{
+		targets[i] = &domain.ASTUnit{
 			RepoID: repoID, FilePath: "src/" + name + ".go", Language: "go",
 			Kind: "function", Name: name, Qualified: "pkg." + name,
 		}
@@ -77,10 +78,10 @@ func storeCallGraph(t *testing.T, st *sqlite.SQLite, repoID string, n int) []*st
 	if err := st.BatchStoreASTUnits(ctx, targets); err != nil {
 		t.Fatal(err)
 	}
-	calls := make([]*storage.Edge, n)
+	calls := make([]*domain.Edge, n)
 	for i, u := range targets {
-		calls[i] = &storage.Edge{
-			RepoID: repoID, SrcID: caller.ID, Kind: storage.EdgeCall,
+		calls[i] = &domain.Edge{
+			RepoID: repoID, SrcID: caller.ID, Kind: store.EdgeCall,
 			DstName: u.Name, FilePath: "src/Caller.go", Line: i, Confidence: 1,
 		}
 	}
@@ -91,9 +92,9 @@ func storeCallGraph(t *testing.T, st *sqlite.SQLite, repoID string, n int) []*st
 }
 
 // resolvedCount counts the repo's call edges that carry a destination.
-func resolvedCount(t *testing.T, st storage.Storage, repoID string) int {
+func resolvedCount(t *testing.T, st store.Storage, repoID string) int {
 	t.Helper()
-	edges, err := st.GetEdges(context.Background(), storage.QueryOpts{RepoID: repoID, Kind: storage.EdgeCall})
+	edges, err := st.GetEdges(context.Background(), domain.QueryOpts{RepoID: repoID, Kind: store.EdgeCall})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,13 +166,13 @@ func TestLinkerReportsMidBatchFailure(t *testing.T) {
 	if got := resolvedCount(t, spy, "repoA"); got != n-1 {
 		t.Errorf("resolved edges = %d, want %d", got, n-1)
 	}
-	if got := edgeByID(t, st, storage.EdgeCall, failed.ID); got.DstID != "" {
+	if got := edgeByID(t, st, store.EdgeCall, failed.ID); got.DstID != "" {
 		t.Errorf("rejected edge %s resolved to %q", failed.ID, got.DstID)
 	}
 }
 
 // TestLinkerResolvesWithoutBatchingSupport pins the fallback: a store that
-// does not implement storage.EdgeResolutionBatcher still gets every edge
+// does not implement store.EdgeResolutionBatcher still gets every edge
 // resolved, one statement at a time.
 func TestLinkerResolvesWithoutBatchingSupport(t *testing.T) {
 	st := openTestStore(t)

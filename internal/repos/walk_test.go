@@ -59,7 +59,7 @@ func TestWalkFilesSelectsIndexableFiles(t *testing.T) {
 		"dist/bundle.js",
 		// Excluded because ".git" is a whole path component...
 		".git/config",
-		".git/hooks/setup.py",
+		".git/hooks/bootstrap.py",
 		// ...while these three only contain the substring ".git", and were
 		// excluded by accident until the walk stopped matching it as one.
 		".github/workflows/ci.yml",
@@ -89,7 +89,7 @@ func TestWalkFilesWithoutPatternsKeepsEverythingButGit(t *testing.T) {
 	root := writeTree(t,
 		"src/main.go",
 		"web/node_modules/react/index.js",
-		".git/hooks/setup.py",
+		".git/hooks/bootstrap.py",
 	)
 
 	want := []string{"src/main.go", "web/node_modules/react/index.js"}

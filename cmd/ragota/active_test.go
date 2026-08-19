@@ -8,11 +8,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Nahua-Foundation/ragota/internal/repos"
-	"github.com/Nahua-Foundation/ragota/internal/service"
-	"github.com/Nahua-Foundation/ragota/internal/setup"
-	"github.com/Nahua-Foundation/ragota/internal/status"
-	"github.com/Nahua-Foundation/ragota/internal/testutil"
+	"github.com/Nahua-Foundation/ragota/internal/app"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/server/bootstrap"
+	"github.com/Nahua-Foundation/ragota/internal/server/progress"
+	"github.com/Nahua-Foundation/ragota/internal/servertest"
 )
 
 // The working set is what these tests are about: which repositories a run is
@@ -23,25 +23,25 @@ import (
 // newService wires a real Service over in-memory SQLite, with root as the local
 // source's only allowlisted path — the state a --source run reaches before it
 // registers anything.
-func newService(t *testing.T, root string) *service.Service {
+func newService(t *testing.T, root string) *app.Service {
 	t.Helper()
 	t.Setenv("RAGOTA_BM25_PATH", t.TempDir())
 
-	cfg := testutil.TestConfig(t)
-	if _, err := setup.ApplySource(cfg, root); err != nil {
+	cfg := servertest.TestConfig(t)
+	if _, err := bootstrap.ApplySource(cfg, root); err != nil {
 		t.Fatalf("ApplySource() error = %v", err)
 	}
-	svc, err := setup.Build(context.Background(), cfg)
+	svc, err := bootstrap.Build(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("setup.Build() error = %v", err)
+		t.Fatalf("bootstrap.Build() error = %v", err)
 	}
 	t.Cleanup(func() { _ = svc.Close(context.Background()) })
 	return svc
 }
 
 // sourceRun lays out named repositories under one root, registers them the way
-// a --source run does, and hands back the wired service.
-func sourceRun(t *testing.T, names ...string) (*service.Service, string, []*repos.Repo) {
+// a --source run does, and hands back the wired app.
+func sourceRun(t *testing.T, names ...string) (*app.Service, string, []*domain.Repo) {
 	t.Helper()
 
 	root := t.TempDir()
@@ -56,7 +56,7 @@ func sourceRun(t *testing.T, names ...string) (*service.Service, string, []*repo
 	}
 
 	svc := newService(t, root)
-	found, err := setup.DiscoverAndRegister(context.Background(), svc, root, nil)
+	found, err := bootstrap.DiscoverAndRegister(context.Background(), svc, root, nil)
 	if err != nil {
 		t.Fatalf("DiscoverAndRegister() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func sourceRun(t *testing.T, names ...string) (*service.Service, string, []*repo
 
 // activeNames is the working set as the store holds it, by name and sorted so
 // that a failure reads as a set rather than as an order.
-func activeNames(t *testing.T, svc *service.Service) []string {
+func activeNames(t *testing.T, svc *app.Service) []string {
 	t.Helper()
 	active, err := svc.ActiveRepos(context.Background())
 	if err != nil {
@@ -168,7 +168,7 @@ func TestStartWatcherFollowsOnlyTheActiveRepositories(t *testing.T) {
 		t.Fatalf("SetActiveRepos() error = %v", err)
 	}
 
-	bus := status.NewBus(16)
+	bus := progress.NewBus(16)
 	svc.SetStatusBus(bus)
 	var bg sync.WaitGroup
 	stop := startWatcher(ctx, &bg, svc, bus)
@@ -221,7 +221,7 @@ func TestPrimeStatusBusPublishesTheWorkingSet(t *testing.T) {
 		t.Fatalf("SetActiveRepos() error = %v", err)
 	}
 
-	bus := status.NewBus(16)
+	bus := progress.NewBus(16)
 	primeStatusBus(ctx, svc, bus)
 
 	snap := bus.Snapshot()

@@ -13,7 +13,7 @@ COPY . .
 
 ARG VERSION=dev
 ENV CGO_ENABLED=1
-RUN go build -ldflags "-X main.version=${VERSION}" -o /out/ragota ./cmd/server
+RUN go build -ldflags "-X main.version=${VERSION}" -o /out/ragota ./cmd/ragota
 
 FROM debian:bookworm-slim
 

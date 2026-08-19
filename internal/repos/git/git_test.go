@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nahua-Foundation/ragota/internal/repos"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
 )
 
 func TestValidateRemoteURL(t *testing.T) {
@@ -98,7 +98,7 @@ func TestGetTokenForURL(t *testing.T) {
 func TestAdd_RejectsInjectionURL(t *testing.T) {
 	work := t.TempDir()
 	s := New(&Config{WorkDir: work})
-	_, err := s.Add(context.Background(), &repos.AddRequest{Name: "x", URL: "--upload-pack=touch pwned"})
+	_, err := s.Add(context.Background(), &domain.AddRequest{Name: "x", URL: "--upload-pack=touch pwned"})
 	if err == nil {
 		t.Fatal("Add with injection URL should fail")
 	}
@@ -185,7 +185,7 @@ func TestClonePull_Local(t *testing.T) {
 	gitCmd(t, src, "add", "second.txt")
 	gitCmd(t, src, "commit", "-m", "second")
 
-	repo := &repos.Repo{URL: src, Path: dest}
+	repo := &domain.Repo{URL: src, Path: dest}
 	if err := s.Update(context.Background(), repo); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -205,10 +205,10 @@ func TestGetFiles_SkipsGitButNotGitHub(t *testing.T) {
 		t.Fatalf("clone: %v", err)
 	}
 
-	writeFile(t, filepath.Join(dest, ".git", "hooks", "setup.py"), "print(1)\n")
+	writeFile(t, filepath.Join(dest, ".git", "hooks", "bootstrap.py"), "print(1)\n")
 	writeFile(t, filepath.Join(dest, ".github", "workflows", "ci.yml"), "on: push\n")
 
-	files, err := s.GetFiles(context.Background(), &repos.Repo{Path: dest}, nil)
+	files, err := s.GetFiles(context.Background(), &domain.Repo{Path: dest}, nil)
 	if err != nil {
 		t.Fatalf("GetFiles: %v", err)
 	}

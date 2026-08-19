@@ -11,7 +11,8 @@ import (
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
 	"github.com/Nahua-Foundation/ragota/internal/contract"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
 // --- fake storage -----------------------------------------------------------
@@ -19,18 +20,18 @@ import (
 // callStore is the slice of storage the call pass uses: two reads (units and
 // edges of a repository) and three writes.
 type callStore struct {
-	storage.Storage
+	store.Storage
 
 	mu    sync.Mutex
-	units []*storage.ASTUnit
-	edges []*storage.Edge
+	units []*domain.ASTUnit
+	edges []*domain.Edge
 	next  int
 }
 
-func (s *callStore) GetASTUnits(_ context.Context, opts storage.QueryOpts) ([]*storage.ASTUnit, error) {
+func (s *callStore) GetASTUnits(_ context.Context, opts domain.QueryOpts) ([]*domain.ASTUnit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []*storage.ASTUnit
+	var out []*domain.ASTUnit
 	for _, u := range s.units {
 		if opts.RepoID != "" && u.RepoID != opts.RepoID {
 			continue
@@ -43,10 +44,10 @@ func (s *callStore) GetASTUnits(_ context.Context, opts storage.QueryOpts) ([]*s
 	return out, nil
 }
 
-func (s *callStore) GetEdges(_ context.Context, opts storage.QueryOpts) ([]*storage.Edge, error) {
+func (s *callStore) GetEdges(_ context.Context, opts domain.QueryOpts) ([]*domain.Edge, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []*storage.Edge
+	var out []*domain.Edge
 	for _, e := range s.edges {
 		if opts.RepoID != "" && e.RepoID != opts.RepoID {
 			continue
@@ -84,7 +85,7 @@ func (s *callStore) UpdateEdgeMeta(_ context.Context, edgeID, meta string) error
 	return nil
 }
 
-func (s *callStore) BatchStoreEdges(_ context.Context, edges []*storage.Edge) error {
+func (s *callStore) BatchStoreEdges(_ context.Context, edges []*domain.Edge) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range edges {
@@ -95,7 +96,7 @@ func (s *callStore) BatchStoreEdges(_ context.Context, edges []*storage.Edge) er
 	return nil
 }
 
-func (s *callStore) edge(id string) *storage.Edge {
+func (s *callStore) edge(id string) *domain.Edge {
 	for _, e := range s.edges {
 		if e.ID == id {
 			return e
@@ -115,7 +116,7 @@ func containsStr(list []string, v string) bool {
 
 // --- helpers ----------------------------------------------------------------
 
-func callRefinerFor(st storage.Storage, addr string, calls *config.LSPCallsConfig) *CallRefiner {
+func callRefinerFor(st store.Storage, addr string, calls *config.LSPCallsConfig) *CallRefiner {
 	return NewCallRefiner(st, &config.LSPConfig{
 		Enabled:        true,
 		TimeoutSeconds: 5,
@@ -135,8 +136,8 @@ func refAt(repo, file string, line0 int) map[string]any {
 	}
 }
 
-func fn(id, file, name, qualified string, start, end int) *storage.ASTUnit {
-	return &storage.ASTUnit{
+func fn(id, file, name, qualified string, start, end int) *domain.ASTUnit {
+	return &domain.ASTUnit{
 		ID: id, RepoID: "r1", FilePath: file, Language: "go", Kind: "function",
 		Name: name, Qualified: qualified, StartLine: start, EndLine: end,
 	}
@@ -158,14 +159,14 @@ func TestRefineRepo_MovesAnEdgeToTheDefinitionTheServerNames(t *testing.T) {
 	})
 
 	st := &callStore{
-		units: []*storage.ASTUnit{
+		units: []*domain.ASTUnit{
 			fn("1", "a/alpha.go", "Save", "a.Save", 3, 3),
 			fn("2", "b/beta.go", "Save", "b.Save", 3, 3),
 			fn("3", "caller.go", "Run", "main.Run", 3, 5),
 		},
-		edges: []*storage.Edge{{
+		edges: []*domain.Edge{{
 			ID: "e1", RepoID: "r1", SrcID: "3", DstID: "1", DstRepoID: "r1",
-			Kind: storage.EdgeCall, DstName: "Save", FilePath: "caller.go", Line: 4,
+			Kind: store.EdgeCall, DstName: "Save", FilePath: "caller.go", Line: 4,
 			Confidence: contract.ConfHeuristic,
 		}},
 	}
@@ -203,16 +204,16 @@ func TestRefineRepo_AddsACallSiteTheParserMissed(t *testing.T) {
 	})
 
 	st := &callStore{
-		units: []*storage.ASTUnit{
+		units: []*domain.ASTUnit{
 			fn("1", "a/alpha.go", "Save", "a.Save", 3, 3),
 			fn("2", "b/beta.go", "Save", "b.Save", 3, 3),
 			fn("3", "caller.go", "Run", "main.Run", 3, 5),
 		},
 		// Something has to name Save for the ambiguous tier to select it; this
 		// edge sits in another file, so it is not the call site under test.
-		edges: []*storage.Edge{{
+		edges: []*domain.Edge{{
 			ID: "e1", RepoID: "r1", SrcID: "1", DstID: "1", DstRepoID: "r1",
-			Kind: storage.EdgeCall, DstName: "Save", FilePath: "a/alpha.go", Line: 3,
+			Kind: store.EdgeCall, DstName: "Save", FilePath: "a/alpha.go", Line: 3,
 			Confidence: contract.ConfHeuristic,
 		}},
 	}
@@ -225,7 +226,7 @@ func TestRefineRepo_AddsACallSiteTheParserMissed(t *testing.T) {
 	if stats.Added == 0 {
 		t.Fatalf("Added = 0, want the missing call site to become an edge (stats: %v)", stats.Log())
 	}
-	var got *storage.Edge
+	var got *domain.Edge
 	for _, e := range st.edges {
 		if e.FilePath == "caller.go" {
 			got = e
@@ -234,7 +235,7 @@ func TestRefineRepo_AddsACallSiteTheParserMissed(t *testing.T) {
 	if got == nil {
 		t.Fatalf("edges = %+v, want one at caller.go", st.edges)
 	}
-	if got.Kind != storage.EdgeCall || got.SrcID != "3" || got.Line != 4 {
+	if got.Kind != store.EdgeCall || got.SrcID != "3" || got.Line != 4 {
 		t.Errorf("edge = %+v, want a call from Run at caller.go:4", got)
 	}
 	if got.Confidence != contract.ConfExact {
@@ -257,14 +258,14 @@ func TestRefineRepo_DropsAResolutionTheServerDenies(t *testing.T) {
 	})
 
 	st := &callStore{
-		units: []*storage.ASTUnit{
+		units: []*domain.ASTUnit{
 			fn("1", "a/alpha.go", "Save", "a.Save", 3, 3),
 			fn("2", "b/beta.go", "Save", "b.Save", 3, 3),
 			fn("3", "caller.go", "Run", "main.Run", 3, 6),
 		},
-		edges: []*storage.Edge{{
+		edges: []*domain.Edge{{
 			ID: "e1", RepoID: "r1", SrcID: "3", DstID: "1", DstRepoID: "r1",
-			Kind: storage.EdgeCall, DstName: "Save", FilePath: "caller.go", Line: 1,
+			Kind: store.EdgeCall, DstName: "Save", FilePath: "caller.go", Line: 1,
 			Confidence: contract.ConfHeuristic,
 		}},
 	}
@@ -299,14 +300,14 @@ func TestRefineRepo_AnEmptyAnswerDeniesNothing(t *testing.T) {
 	srv := startFakeServer(t, nil, map[string][]map[string]any{}) // resolves nothing
 
 	st := &callStore{
-		units: []*storage.ASTUnit{
+		units: []*domain.ASTUnit{
 			fn("1", "a/alpha.go", "Save", "a.Save", 3, 3),
 			fn("2", "b/beta.go", "Save", "b.Save", 3, 3),
 			fn("3", "caller.go", "Run", "main.Run", 3, 5),
 		},
-		edges: []*storage.Edge{{
+		edges: []*domain.Edge{{
 			ID: "e1", RepoID: "r1", SrcID: "3", DstID: "1", DstRepoID: "r1",
-			Kind: storage.EdgeCall, DstName: "Save", FilePath: "caller.go", Line: 4,
+			Kind: store.EdgeCall, DstName: "Save", FilePath: "caller.go", Line: 4,
 			Confidence: contract.ConfHeuristic,
 		}},
 	}
@@ -339,14 +340,14 @@ func TestRefineRepo_ServerTroubleNeverDamagesTheGraph(t *testing.T) {
 	// The state the linker left behind, which every case below must preserve.
 	seed := func() *callStore {
 		return &callStore{
-			units: []*storage.ASTUnit{
+			units: []*domain.ASTUnit{
 				fn("1", "a/alpha.go", "Save", "a.Save", 3, 3),
 				fn("2", "b/beta.go", "Save", "b.Save", 3, 3),
 				fn("3", "caller.go", "Run", "main.Run", 3, 5),
 			},
-			edges: []*storage.Edge{{
+			edges: []*domain.Edge{{
 				ID: "e1", RepoID: "r1", SrcID: "3", DstID: "1", DstRepoID: "r1",
-				Kind: storage.EdgeCall, DstName: "Save", FilePath: "caller.go", Line: 4,
+				Kind: store.EdgeCall, DstName: "Save", FilePath: "caller.go", Line: 4,
 				Confidence: contract.ConfHeuristic, Meta: `{"receiver":"b"}`,
 			}},
 		}
@@ -414,11 +415,11 @@ func TestSelectCandidates_OnlyLanguagesWithAServer(t *testing.T) {
 		nameCount: map[string]int{"Shared": 2},
 		called:    map[string]bool{"Shared": true},
 		boundary:  map[string]bool{"p1": true},
-		byFile:    map[string][]*storage.ASTUnit{},
+		byFile:    map[string][]*domain.ASTUnit{},
 	}
 	php := fn("p1", "svc.php", "Shared", "Svc.Shared", 1, 2)
 	php.Language = "php" // no language server exists for it here
-	g.units = []*storage.ASTUnit{
+	g.units = []*domain.ASTUnit{
 		fn("g1", "a.go", "Shared", "a.Shared", 1, 2),
 		php,
 	}
@@ -442,18 +443,18 @@ func TestRefineRepo_AnUnanalysedFileIsNotContradicted(t *testing.T) {
 	})
 
 	st := &callStore{
-		units: []*storage.ASTUnit{
+		units: []*domain.ASTUnit{
 			fn("1", "a/alpha.go", "Save", "a.Save", 3, 3),
 			fn("2", "b/beta.go", "Save", "b.Save", 3, 3),
 			fn("3", "seen.go", "Seen", "main.Seen", 3, 5),
 			fn("4", "unseen.go", "Unseen", "other.Unseen", 3, 5),
 		},
-		edges: []*storage.Edge{
+		edges: []*domain.Edge{
 			{ID: "e1", RepoID: "r1", SrcID: "3", DstID: "1", DstRepoID: "r1",
-				Kind: storage.EdgeCall, DstName: "Save", FilePath: "seen.go", Line: 4,
+				Kind: store.EdgeCall, DstName: "Save", FilePath: "seen.go", Line: 4,
 				Confidence: contract.ConfHeuristic},
 			{ID: "e2", RepoID: "r1", SrcID: "4", DstID: "1", DstRepoID: "r1",
-				Kind: storage.EdgeCall, DstName: "Save", FilePath: "unseen.go", Line: 4,
+				Kind: store.EdgeCall, DstName: "Save", FilePath: "unseen.go", Line: 4,
 				Confidence: contract.ConfHeuristic},
 		},
 	}
@@ -481,9 +482,9 @@ func TestSelectCandidates_Bound(t *testing.T) {
 		nameCount: map[string]int{"Shared": 2, "Lonely": 1, "Handled": 1, "Untouched": 3},
 		called:    map[string]bool{"Shared": true, "Untouched": false},
 		boundary:  map[string]bool{"h1": true},
-		byFile:    map[string][]*storage.ASTUnit{},
+		byFile:    map[string][]*domain.ASTUnit{},
 	}
-	g.units = []*storage.ASTUnit{
+	g.units = []*domain.ASTUnit{
 		fn("s1", "a.go", "Shared", "a.Shared", 1, 2),      // ambiguous and called
 		fn("s2", "b.go", "Shared", "b.Shared", 1, 2),      // ambiguous and called
 		fn("l1", "c.go", "Lonely", "c.Lonely", 1, 2),      // unique name: nothing to resolve
@@ -509,7 +510,7 @@ func TestSelectCandidates_Bound(t *testing.T) {
 	}
 }
 
-func names(units []*storage.ASTUnit) []string {
+func names(units []*domain.ASTUnit) []string {
 	out := make([]string, len(units))
 	for i, u := range units {
 		out[i] = u.Qualified
@@ -518,7 +519,7 @@ func names(units []*storage.ASTUnit) []string {
 }
 
 func TestMatchCallEdge_ClosestLineWithinTolerance(t *testing.T) {
-	edges := []*storage.Edge{
+	edges := []*domain.Edge{
 		{ID: "far", FilePath: "a.go", Line: 10},
 		{ID: "near", FilePath: "a.go", Line: 6},
 		{ID: "other", FilePath: "b.go", Line: 5},

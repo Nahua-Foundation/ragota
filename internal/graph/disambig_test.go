@@ -6,37 +6,38 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nahua-Foundation/ragota/internal/storage"
-	"github.com/Nahua-Foundation/ragota/internal/storage/sqlite"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
+	"github.com/Nahua-Foundation/ragota/internal/store/sqlite"
 )
 
 // setupAmbiguousRoute stores one http_call edge from repoA and two identical
 // route candidates in repoB and repoC — an ambiguous match (equal scores).
-func setupAmbiguousRoute(t *testing.T) (st *sqlite.SQLite, caller, routeB, routeC *storage.ASTUnit, edge *storage.Edge) {
+func setupAmbiguousRoute(t *testing.T) (st *sqlite.SQLite, caller, routeB, routeC *domain.ASTUnit, edge *domain.Edge) {
 	t.Helper()
 	s := openTestStore(t)
 	caller = storeFunc(t, s, "repoA", "CallThings", "(id string)")
-	routeB = storeUnit(t, s, &storage.ASTUnit{
+	routeB = storeUnit(t, s, &domain.ASTUnit{
 		RepoID: "repoB", FilePath: "b/routes.go", Language: "go",
-		Kind: storage.KindHTTPRoute, Name: "GET /api/things",
+		Kind: store.KindHTTPRoute, Name: "GET /api/things",
 		Qualified: "http:GET /api/things",
 	})
-	routeC = storeUnit(t, s, &storage.ASTUnit{
+	routeC = storeUnit(t, s, &domain.ASTUnit{
 		RepoID: "repoC", FilePath: "c/routes.go", Language: "go",
-		Kind: storage.KindHTTPRoute, Name: "GET /api/things",
+		Kind: store.KindHTTPRoute, Name: "GET /api/things",
 		Qualified: "http:GET /api/things",
 	})
-	edge = storeEdge(t, s, &storage.Edge{
-		RepoID: "repoA", SrcID: caller.ID, Kind: storage.EdgeHTTPCall,
+	edge = storeEdge(t, s, &domain.Edge{
+		RepoID: "repoA", SrcID: caller.ID, Kind: store.EdgeHTTPCall,
 		DstName: "http:GET /api/things", FilePath: "src/CallThings.go", Line: 10,
 	})
 	return s, caller, routeB, routeC, edge
 }
 
 // httpEdgeBySrc fetches the single http_call edge originating from srcID.
-func httpEdgeBySrc(t *testing.T, st storage.Storage, srcID string) *storage.Edge {
+func httpEdgeBySrc(t *testing.T, st store.Storage, srcID string) *domain.Edge {
 	t.Helper()
-	edges, err := st.GetEdges(context.Background(), storage.QueryOpts{Kind: storage.EdgeHTTPCall, SrcID: srcID})
+	edges, err := st.GetEdges(context.Background(), domain.QueryOpts{Kind: store.EdgeHTTPCall, SrcID: srcID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,8 +111,8 @@ func TestLinkerAnnotatesLLMEdgeInPlace(t *testing.T) {
 	st, caller, _, routeC, edge := setupAmbiguousRoute(t)
 
 	other := storeFunc(t, st, "repoA", "CallThingsAgain", "(id string)")
-	sibling := storeEdge(t, st, &storage.Edge{
-		RepoID: "repoA", SrcID: other.ID, Kind: storage.EdgeHTTPCall,
+	sibling := storeEdge(t, st, &domain.Edge{
+		RepoID: "repoA", SrcID: other.ID, Kind: store.EdgeHTTPCall,
 		DstName: "http:GET /api/things", FilePath: "src/CallThingsAgain.go", Line: 4,
 	})
 
@@ -177,13 +178,13 @@ func TestLinkerDisambiguatesVersionedRPCService(t *testing.T) {
 		"grpc:orders.v1.OrderService/CreateOrder",
 		"grpc:orders.v2.OrderService/CreateOrder",
 	} {
-		storeUnit(t, st, &storage.ASTUnit{
+		storeUnit(t, st, &domain.ASTUnit{
 			RepoID: "repoB", FilePath: qual + ".proto", Language: "proto",
-			Kind: storage.KindRPCMethod, Name: "CreateOrder", Qualified: qual,
+			Kind: store.KindRPCMethod, Name: "CreateOrder", Qualified: qual,
 		})
 	}
-	storeEdge(t, st, &storage.Edge{
-		RepoID: "repoA", SrcID: caller.ID, Kind: storage.EdgeRPCCall,
+	storeEdge(t, st, &domain.Edge{
+		RepoID: "repoA", SrcID: caller.ID, Kind: store.EdgeRPCCall,
 		DstName: "grpc:OrderService/CreateOrder", FilePath: "src/PlaceOrder.go", Line: 8,
 	})
 
@@ -212,14 +213,14 @@ func TestLinkerDisambiguatesVersionedRPCService(t *testing.T) {
 		t.Fatalf("disambiguator calls = %d, want 1; prompt was:\n%s", calls, prompt)
 	}
 
-	edges, err := st.GetEdges(ctx, storage.QueryOpts{Kind: storage.EdgeRPCCall, SrcID: caller.ID})
+	edges, err := st.GetEdges(ctx, domain.QueryOpts{Kind: store.EdgeRPCCall, SrcID: caller.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(edges) != 1 {
 		t.Fatalf("rpc_call edges = %d, want 1", len(edges))
 	}
-	units, err := st.GetASTUnits(ctx, storage.QueryOpts{Qualified: "grpc:orders.v2.OrderService/CreateOrder"})
+	units, err := st.GetASTUnits(ctx, domain.QueryOpts{Qualified: "grpc:orders.v2.OrderService/CreateOrder"})
 	if err != nil {
 		t.Fatal(err)
 	}

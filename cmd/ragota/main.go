@@ -20,14 +20,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nahua-Foundation/ragota/internal/api"
+	"github.com/Nahua-Foundation/ragota/internal/app"
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/repos"
-	"github.com/Nahua-Foundation/ragota/internal/service"
-	"github.com/Nahua-Foundation/ragota/internal/setup"
-	"github.com/Nahua-Foundation/ragota/internal/status"
-	"github.com/Nahua-Foundation/ragota/internal/tui"
-	"github.com/Nahua-Foundation/ragota/internal/watch"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/server/api"
+	"github.com/Nahua-Foundation/ragota/internal/server/bootstrap"
+	"github.com/Nahua-Foundation/ragota/internal/server/progress"
+	"github.com/Nahua-Foundation/ragota/internal/server/tui"
+	"github.com/Nahua-Foundation/ragota/internal/server/watch"
 )
 
 // version is stamped at build time:
@@ -132,7 +132,7 @@ func main() {
 		fatalf("failed to load config: %v", err)
 	}
 	if *source != "" {
-		if _, err := setup.ApplySource(cfg, *source); err != nil {
+		if _, err := bootstrap.ApplySource(cfg, *source); err != nil {
 			fatalf("invalid --source: %v", err)
 		}
 	}
@@ -175,11 +175,11 @@ func main() {
 	// A bus exists only in the modes an interactive front end attaches to. The
 	// server proper runs without one, which is why every publisher treats a nil
 	// bus as a no-op rather than requiring one to be constructed.
-	var bus *status.Bus
+	var bus *progress.Bus
 	if *source != "" || *watchFS || dashboard {
-		bus = status.NewBus(0)
+		bus = progress.NewBus(0)
 	}
-	slog.SetDefault(slog.New(status.NewLogHandler(newHandler(&cfg.Log, logs), bus, slog.LevelWarn)))
+	slog.SetDefault(slog.New(progress.NewLogHandler(newHandler(&cfg.Log, logs), bus, slog.LevelWarn)))
 	if *interactive && !dashboard && !*checkConfig {
 		slog.Warn("interactive: stdout is not a terminal; continuing without the dashboard")
 	}
@@ -215,7 +215,7 @@ func main() {
 	shutdownPprof := startPprof(*pprofAddr)
 
 	ctx := context.Background()
-	svc, err := setup.Build(ctx, cfg)
+	svc, err := bootstrap.Build(ctx, cfg)
 	if err != nil {
 		fatalf("failed to initialize: %v", err)
 	}
@@ -233,9 +233,9 @@ func main() {
 		bg.Wait()
 	}()
 
-	var registered []*repos.Repo
+	var registered []*domain.Repo
 	if *source != "" {
-		registered, err = setup.DiscoverAndRegister(ctx, svc, *source, bus)
+		registered, err = bootstrap.DiscoverAndRegister(ctx, svc, *source, bus)
 		if err != nil {
 			fatalf("failed to scan --source: %v", err)
 		}
@@ -266,7 +266,7 @@ func main() {
 			// The repositories the source found are the working set, because
 			// activateSource just made them it. Indexing them is indexing the
 			// active set; there is no second list to read back.
-			setup.IndexAll(bgCtx, svc, registered)
+			bootstrap.IndexAll(bgCtx, svc, registered)
 		}()
 	}
 
@@ -450,11 +450,11 @@ flags:
 // answers nothing until the user works out which of two things went wrong.
 // A mistyped path is much the likelier of them, and warning while leaving the
 // previous set alone is recoverable from in a way an emptied set is not.
-func activateSource(ctx context.Context, svc *service.Service, source string, found []*repos.Repo) error {
+func activateSource(ctx context.Context, svc *app.Service, source string, found []*domain.Repo) error {
 	if source == "" || len(found) == 0 {
 		return nil
 	}
-	return setup.ActivateOnly(ctx, svc, found)
+	return bootstrap.ActivateOnly(ctx, svc, found)
 }
 
 // loadConfig reads the config file, falling back to the built-in local profile
@@ -496,15 +496,15 @@ func loadConfig(flagValue string, allowProfile bool) (*config.Config, error) {
 //
 // Nothing here is fatal. A watcher that cannot start leaves a server that
 // indexes on request, which is the server everyone had before this flag.
-func startWatcher(ctx context.Context, bg *sync.WaitGroup, svc *service.Service, bus *status.Bus) func() {
+func startWatcher(ctx context.Context, bg *sync.WaitGroup, svc *app.Service, bus *progress.Bus) func() {
 	active, err := svc.ActiveRepos(ctx)
 	if err != nil {
 		slog.Error("watch: cannot list the active repositories", "err", err)
 		return nil
 	}
-	var local []*repos.Repo
+	var local []*domain.Repo
 	for _, r := range active {
-		if r.Source == repos.SourceTypeLocal {
+		if r.Source == domain.SourceTypeLocal {
 			local = append(local, r)
 		}
 	}
@@ -553,7 +553,7 @@ func seconds(v int) time.Duration {
 
 // newHandler builds the process log handler over w. It hands back a handler
 // rather than a logger so that the status bus can wrap it (see
-// status.NewLogHandler) without repeating the format and level decisions, and
+// progress.NewLogHandler) without repeating the format and level decisions, and
 // takes the destination because --interactive moves it off the terminal the
 // dashboard is drawing on.
 func newHandler(cfg *config.LogConfig, w io.Writer) slog.Handler {

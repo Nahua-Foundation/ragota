@@ -71,7 +71,7 @@ func saveOrder(userID string, amount float64) string {
 	return "ord-1"
 }
 
-// loadOrder loads an order from storage.
+// loadOrder loads an order from store.
 func loadOrder(orderID string) *pb.Order {
 	return &pb.Order{OrderId: orderID}
 }

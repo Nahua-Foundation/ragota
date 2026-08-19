@@ -12,11 +12,11 @@ import (
 	"strings"
 
 	"github.com/Nahua-Foundation/ragota/internal/contract"
-	"github.com/Nahua-Foundation/ragota/internal/obs"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
-// Linker resolves edge destinations after indexing.
+// Linker resolves edge destinations after index.
 //
 // It runs in two scopes:
 //   - local: call / handled_by edges are resolved to units of the same repo;
@@ -29,7 +29,7 @@ import (
 // pointing at a still-existing contract unit) are kept as-is to avoid
 // rewrite churn.
 type Linker struct {
-	store storage.Storage
+	store store.Storage
 
 	// disambig, when set, is consulted for ambiguous contract matches: it
 	// receives a prompt listing the candidates and returns the zero-based
@@ -44,7 +44,7 @@ func (l *Linker) SetDisambiguator(fn func(ctx context.Context, prompt string) (i
 }
 
 // NewLinker creates a Linker.
-func NewLinker(store storage.Storage) *Linker {
+func NewLinker(store store.Storage) *Linker {
 	return &Linker{store: store}
 }
 
@@ -103,19 +103,19 @@ func (l *Linker) RunWithStats(ctx context.Context, repoID string) (*RunStats, er
 // previous and the new key of every rewritten edge — which deriveKafkaFlows
 // must rebuild even when the config value lives in another repository.
 func (l *Linker) resolveConfigRefs(ctx context.Context, stats *RunStats) (map[string]struct{}, error) {
-	edges, err := l.store.GetEdges(ctx, storage.QueryOpts{
-		Kinds: []string{storage.EdgeProduces, storage.EdgeConsumes},
+	edges, err := l.store.GetEdges(ctx, domain.QueryOpts{
+		Kinds: []string{store.EdgeProduces, store.EdgeConsumes},
 	})
 	if err != nil {
 		return nil, err
 	}
 	type refEdge struct {
-		edge *storage.Edge
+		edge *domain.Edge
 		key  edgeKey // group the edge currently belongs to
 		ref  string
 	}
 	var refs []refEdge
-	groups := map[edgeKey][]*storage.Edge{}
+	groups := map[edgeKey][]*domain.Edge{}
 	for _, e := range edges {
 		key := edgeKey{e.Kind, e.DstName}
 		groups[key] = append(groups[key], e)
@@ -131,7 +131,7 @@ func (l *Linker) resolveConfigRefs(ctx context.Context, stats *RunStats) (map[st
 		return nil, nil
 	}
 
-	keys, err := l.store.GetASTUnits(ctx, storage.QueryOpts{Kind: storage.KindConfigKey})
+	keys, err := l.store.GetASTUnits(ctx, domain.QueryOpts{Kind: store.KindConfigKey})
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,7 @@ func (l *Linker) resolveConfigRefs(ctx context.Context, stats *RunStats) (map[st
 		r.edge.DstName = name
 		r.edge.Meta = metaWithField(r.edge.Meta, metaKeyTopicRef, r.ref)
 	}
-	rewrite := make(map[edgeKey][]*storage.Edge, len(dirty))
+	rewrite := make(map[edgeKey][]*domain.Edge, len(dirty))
 	for key := range dirty {
 		rewrite[key] = groups[key]
 	}
@@ -184,7 +184,7 @@ const minLeafComponents = 2
 // indexedConfigKey is one config_key unit with its path and leaf split into
 // components once, rather than once per reference matched against it.
 type indexedConfigKey struct {
-	unit *storage.ASTUnit
+	unit *domain.ASTUnit
 	path []string // components of the key path (qualified minus the kind prefix)
 	leaf []string // components of the leaf name
 }
@@ -204,7 +204,7 @@ type configIndex struct {
 	byLast map[string][]indexedConfigKey
 }
 
-func buildConfigIndex(units []*storage.ASTUnit) *configIndex {
+func buildConfigIndex(units []*domain.ASTUnit) *configIndex {
 	idx := &configIndex{byLast: make(map[string][]indexedConfigKey, len(units))}
 	for _, u := range units {
 		k := indexedConfigKey{
@@ -234,7 +234,7 @@ func buildConfigIndex(units []*storage.ASTUnit) *configIndex {
 //
 // It indexes the keys for this one lookup; callers resolving several references
 // build the index once and call matchConfigKeyIndexed.
-func matchConfigKey(keys []*storage.ASTUnit, ref, repoID string) string {
+func matchConfigKey(keys []*domain.ASTUnit, ref, repoID string) string {
 	return matchConfigKeyIndexed(buildConfigIndex(keys), ref, repoID)
 }
 
@@ -247,7 +247,7 @@ func matchConfigKeyIndexed(idx *configIndex, ref, repoID string) string {
 	if len(refComps) == 0 {
 		return ""
 	}
-	var best *storage.ASTUnit
+	var best *domain.ASTUnit
 	bestScore := 0
 	for _, k := range idx.byLast[refComps[len(refComps)-1]] {
 		tier := configMatchTier(k, refComps)
@@ -286,7 +286,7 @@ func metaDefaultTopic(meta string) string {
 	if meta == "" {
 		return ""
 	}
-	m := &storage.EdgeMeta{}
+	m := &store.EdgeMeta{}
 	if err := json.Unmarshal([]byte(meta), m); err != nil {
 		return ""
 	}
@@ -300,14 +300,14 @@ func metaDefaultTopic(meta string) string {
 // symbol name, preferring the definition owned by the call's receiver and then
 // same-file definitions.
 func (l *Linker) resolveLocal(ctx context.Context, repoID string, stats *RunStats) error {
-	units, err := l.store.GetASTUnits(ctx, storage.QueryOpts{
+	units, err := l.store.GetASTUnits(ctx, domain.QueryOpts{
 		RepoID: repoID,
 		Kinds:  []string{"function", "method"},
 	})
 	if err != nil {
 		return err
 	}
-	byName := map[string][]*storage.ASTUnit{}
+	byName := map[string][]*domain.ASTUnit{}
 	for _, u := range units {
 		byName[u.Name] = append(byName[u.Name], u)
 	}
@@ -316,9 +316,9 @@ func (l *Linker) resolveLocal(ctx context.Context, repoID string, stats *RunStat
 	}
 	comps := newUnitComponents()
 
-	edges, err := l.store.GetEdges(ctx, storage.QueryOpts{
+	edges, err := l.store.GetEdges(ctx, domain.QueryOpts{
 		RepoID: repoID,
-		Kinds:  []string{storage.EdgeCall, storage.EdgeHandledBy},
+		Kinds:  []string{store.EdgeCall, store.EdgeHandledBy},
 	})
 	if err != nil {
 		return err
@@ -335,7 +335,7 @@ func (l *Linker) resolveLocal(ctx context.Context, repoID string, stats *RunStat
 		if e.DstID == best.ID && e.DstRepoID == repoID {
 			continue
 		}
-		w.add(ctx, storage.EdgeResolution{
+		w.add(ctx, store.EdgeResolution{
 			EdgeID:     e.ID,
 			DstID:      best.ID,
 			DstRepoID:  repoID,
@@ -358,30 +358,30 @@ const resolutionBuffer = 1000
 // One autocommit UPDATE per resolved edge is what made linking a large
 // repository as expensive as indexing it: 2.6M transactions for Elasticsearch,
 // all on one connection. Batching them is only possible when the store
-// implements storage.EdgeResolutionBatcher; any other implementation (a test
+// implements store.EdgeResolutionBatcher; any other implementation (a test
 // double, a future backend) keeps the single-row path.
 //
 // Failures stay per-edge whichever path runs: each one is logged with its edge
 // id and counted in stats.Errors, and the rest of the batch is still applied.
 type resolutionWriter struct {
-	store   storage.Storage
-	batcher storage.EdgeResolutionBatcher // nil: write one edge at a time
+	store   store.Storage
+	batcher store.EdgeResolutionBatcher // nil: write one edge at a time
 	stats   *RunStats
 	msg     string // log message for a failed write
-	buf     []storage.EdgeResolution
+	buf     []store.EdgeResolution
 	applied int // resolutions written successfully
 }
 
-func newResolutionWriter(store storage.Storage, stats *RunStats, msg string) *resolutionWriter {
-	w := &resolutionWriter{store: store, stats: stats, msg: msg}
-	w.batcher, _ = store.(storage.EdgeResolutionBatcher)
+func newResolutionWriter(st store.Storage, stats *RunStats, msg string) *resolutionWriter {
+	w := &resolutionWriter{store: st, stats: stats, msg: msg}
+	w.batcher, _ = st.(store.EdgeResolutionBatcher)
 	return w
 }
 
 // add queues one resolution, writing the buffer once it is full. Every edge
 // must be queued at most once per run: the Postgres batch joins on edge id and
 // would apply only one of two rows claiming the same edge.
-func (w *resolutionWriter) add(ctx context.Context, r storage.EdgeResolution) {
+func (w *resolutionWriter) add(ctx context.Context, r store.EdgeResolution) {
 	w.buf = append(w.buf, r)
 	if len(w.buf) >= resolutionBuffer {
 		w.flush(ctx)
@@ -413,14 +413,14 @@ func (w *resolutionWriter) flush(ctx context.Context) {
 }
 
 // write applies the buffer and returns the resolutions that failed.
-func (w *resolutionWriter) write(ctx context.Context) ([]storage.EdgeResolutionFailure, error) {
+func (w *resolutionWriter) write(ctx context.Context) ([]store.EdgeResolutionFailure, error) {
 	if w.batcher != nil {
 		return w.batcher.BatchUpdateEdgeResolutions(ctx, w.buf)
 	}
-	var failures []storage.EdgeResolutionFailure
+	var failures []store.EdgeResolutionFailure
 	for i, r := range w.buf {
 		if err := w.store.UpdateEdgeResolution(ctx, r.EdgeID, r.DstID, r.DstRepoID, r.Confidence); err != nil {
-			failures = append(failures, storage.EdgeResolutionFailure{Index: i, EdgeID: r.EdgeID, Err: err})
+			failures = append(failures, store.EdgeResolutionFailure{Index: i, EdgeID: r.EdgeID, Err: err})
 		}
 	}
 	return failures, nil
@@ -435,7 +435,7 @@ func (w *resolutionWriter) write(ctx context.Context) ([]storage.EdgeResolutionF
 // apart is a guess (repo.Save may be (*UserRepo).Save or (*OrderRepo).Save)
 // and scores ConfHeuristic, so that Trace does not map call arguments onto an
 // arbitrary parameter list at cross-file confidence.
-func resolveLocalTarget(name string, e *storage.Edge, cands []*storage.ASTUnit, comps *unitComponents) (*storage.ASTUnit, float32) {
+func resolveLocalTarget(name string, e *domain.Edge, cands []*domain.ASTUnit, comps *unitComponents) (*domain.ASTUnit, float32) {
 	if recv := edgeReceiver(e); recv != "" {
 		owned := comps.ownedBy(name, cands, recv)
 		if len(owned) > 0 {
@@ -461,7 +461,7 @@ func resolveLocalTarget(name string, e *storage.Edge, cands []*storage.ASTUnit, 
 // (or "recv_type") meta field, else the qualifier of a dotted destination name
 // ("repo.Save" -> "repo"). Language extractors currently emit the bare method
 // name without a receiver, so this is best-effort by design.
-func edgeReceiver(e *storage.Edge) string {
+func edgeReceiver(e *domain.Edge) string {
 	// One parse for both keys: this runs once per call edge, and a repository
 	// the size of Kafka has hundreds of thousands of them.
 	if e.Meta != "" {
@@ -485,19 +485,19 @@ func edgeReceiver(e *storage.Edge) string {
 // every call edge, which dominates linking on a large repository.
 type unitComponents struct {
 	qualified map[string][]string // unit id -> owner path components
-	byTail    map[string]map[string][]*storage.ASTUnit
+	byTail    map[string]map[string][]*domain.ASTUnit
 }
 
 func newUnitComponents() *unitComponents {
 	return &unitComponents{
 		qualified: map[string][]string{},
-		byTail:    map[string]map[string][]*storage.ASTUnit{},
+		byTail:    map[string]map[string][]*domain.ASTUnit{},
 	}
 }
 
 // owner returns a unit's owner path: its qualified name minus its own name
 // components ((*UserRepo).Save -> ["user","repo"]).
-func (c *unitComponents) owner(u *storage.ASTUnit) []string {
+func (c *unitComponents) owner(u *domain.ASTUnit) []string {
 	if comps, ok := c.qualified[u.ID]; ok {
 		return comps
 	}
@@ -517,14 +517,14 @@ func (c *unitComponents) owner(u *storage.ASTUnit) []string {
 // bucket instead is what made linking a repository the size of Kafka
 // effectively not finish: one name there has 443 definitions and the repo has
 // ~870k call edges.
-func (c *unitComponents) ownedBy(name string, cands []*storage.ASTUnit, recv string) []*storage.ASTUnit {
+func (c *unitComponents) ownedBy(name string, cands []*domain.ASTUnit, recv string) []*domain.ASTUnit {
 	rc := wordComponents(recv)
 	if len(rc) == 0 {
 		return nil
 	}
 	idx, ok := c.byTail[name]
 	if !ok {
-		idx = map[string][]*storage.ASTUnit{}
+		idx = map[string][]*domain.ASTUnit{}
 		for _, u := range cands {
 			if o := c.owner(u); len(o) > 0 {
 				idx[o[len(o)-1]] = append(idx[o[len(o)-1]], u)
@@ -532,7 +532,7 @@ func (c *unitComponents) ownedBy(name string, cands []*storage.ASTUnit, recv str
 		}
 		c.byTail[name] = idx
 	}
-	var owned []*storage.ASTUnit
+	var owned []*domain.ASTUnit
 	for _, u := range idx[rc[len(rc)-1]] {
 		if hasComponentSuffix(c.owner(u), rc) {
 			owned = append(owned, u)
@@ -545,7 +545,7 @@ func (c *unitComponents) ownedBy(name string, cands []*storage.ASTUnit, recv str
 // qualified name minus its own name components must end with the receiver's
 // components, so "repo" and "userRepo" both match (*UserRepo).Save while
 // "orderRepo" does not.
-func receiverMatches(u *storage.ASTUnit, recv string) bool {
+func receiverMatches(u *domain.ASTUnit, recv string) bool {
 	rc := wordComponents(recv)
 	if len(rc) == 0 {
 		return false
@@ -559,7 +559,7 @@ func receiverMatches(u *storage.ASTUnit, recv string) bool {
 }
 
 // firstInFile returns the first candidate defined in the given file, or nil.
-func firstInFile(cands []*storage.ASTUnit, filePath string) *storage.ASTUnit {
+func firstInFile(cands []*domain.ASTUnit, filePath string) *domain.ASTUnit {
 	if filePath == "" {
 		return nil
 	}
@@ -580,7 +580,7 @@ func firstInFile(cands []*storage.ASTUnit, filePath string) *storage.ASTUnit {
 // passes over identical sources handed cands[0] to a different overload of the
 // same qualified name. That is worse than an unstable ranking: the winner is
 // written back to edges.dst_id, so it outlives the pass that chose it.
-func sortUnits(units []*storage.ASTUnit) {
+func sortUnits(units []*domain.ASTUnit) {
 	sort.Slice(units, func(i, j int) bool {
 		a, b := units[i], units[j]
 		switch {
@@ -600,7 +600,7 @@ func sortUnits(units []*storage.ASTUnit) {
 // every candidate ordering in this file, so it has to be a function of the
 // source and not of the pass that read it; two units it cannot separate are at
 // the same position under the same name and resolve an edge to the same answer.
-func beforeInFile(a, b *storage.ASTUnit) bool {
+func beforeInFile(a, b *domain.ASTUnit) bool {
 	switch {
 	case a.StartLine != b.StartLine:
 		return a.StartLine < b.StartLine
@@ -631,17 +631,17 @@ type contractIndex struct {
 }
 
 type indexedRPC struct {
-	unit *storage.ASTUnit
+	unit *domain.ASTUnit
 	svc  string
 }
 
 type indexedRoute struct {
-	unit   *storage.ASTUnit
+	unit   *domain.ASTUnit
 	method string
 	segs   []string
 }
 
-func buildRPCIndex(units []*storage.ASTUnit) map[string][]indexedRPC {
+func buildRPCIndex(units []*domain.ASTUnit) map[string][]indexedRPC {
 	idx := make(map[string][]indexedRPC, len(units))
 	for _, u := range units {
 		svc, method, ok := splitGrpcKey(u.Qualified)
@@ -653,7 +653,7 @@ func buildRPCIndex(units []*storage.ASTUnit) map[string][]indexedRPC {
 	return idx
 }
 
-func buildRouteIndex(units []*storage.ASTUnit) map[int][]indexedRoute {
+func buildRouteIndex(units []*domain.ASTUnit) map[int][]indexedRoute {
 	idx := make(map[int][]indexedRoute, len(units))
 	for _, u := range units {
 		method, path, ok := splitRouteKey(u.Qualified)
@@ -671,20 +671,20 @@ func buildRouteIndex(units []*storage.ASTUnit) map[int][]indexedRoute {
 // their entity name would have produced. The latter two let a key that cannot
 // be matched exactly still find them — at a weaker tier.
 type tableIndex struct {
-	byKey  map[string][]*storage.ASTUnit // "db:analytics.users"
-	byName map[string][]*storage.ASTUnit // "db:users" -> schema-qualified units
+	byKey  map[string][]*domain.ASTUnit // "db:analytics.users"
+	byName map[string][]*domain.ASTUnit // "db:users" -> schema-qualified units
 	// byEntity maps the key an ORM detector derives from an entity name to the
 	// tables that entity actually declares under another name: an EF Core
 	// ToTable("Catalog") on CatalogItem publishes db:catalog, while the write
 	// it records is keyed db:catalog_items.
-	byEntity map[string][]*storage.ASTUnit
+	byEntity map[string][]*domain.ASTUnit
 }
 
-func buildTableIndex(units []*storage.ASTUnit) *tableIndex {
+func buildTableIndex(units []*domain.ASTUnit) *tableIndex {
 	idx := &tableIndex{
-		byKey:    make(map[string][]*storage.ASTUnit, len(units)),
-		byName:   map[string][]*storage.ASTUnit{},
-		byEntity: map[string][]*storage.ASTUnit{},
+		byKey:    make(map[string][]*domain.ASTUnit, len(units)),
+		byName:   map[string][]*domain.ASTUnit{},
+		byEntity: map[string][]*domain.ASTUnit{},
 	}
 	for _, u := range units {
 		idx.byKey[u.Qualified] = append(idx.byKey[u.Qualified], u)
@@ -709,7 +709,7 @@ func buildTableIndex(units []*storage.ASTUnit) *tableIndex {
 }
 
 // entitySigPrefix is how every parser records the entity a db_table unit was
-// published for (see the ORM paths in internal/indexing/ast).
+// published for (see the ORM paths in internal/index/ast).
 const entitySigPrefix = "entity:"
 
 // signatureEntity returns the entity name a db_table unit names in its
@@ -726,9 +726,9 @@ func signatureEntity(sig string) string {
 // contract.TableName, which is where it lives so the two cannot drift.
 func entityTableName(entity string) string { return contract.TableName(entity) }
 
-func newContractIndex(rpcUnits, routeUnits, tableUnits []*storage.ASTUnit) *contractIndex {
+func newContractIndex(rpcUnits, routeUnits, tableUnits []*domain.ASTUnit) *contractIndex {
 	ids := make(map[string]struct{}, len(rpcUnits)+len(routeUnits)+len(tableUnits))
-	for _, units := range [][]*storage.ASTUnit{rpcUnits, routeUnits, tableUnits} {
+	for _, units := range [][]*domain.ASTUnit{rpcUnits, routeUnits, tableUnits} {
 		for _, u := range units {
 			ids[u.ID] = struct{}{}
 		}
@@ -764,10 +764,10 @@ func newContractIndex(rpcUnits, routeUnits, tableUnits []*storage.ASTUnit) *cont
 // Edges indexed before this change carry no recorded base; for them the stored
 // confidence is the best estimate, so a forced reindex is what fully settles
 // their scores.
-func confidenceAfterResolve(e *storage.Edge, conf float32) float32 {
+func confidenceAfterResolve(e *domain.Edge, conf float32) float32 {
 	base := e.Confidence
 	if e.Meta != "" {
-		m := &storage.EdgeMeta{}
+		m := &store.EdgeMeta{}
 		if json.Unmarshal([]byte(e.Meta), m) == nil && m.BaseConf > 0 {
 			base = m.BaseConf
 		}
@@ -776,24 +776,24 @@ func confidenceAfterResolve(e *storage.Edge, conf float32) float32 {
 }
 
 func (l *Linker) resolveContracts(ctx context.Context, stats *RunStats) error {
-	rpcUnits, err := l.store.GetASTUnits(ctx, storage.QueryOpts{Kinds: []string{storage.KindRPCMethod}})
+	rpcUnits, err := l.store.GetASTUnits(ctx, domain.QueryOpts{Kinds: []string{store.KindRPCMethod}})
 	if err != nil {
 		return err
 	}
-	routeUnits, err := l.store.GetASTUnits(ctx, storage.QueryOpts{Kinds: []string{storage.KindHTTPRoute}})
+	routeUnits, err := l.store.GetASTUnits(ctx, domain.QueryOpts{Kinds: []string{store.KindHTTPRoute}})
 	if err != nil {
 		return err
 	}
-	tableUnits, err := l.store.GetASTUnits(ctx, storage.QueryOpts{Kinds: []string{storage.KindDBTable}})
+	tableUnits, err := l.store.GetASTUnits(ctx, domain.QueryOpts{Kinds: []string{store.KindDBTable}})
 	if err != nil {
 		return err
 	}
 	idx := newContractIndex(rpcUnits, routeUnits, tableUnits)
 
-	edges, err := l.store.GetEdges(ctx, storage.QueryOpts{
+	edges, err := l.store.GetEdges(ctx, domain.QueryOpts{
 		Kinds: []string{
-			storage.EdgeRPCCall, storage.EdgeImplementsRPC, storage.EdgeHTTPCall,
-			storage.EdgeWritesTo, storage.EdgeReadsFrom,
+			store.EdgeRPCCall, store.EdgeImplementsRPC, store.EdgeHTTPCall,
+			store.EdgeWritesTo, store.EdgeReadsFrom,
 		},
 	})
 	if err != nil {
@@ -811,12 +811,12 @@ func (l *Linker) resolveContracts(ctx context.Context, stats *RunStats) error {
 				continue
 			}
 		}
-		var dst *storage.ASTUnit
+		var dst *domain.ASTUnit
 		var conf float32
 		var llm bool
 		switch e.Kind {
-		case storage.EdgeRPCCall, storage.EdgeImplementsRPC:
-			var cands []*storage.ASTUnit
+		case store.EdgeRPCCall, store.EdgeImplementsRPC:
+			var cands []*domain.ASTUnit
 			cands, conf = rpcCandidates(idx.rpcByMethod, e.DstName)
 			if len(cands) > 0 {
 				dst = cands[0]
@@ -828,14 +828,14 @@ func (l *Linker) resolveContracts(ctx context.Context, stats *RunStats) error {
 					dst, conf, llm = pick, contract.ConfHigh, true
 				}
 			}
-		case storage.EdgeHTTPCall:
+		case store.EdgeHTTPCall:
 			cands := routeCandidates(idx.routesBySegCount, e.DstName, e.RepoID)
 			if len(cands) > 0 {
 				dst, conf = cands[0].unit, cands[0].score
 			}
 			// Ambiguous: the two best route candidates are equally good.
 			if l.disambig != nil && dst != nil && routesAmbiguous(cands) {
-				units := make([]*storage.ASTUnit, len(cands))
+				units := make([]*domain.ASTUnit, len(cands))
 				for i := range cands {
 					units[i] = cands[i].unit
 				}
@@ -843,8 +843,8 @@ func (l *Linker) resolveContracts(ctx context.Context, stats *RunStats) error {
 					dst, conf, llm = pick, contract.ConfHigh, true
 				}
 			}
-		case storage.EdgeWritesTo, storage.EdgeReadsFrom:
-			var cands []*storage.ASTUnit
+		case store.EdgeWritesTo, store.EdgeReadsFrom:
+			var cands []*domain.ASTUnit
 			cands, conf = tableCandidates(idx.tables, e.DstName, e.RepoID)
 			if len(cands) > 0 {
 				dst = cands[0]
@@ -863,7 +863,7 @@ func (l *Linker) resolveContracts(ctx context.Context, stats *RunStats) error {
 			// leave a dangling dst_id behind.
 			if e.DstID != "" {
 				e.DstID, e.DstRepoID = "", ""
-				clearW.add(ctx, storage.EdgeResolution{EdgeID: e.ID, Confidence: e.Confidence})
+				clearW.add(ctx, store.EdgeResolution{EdgeID: e.ID, Confidence: e.Confidence})
 			}
 			continue
 		}
@@ -873,7 +873,7 @@ func (l *Linker) resolveContracts(ctx context.Context, stats *RunStats) error {
 		e.Confidence = confidenceAfterResolve(e, conf)
 		e.DstID, e.DstRepoID = dst.ID, dst.RepoID
 		if !llm {
-			linkW.add(ctx, storage.EdgeResolution{
+			linkW.add(ctx, store.EdgeResolution{
 				EdgeID: e.ID, DstID: dst.ID, DstRepoID: dst.RepoID, Confidence: e.Confidence,
 			})
 			continue
@@ -919,7 +919,7 @@ type edgeKey struct{ kind, dstName string }
 //
 // Complete groups must be passed in: deletion is by (kind, dst_name) and takes
 // every edge sharing that key, including ones the caller did not change.
-func (l *Linker) rewriteEdgeGroups(ctx context.Context, groups map[edgeKey][]*storage.Edge, stats *RunStats) {
+func (l *Linker) rewriteEdgeGroups(ctx context.Context, groups map[edgeKey][]*domain.Edge, stats *RunStats) {
 	keys := make([]edgeKey, 0, len(groups))
 	for key, edges := range groups {
 		if len(edges) == 0 {
@@ -965,18 +965,18 @@ const routeAmbiguityDelta float32 = 0.05
 // disambigRun is per-run disambiguation state: answers cached by edge
 // DstName and the LLM call budget.
 type disambigRun struct {
-	cache map[string]*storage.ASTUnit // DstName -> chosen unit (nil = declined)
+	cache map[string]*domain.ASTUnit // DstName -> chosen unit (nil = declined)
 	calls int
 }
 
 func newDisambigRun() *disambigRun {
-	return &disambigRun{cache: map[string]*storage.ASTUnit{}}
+	return &disambigRun{cache: map[string]*domain.ASTUnit{}}
 }
 
 // disambiguate asks the configured disambiguator to pick one of cands for
 // edge e. Answers are cached by e.DstName; at most maxDisambigCalls LLM calls
 // are made per run.
-func (l *Linker) disambiguate(ctx context.Context, ds *disambigRun, e *storage.Edge, cands []*storage.ASTUnit) (*storage.ASTUnit, bool) {
+func (l *Linker) disambiguate(ctx context.Context, ds *disambigRun, e *domain.Edge, cands []*domain.ASTUnit) (*domain.ASTUnit, bool) {
 	if pick, seen := ds.cache[e.DstName]; seen {
 		if pick == nil {
 			return nil, false
@@ -992,7 +992,7 @@ func (l *Linker) disambiguate(ctx context.Context, ds *disambigRun, e *storage.E
 		return nil, false
 	}
 	ds.calls++
-	obs.Inc("ragota_disambig_total", 1)
+	disambigTotal.Inc()
 	choice, ok := l.disambig(ctx, disambigPrompt(e, cands))
 	if !ok || choice < 0 || choice >= len(cands) {
 		ds.cache[e.DstName] = nil
@@ -1004,7 +1004,7 @@ func (l *Linker) disambiguate(ctx context.Context, ds *disambigRun, e *storage.E
 
 // disambigPrompt lists the edge context and its candidates and asks for the
 // index of the correct one ("number or -1").
-func disambigPrompt(e *storage.Edge, cands []*storage.ASTUnit) string {
+func disambigPrompt(e *domain.Edge, cands []*domain.ASTUnit) string {
 	var b strings.Builder
 	b.WriteString("A cross-service code graph edge has several possible destinations.\n")
 	fmt.Fprintf(&b, "Call: %s (edge kind %s) at %s:%d in repo %s\n", e.DstName, e.Kind, e.FilePath, e.Line, e.RepoID)
@@ -1017,7 +1017,7 @@ func disambigPrompt(e *storage.Edge, cands []*storage.ASTUnit) string {
 }
 
 // Linker annotations carried as extra keys in the edge meta JSON. They have no
-// field in storage.EdgeMeta, which decodes them away harmlessly.
+// field in store.EdgeMeta, which decodes them away harmlessly.
 const (
 	metaKeySource   = "source"    // "llm" for a disambiguated resolution
 	metaKeyTopicRef = "topic_ref" // the config reference a topic came from
@@ -1062,7 +1062,7 @@ func metaField(meta, key string) string {
 
 // scoredRoute is one route candidate with its match score.
 type scoredRoute struct {
-	unit     *storage.ASTUnit
+	unit     *domain.ASTUnit
 	score    float32
 	sameRepo bool
 }
@@ -1125,12 +1125,12 @@ func routesAmbiguous(cands []scoredRoute) bool {
 // orders.v2.OrderService both end in ".OrderService" — so it scores
 // ConfHeuristic and the caller routes it through disambiguation instead of
 // silently taking the first entry at ConfExact.
-func rpcCandidates(idx map[string][]indexedRPC, key string) ([]*storage.ASTUnit, float32) {
+func rpcCandidates(idx map[string][]indexedRPC, key string) ([]*domain.ASTUnit, float32) {
 	svc, method, ok := splitGrpcKey(key)
 	if !ok {
 		return nil, 0
 	}
-	var exact, suffix, byMethod []*storage.ASTUnit
+	var exact, suffix, byMethod []*domain.ASTUnit
 	for _, c := range idx[method] {
 		byMethod = append(byMethod, c.unit)
 		switch {
@@ -1141,7 +1141,7 @@ func rpcCandidates(idx map[string][]indexedRPC, key string) ([]*storage.ASTUnit,
 			suffix = append(suffix, c.unit)
 		}
 	}
-	for _, tier := range [][]*storage.ASTUnit{exact, suffix} {
+	for _, tier := range [][]*domain.ASTUnit{exact, suffix} {
 		if len(tier) == 0 {
 			continue
 		}
@@ -1160,12 +1160,12 @@ func rpcCandidates(idx map[string][]indexedRPC, key string) ([]*storage.ASTUnit,
 
 // matchRPC matches "grpc:Svc/Method" (possibly without service or package)
 // against rpc_method units qualified "grpc:pkg.Svc/Method".
-func matchRPC(units []*storage.ASTUnit, key string) (*storage.ASTUnit, float32) {
+func matchRPC(units []*domain.ASTUnit, key string) (*domain.ASTUnit, float32) {
 	return matchRPCIndexed(buildRPCIndex(units), key)
 }
 
 // matchRPCIndexed is matchRPC over a prebuilt method -> units index.
-func matchRPCIndexed(idx map[string][]indexedRPC, key string) (*storage.ASTUnit, float32) {
+func matchRPCIndexed(idx map[string][]indexedRPC, key string) (*domain.ASTUnit, float32) {
 	cands, conf := rpcCandidates(idx, key)
 	if len(cands) == 0 {
 		return nil, 0
@@ -1182,14 +1182,14 @@ func splitGrpcKey(key string) (svc, method string, ok bool) {
 // matchRoute matches an "http:METHOD /path" key against http_route units.
 // Between equally good matches a cross-repo route wins — an HTTP client
 // normally calls another service — but never against a better same-repo one.
-func matchRoute(units []*storage.ASTUnit, key, srcRepo string) (*storage.ASTUnit, float32) {
+func matchRoute(units []*domain.ASTUnit, key, srcRepo string) (*domain.ASTUnit, float32) {
 	return matchRouteIndexed(buildRouteIndex(units), key, srcRepo)
 }
 
 // matchRouteIndexed is matchRoute over a prebuilt segment-count -> parsed
 // routes index. Only routes with the same number of path segments as the call
 // can match, so a single bucket is scanned.
-func matchRouteIndexed(idx map[int][]indexedRoute, key, srcRepo string) (*storage.ASTUnit, float32) {
+func matchRouteIndexed(idx map[int][]indexedRoute, key, srcRepo string) (*domain.ASTUnit, float32) {
 	cands := routeCandidates(idx, key, srcRepo)
 	if len(cands) == 0 {
 		return nil, 0
@@ -1199,12 +1199,12 @@ func matchRouteIndexed(idx map[int][]indexedRoute, key, srcRepo string) (*storag
 
 // matchTable matches a "db:[schema.]table" key against db_table units,
 // preferring same-repo tables.
-func matchTable(units []*storage.ASTUnit, key, srcRepo string) (*storage.ASTUnit, float32) {
+func matchTable(units []*domain.ASTUnit, key, srcRepo string) (*domain.ASTUnit, float32) {
 	return matchTableIndexed(buildTableIndex(units), key, srcRepo)
 }
 
 // matchTableIndexed is matchTable over a prebuilt table index.
-func matchTableIndexed(idx *tableIndex, key, srcRepo string) (*storage.ASTUnit, float32) {
+func matchTableIndexed(idx *tableIndex, key, srcRepo string) (*domain.ASTUnit, float32) {
 	cands, conf := tableCandidates(idx, key, srcRepo)
 	if len(cands) == 0 {
 		return nil, 0
@@ -1223,11 +1223,11 @@ func matchTableIndexed(idx *tableIndex, key, srcRepo string) (*storage.ASTUnit, 
 // other repos, and a tier holding several candidates is ambiguous: it scores
 // one tier lower so the caller routes it through disambiguation instead of
 // taking the first cross-repo table at ConfHigh.
-func tableCandidates(idx *tableIndex, key, srcRepo string) ([]*storage.ASTUnit, float32) {
+func tableCandidates(idx *tableIndex, key, srcRepo string) ([]*domain.ASTUnit, float32) {
 	if !contract.IsKind(key, contract.KindDB) {
 		return nil, 0
 	}
-	tiers := [][]*storage.ASTUnit{idx.byKey[key]}
+	tiers := [][]*domain.ASTUnit{idx.byKey[key]}
 	if table, ok := contract.ParseDB(key); ok && !strings.Contains(table, ".") {
 		tiers = append(tiers, idx.byName[key], idx.byEntity[key])
 	}
@@ -1238,7 +1238,7 @@ func tableCandidates(idx *tableIndex, key, srcRepo string) ([]*storage.ASTUnit, 
 		{contract.ConfCrossFile, contract.ConfHeuristic},
 	}
 	for tier, units := range tiers {
-		var same, cross []*storage.ASTUnit
+		var same, cross []*domain.ASTUnit
 		for _, u := range units {
 			if u.RepoID == srcRepo {
 				same = append(same, u)
@@ -1246,7 +1246,7 @@ func tableCandidates(idx *tableIndex, key, srcRepo string) ([]*storage.ASTUnit, 
 				cross = append(cross, u)
 			}
 		}
-		for repo, group := range [][]*storage.ASTUnit{same, cross} {
+		for repo, group := range [][]*domain.ASTUnit{same, cross} {
 			if len(group) == 0 {
 				continue
 			}
@@ -1356,11 +1356,11 @@ func isPathParam(seg string) bool { return contract.IsPathParam(seg) }
 // flow pairs are cross-repo. With an empty repoID all flows are rebuilt from
 // scratch.
 func (l *Linker) deriveKafkaFlows(ctx context.Context, repoID string, rewritten map[string]struct{}, stats *RunStats) error {
-	produces, err := l.store.GetEdges(ctx, storage.QueryOpts{Kind: storage.EdgeProduces})
+	produces, err := l.store.GetEdges(ctx, domain.QueryOpts{Kind: store.EdgeProduces})
 	if err != nil {
 		return err
 	}
-	consumes, err := l.store.GetEdges(ctx, storage.QueryOpts{Kind: storage.EdgeConsumes})
+	consumes, err := l.store.GetEdges(ctx, domain.QueryOpts{Kind: store.EdgeConsumes})
 	if err != nil {
 		return err
 	}
@@ -1382,7 +1382,7 @@ func (l *Linker) deriveKafkaFlows(ctx context.Context, repoID string, rewritten 
 				affected[e.DstName] = struct{}{}
 			}
 		}
-		flows, err := l.store.GetEdges(ctx, storage.QueryOpts{Kind: storage.EdgeKafkaFlow})
+		flows, err := l.store.GetEdges(ctx, domain.QueryOpts{Kind: store.EdgeKafkaFlow})
 		if err != nil {
 			return err
 		}
@@ -1395,17 +1395,17 @@ func (l *Linker) deriveKafkaFlows(ctx context.Context, repoID string, rewritten 
 			return nil
 		}
 		for topic := range affected {
-			if err := l.store.DeleteEdgesByKindAndDst(ctx, storage.EdgeKafkaFlow, topic); err != nil {
+			if err := l.store.DeleteEdgesByKindAndDst(ctx, store.EdgeKafkaFlow, topic); err != nil {
 				return err
 			}
 		}
 	} else {
-		if err := l.store.DeleteEdgesByKind(ctx, "", storage.EdgeKafkaFlow); err != nil {
+		if err := l.store.DeleteEdgesByKind(ctx, "", store.EdgeKafkaFlow); err != nil {
 			return err
 		}
 	}
 
-	consumersByTopic := map[string][]*storage.Edge{}
+	consumersByTopic := map[string][]*domain.Edge{}
 	for _, c := range consumes {
 		consumersByTopic[c.DstName] = append(consumersByTopic[c.DstName], c)
 	}
@@ -1421,12 +1421,12 @@ func (l *Linker) deriveKafkaFlows(ctx context.Context, repoID string, rewritten 
 			if c.Confidence < conf {
 				conf = c.Confidence
 			}
-			flow := &storage.Edge{
+			flow := &domain.Edge{
 				RepoID:     p.RepoID,
 				SrcID:      p.SrcID,
 				DstID:      c.SrcID,
 				DstRepoID:  c.RepoID,
-				Kind:       storage.EdgeKafkaFlow,
+				Kind:       store.EdgeKafkaFlow,
 				DstName:    p.DstName,
 				FilePath:   p.FilePath,
 				Line:       p.Line,

@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Nahua-Foundation/ragota/internal/zapverify"
+	"github.com/Nahua-Foundation/ragota/tools/zapcheck/zapverify"
 )
 
 func main() {

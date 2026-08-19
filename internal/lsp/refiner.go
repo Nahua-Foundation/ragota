@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/indexing"
-	"github.com/Nahua-Foundation/ragota/internal/obs"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/index"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
 // unitHashLSP marks units discovered by the LSP pass (absent from the
@@ -51,12 +51,12 @@ var symbolKinds = map[int]string{
 }
 
 // Compile-time interface assertion.
-var _ indexing.Indexer = (*Refiner)(nil)
+var _ index.Indexer = (*Refiner)(nil)
 
-// Refiner is an indexing.Indexer (type "custom", name "lsp") that refines the
+// Refiner is an index.Indexer (type "custom", name "lsp") that refines the
 // tree-sitter graph with language-server data: it adds the function/method
 // units the heuristic parsers missed (documentSymbol). It is registered by
-// setup.Build chained after the AST indexer, so tree-sitter units are already
+// bootstrap.Build chained after the AST indexer, so tree-sitter units are already
 // stored when it runs.
 //
 // Edges are not its job. This pass sees one batch of files at a time, and a
@@ -66,20 +66,20 @@ var _ indexing.Indexer = (*Refiner)(nil)
 // tens of thousands of requests per repository. Call-edge correction is
 // therefore a separate, repository-scoped, bounded pass: see CallRefiner.
 type Refiner struct {
-	storage storage.Storage
+	store   store.Storage
 	cfg     *config.LSPConfig
 	mapper  Mapper
 	timeout time.Duration
 }
 
 // NewRefiner creates a Refiner over the given storage and LSP configuration.
-func NewRefiner(st storage.Storage, cfg *config.LSPConfig) *Refiner {
+func NewRefiner(st store.Storage, cfg *config.LSPConfig) *Refiner {
 	timeout := DefaultTimeout
 	if cfg.TimeoutSeconds > 0 {
 		timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
 	return &Refiner{
-		storage: st,
+		store:   st,
 		cfg:     cfg,
 		mapper:  NewMapper(cfg.HostRoot, cfg.MountRoot),
 		timeout: timeout,
@@ -90,7 +90,7 @@ func NewRefiner(st storage.Storage, cfg *config.LSPConfig) *Refiner {
 func (r *Refiner) Name() string { return "lsp" }
 
 // Type returns the indexer type.
-func (r *Refiner) Type() indexing.IndexType { return indexing.IndexTypeCustom }
+func (r *Refiner) Type() index.IndexType { return index.IndexTypeCustom }
 
 // Init validates the configuration and probes every configured server once so
 // an unreachable or mis-mapped LSP deployment is visible at startup instead of
@@ -109,10 +109,10 @@ func (r *Refiner) Init(ctx context.Context, _ map[string]interface{}) error {
 	reachable := 0
 	for _, lang := range langs {
 		srv := r.cfg.Servers[lang]
-		obs.Inc(obs.MetricLSPDialChecks, 1)
+		lspDialChecks.Inc()
 		client, err := Dial(srv.Addr, r.dialTimeout())
 		if err != nil {
-			obs.Inc(obs.MetricLSPDialFailures, 1)
+			lspDialFailures.Inc()
 			slog.Warn("lsp: server unreachable at startup", "language", lang, "addr", srv.Addr, "error", err)
 			continue
 		}
@@ -147,8 +147,8 @@ func (r *Refiner) dialTimeout() time.Duration {
 func (r *Refiner) Remove(ctx context.Context, repoID string, paths []string) error { return nil }
 
 // Stats returns minimal statistics (the refiner owns no separate store).
-func (r *Refiner) Stats(ctx context.Context) (*indexing.IndexerStats, error) {
-	return &indexing.IndexerStats{Specific: map[string]interface{}{"type": "lsp"}}, nil
+func (r *Refiner) Stats(ctx context.Context) (*index.IndexerStats, error) {
+	return &index.IndexerStats{Specific: map[string]interface{}{"type": "lsp"}}, nil
 }
 
 // Close releases resources (no-op; connections are per Index run).
@@ -157,10 +157,10 @@ func (r *Refiner) Close() error { return nil }
 // Index runs the refinement pass over the request's files. A missing or
 // unreachable language server is logged once per language and skipped;
 // per-file failures are recorded in the result without failing the run.
-func (r *Refiner) Index(ctx context.Context, req *indexing.IndexRequest) (*indexing.IndexResult, error) {
+func (r *Refiner) Index(ctx context.Context, req *index.IndexRequest) (*index.IndexResult, error) {
 	start := time.Now()
-	res := &indexing.IndexResult{}
-	obs.Inc(obs.MetricLSPPassTotal, 1)
+	res := &index.IndexResult{}
+	lspPassTotal.Inc()
 
 	if len(r.cfg.Servers) == 0 {
 		// Reporting success here is what makes a mis-configured pass look like
@@ -168,7 +168,7 @@ func (r *Refiner) Index(ctx context.Context, req *indexing.IndexRequest) (*index
 		return res, fmt.Errorf("lsp: no servers configured, nothing was refined")
 	}
 
-	byLang := make(map[string][]*indexing.FileToIndex)
+	byLang := make(map[string][]*index.FileToIndex)
 	for _, f := range req.Files {
 		_, supported := languageIDs[f.Language]
 		_, hasServer := r.cfg.Servers[f.Language]
@@ -178,10 +178,10 @@ func (r *Refiner) Index(ctx context.Context, req *indexing.IndexRequest) (*index
 		}
 		byLang[f.Language] = append(byLang[f.Language], f)
 	}
-	obs.IncBy(obs.MetricLSPFilesSkipped, res.FilesSkipped)
+	lspFilesSkipped.Add(float64(res.FilesSkipped))
 	if len(byLang) == 0 {
 		res.Duration = time.Since(start)
-		obs.RecordDuration(obs.MetricLSPPassSeconds, res.Duration.Seconds())
+		lspPassSeconds.Observe(res.Duration.Seconds())
 		return res, nil
 	}
 
@@ -198,29 +198,29 @@ func (r *Refiner) Index(ctx context.Context, req *indexing.IndexRequest) (*index
 		symbols, err := r.refineLanguage(ctx, req, lang, srv, files, res)
 		switch {
 		case err != nil:
-			obs.Inc(obs.MetricLSPServerFailures, 1)
+			lspServerFailures.Inc()
 			slog.Warn("lsp: language server unavailable, skipping language",
 				"language", lang, "addr", srv.Addr, "error", err)
 			res.FilesSkipped += len(files)
-			obs.IncBy(obs.MetricLSPFilesSkipped, len(files))
+			lspFilesSkipped.Add(float64(len(files)))
 			failed = append(failed, lang)
 		case symbols == 0:
 			// A reachable server that returns nothing for every file means a
 			// broken workspace, most often a wrong host_root/mount_root
 			// mapping — indistinguishable from success without this.
-			obs.Inc(obs.MetricLSPEmptyLanguages, 1)
+			lspEmptyLanguages.Inc()
 			slog.Warn("lsp: server returned no symbols for any file; check lsp.host_root/mount_root and the container mount",
 				"language", lang, "addr", srv.Addr, "files", len(files),
 				"host_root", r.cfg.HostRoot, "mount_root", r.cfg.MountRoot)
 			res.FilesFailed += len(files)
-			obs.IncBy(obs.MetricLSPFilesFailed, len(files))
+			lspFilesFailed.Add(float64(len(files)))
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: language server %s returned no symbols for %d files", lang, srv.Addr, len(files)))
 			failed = append(failed, lang)
 		}
 	}
 
 	res.Duration = time.Since(start)
-	obs.RecordDuration(obs.MetricLSPPassSeconds, res.Duration.Seconds())
+	lspPassSeconds.Observe(res.Duration.Seconds())
 	if len(failed) == len(langs) {
 		return res, fmt.Errorf("lsp: every language failed (%s)", strings.Join(failed, ", "))
 	}
@@ -233,7 +233,7 @@ func (r *Refiner) Index(ctx context.Context, req *indexing.IndexRequest) (*index
 // failure rather than as an empty success. An error is returned only when the
 // server itself is unusable (dial or initialize failed); per-file errors are
 // recorded in res.
-func (r *Refiner) refineLanguage(ctx context.Context, req *indexing.IndexRequest, lang string, srv config.LSPServerConfig, files []*indexing.FileToIndex, res *indexing.IndexResult) (int, error) {
+func (r *Refiner) refineLanguage(ctx context.Context, req *index.IndexRequest, lang string, srv config.LSPServerConfig, files []*index.FileToIndex, res *index.IndexResult) (int, error) {
 	client, err := Dial(srv.Addr, r.timeout)
 	if err != nil {
 		return 0, err
@@ -246,19 +246,19 @@ func (r *Refiner) refineLanguage(ctx context.Context, req *indexing.IndexRequest
 	}
 
 	// unitCache caches storage lookups of a file's units within this run.
-	unitCache := make(map[string][]*storage.ASTUnit)
+	unitCache := make(map[string][]*domain.ASTUnit)
 	symbols := 0
 	for _, f := range files {
 		n, err := r.refineFile(ctx, client, req, repoRoot, lang, f, unitCache)
 		if err != nil {
 			res.FilesFailed++
-			obs.Inc(obs.MetricLSPFilesFailed, 1)
+			lspFilesFailed.Inc()
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", f.Path, err))
 			continue
 		}
 		symbols += n
 		res.FilesIndexed++
-		obs.Inc(obs.MetricLSPFilesRefined, 1)
+		lspFilesRefined.Inc()
 	}
 	return symbols, nil
 }
@@ -266,7 +266,7 @@ func (r *Refiner) refineLanguage(ctx context.Context, req *indexing.IndexRequest
 // refineFile opens one file on the server, merges documentSymbol output into
 // the stored units and creates precise reference edges for its definitions.
 // It returns how many symbols the server reported for the file.
-func (r *Refiner) refineFile(ctx context.Context, client *Client, req *indexing.IndexRequest, repoRoot, lang string, f *indexing.FileToIndex, unitCache map[string][]*storage.ASTUnit) (int, error) {
+func (r *Refiner) refineFile(ctx context.Context, client *Client, req *index.IndexRequest, repoRoot, lang string, f *index.FileToIndex, unitCache map[string][]*domain.ASTUnit) (int, error) {
 	content := f.Content
 	if content == nil {
 		data, err := os.ReadFile(filepath.Join(repoRoot, f.Path))
@@ -304,7 +304,7 @@ func (r *Refiner) refineFile(ctx context.Context, client *Client, req *indexing.
 		if s.Name == "" || known[s.Name] {
 			continue
 		}
-		u := &storage.ASTUnit{
+		u := &domain.ASTUnit{
 			RepoID:    req.RepoID,
 			FilePath:  f.Path,
 			Language:  lang,
@@ -315,7 +315,7 @@ func (r *Refiner) refineFile(ctx context.Context, client *Client, req *indexing.
 			EndLine:   s.EndLine + 1,
 			Hash:      unitHashLSP,
 		}
-		if err := r.storage.StoreASTUnit(ctx, u); err != nil {
+		if err := r.store.StoreASTUnit(ctx, u); err != nil {
 			return 0, fmt.Errorf("store unit %s: %w", s.Name, err)
 		}
 		known[s.Name] = true
@@ -326,11 +326,11 @@ func (r *Refiner) refineFile(ctx context.Context, client *Client, req *indexing.
 }
 
 // fileUnits returns (and caches) the stored units of a file.
-func (r *Refiner) fileUnits(ctx context.Context, repoID, path string, cache map[string][]*storage.ASTUnit) ([]*storage.ASTUnit, error) {
+func (r *Refiner) fileUnits(ctx context.Context, repoID, path string, cache map[string][]*domain.ASTUnit) ([]*domain.ASTUnit, error) {
 	if units, ok := cache[path]; ok {
 		return units, nil
 	}
-	units, err := r.storage.GetASTUnits(ctx, storage.QueryOpts{RepoID: repoID, FilePath: path})
+	units, err := r.store.GetASTUnits(ctx, domain.QueryOpts{RepoID: repoID, FilePath: path})
 	if err != nil {
 		return nil, fmt.Errorf("get units of %s: %w", path, err)
 	}
@@ -341,7 +341,7 @@ func (r *Refiner) fileUnits(ctx context.Context, repoID, path string, cache map[
 // namePosition finds the 0-based (line, character) of a unit's name near its
 // declaration start: the name is searched in the unit's first lines. Returns
 // col -1 when the name cannot be located.
-func namePosition(lines []string, u *storage.ASTUnit) (int, int) {
+func namePosition(lines []string, u *domain.ASTUnit) (int, int) {
 	start := u.StartLine - 1 // storage lines are 1-based
 	end := start + 4
 	if u.EndLine-1 < end {

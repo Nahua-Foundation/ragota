@@ -6,17 +6,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
 // failEdgesStore wraps a real store but fails every edge query, standing in for
 // a database that breaks mid-trace.
 type failEdgesStore struct {
-	storage.Storage
+	store.Storage
 	err error
 }
 
-func (f failEdgesStore) GetEdges(context.Context, storage.QueryOpts) ([]*storage.Edge, error) {
+func (f failEdgesStore) GetEdges(context.Context, domain.QueryOpts) ([]*domain.Edge, error) {
 	return nil, f.err
 }
 

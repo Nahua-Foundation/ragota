@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/Nahua-Foundation/ragota/internal/indexing"
+	"github.com/Nahua-Foundation/ragota/internal/index"
 )
 
 // fakeReranker inverts the candidate order: the last document gets the
@@ -31,8 +31,8 @@ func (f *fakeReranker) Rerank(ctx context.Context, query string, documents []str
 	return scores, nil
 }
 
-func rerankHits() []*indexing.Hit {
-	return []*indexing.Hit{
+func rerankHits() []*index.Hit {
+	return []*index.Hit{
 		{RepoID: "r1", FilePath: "/a.go", Path: "/a.go", Line: 1, Score: 0.9, Snippet: "snippet a", Reason: "keyword"},
 		{RepoID: "r1", FilePath: "/b.go", Path: "/b.go", Line: 5, Score: 0.8, Snippet: "snippet b", Reason: "keyword"},
 		{RepoID: "r1", FilePath: "/c.go", Path: "/c.go", Line: 9, Symbol: "SymC", Score: 0.7, Reason: "keyword"},
@@ -41,13 +41,13 @@ func rerankHits() []*indexing.Hit {
 
 func TestRerankReordersTopN(t *testing.T) {
 	ctx := context.Background()
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeBM25: &mockSearcher{name: indexing.IndexTypeBM25, hits: rerankHits()},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeBM25: &mockSearcher{name: index.IndexTypeBM25, hits: rerankHits()},
 	}, nil)
 	rr := &fakeReranker{}
 	svc.SetReranker(rr, 0) // default topN
 
-	result, err := svc.KeywordSearch(ctx, &indexing.SearchQuery{Query: "test", Limit: 10})
+	result, err := svc.KeywordSearch(ctx, &index.SearchQuery{Query: "test", Limit: 10})
 	if err != nil {
 		t.Fatalf("KeywordSearch() error = %v", err)
 	}
@@ -92,12 +92,12 @@ func TestRerankReordersTopN(t *testing.T) {
 
 func TestRerankTopNKeepsTail(t *testing.T) {
 	ctx := context.Background()
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeBM25: &mockSearcher{name: indexing.IndexTypeBM25, hits: rerankHits()},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeBM25: &mockSearcher{name: index.IndexTypeBM25, hits: rerankHits()},
 	}, nil)
 	svc.SetReranker(&fakeReranker{}, 2)
 
-	result, err := svc.KeywordSearch(ctx, &indexing.SearchQuery{Query: "test", Limit: 10})
+	result, err := svc.KeywordSearch(ctx, &index.SearchQuery{Query: "test", Limit: 10})
 	if err != nil {
 		t.Fatalf("KeywordSearch() error = %v", err)
 	}
@@ -118,12 +118,12 @@ func TestRerankTopNKeepsTail(t *testing.T) {
 
 func TestRerankErrorFallsBack(t *testing.T) {
 	ctx := context.Background()
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeBM25: &mockSearcher{name: indexing.IndexTypeBM25, hits: rerankHits()},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeBM25: &mockSearcher{name: index.IndexTypeBM25, hits: rerankHits()},
 	}, nil)
 	svc.SetReranker(&fakeReranker{err: fmt.Errorf("upstream down")}, 50)
 
-	result, err := svc.KeywordSearch(ctx, &indexing.SearchQuery{Query: "test", Limit: 10})
+	result, err := svc.KeywordSearch(ctx, &index.SearchQuery{Query: "test", Limit: 10})
 	if err != nil {
 		t.Fatalf("KeywordSearch() must not fail when the reranker fails, got %v", err)
 	}
@@ -140,13 +140,13 @@ func TestRerankErrorFallsBack(t *testing.T) {
 
 func TestRerankAppliedToHybridFusion(t *testing.T) {
 	ctx := context.Background()
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: &mockSearcher{name: indexing.IndexTypeVector, hits: rerankHits()},
-		indexing.IndexTypeBM25:   &mockSearcher{name: indexing.IndexTypeBM25, hits: rerankHits()},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: &mockSearcher{name: index.IndexTypeVector, hits: rerankHits()},
+		index.IndexTypeBM25:   &mockSearcher{name: index.IndexTypeBM25, hits: rerankHits()},
 	}, nil)
 	svc.SetReranker(&fakeReranker{}, 50)
 
-	result, err := svc.Search(ctx, &indexing.SearchQuery{Query: "test", Limit: 10}, true)
+	result, err := svc.Search(ctx, &index.SearchQuery{Query: "test", Limit: 10}, true)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -164,14 +164,14 @@ func TestRerankAppliedToHybridFusion(t *testing.T) {
 
 func TestRerankSingleHitSkipped(t *testing.T) {
 	ctx := context.Background()
-	one := []*indexing.Hit{{RepoID: "r1", FilePath: "/a.go", Line: 1, Score: 0.9, Reason: "keyword"}}
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeBM25: &mockSearcher{name: indexing.IndexTypeBM25, hits: one},
+	one := []*index.Hit{{RepoID: "r1", FilePath: "/a.go", Line: 1, Score: 0.9, Reason: "keyword"}}
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeBM25: &mockSearcher{name: index.IndexTypeBM25, hits: one},
 	}, nil)
 	rr := &fakeReranker{}
 	svc.SetReranker(rr, 50)
 
-	result, err := svc.KeywordSearch(ctx, &indexing.SearchQuery{Query: "test", Limit: 10})
+	result, err := svc.KeywordSearch(ctx, &index.SearchQuery{Query: "test", Limit: 10})
 	if err != nil {
 		t.Fatalf("KeywordSearch() error = %v", err)
 	}
@@ -191,17 +191,17 @@ func TestRerankSingleHitSkipped(t *testing.T) {
 func TestRerankTruncatesOversizedDocuments(t *testing.T) {
 	ctx := context.Background()
 	long := strings.Repeat("если б", 2000) // multi-byte runes, ~22 KB
-	hits := []*indexing.Hit{
+	hits := []*index.Hit{
 		{RepoID: "r1", FilePath: "/big.go", Path: "/big.go", Line: 1, Score: 0.9, Snippet: long, Reason: "keyword"},
 		{RepoID: "r1", FilePath: "/small.go", Path: "/small.go", Line: 2, Score: 0.8, Snippet: "tiny", Reason: "keyword"},
 	}
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeBM25: &mockSearcher{name: indexing.IndexTypeBM25, hits: hits},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeBM25: &mockSearcher{name: index.IndexTypeBM25, hits: hits},
 	}, nil)
 	rr := &fakeReranker{}
 	svc.SetReranker(rr, 50)
 
-	if _, err := svc.KeywordSearch(ctx, &indexing.SearchQuery{Query: "test", Limit: 10}); err != nil {
+	if _, err := svc.KeywordSearch(ctx, &index.SearchQuery{Query: "test", Limit: 10}); err != nil {
 		t.Fatalf("KeywordSearch() error = %v", err)
 	}
 	if len(rr.seen) != 2 {

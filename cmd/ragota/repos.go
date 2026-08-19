@@ -7,10 +7,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Nahua-Foundation/ragota/internal/app"
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/service"
-	"github.com/Nahua-Foundation/ragota/internal/setup"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/server/bootstrap"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
 // The `repos` subcommand: what the index is made of, and which part of it the
@@ -71,7 +71,7 @@ func parseReposArgs(args []string) (reposArgs, error) {
 // os.Exit is outside this function and not in it.
 func runRepos(cfg *config.Config, args reposArgs) int {
 	ctx := context.Background()
-	svc, err := setup.Build(ctx, cfg)
+	svc, err := bootstrap.Build(ctx, cfg)
 	if err != nil {
 		return fail("cannot open the index: %v", err)
 	}
@@ -98,7 +98,7 @@ func runRepos(cfg *config.Config, args reposArgs) int {
 // Every one of them, dormant included: this is the command that says what the
 // dashboard is leaving out, so filtering it would leave nowhere at all to see
 // a repository that has gone quiet.
-func listRepos(ctx context.Context, svc *service.Service) int {
+func listRepos(ctx context.Context, svc *app.Service) int {
 	all, err := svc.ListRepos(ctx)
 	if err != nil {
 		return fail("cannot list the repositories: %v", err)
@@ -144,10 +144,10 @@ func listRepos(ctx context.Context, svc *service.Service) int {
 // leaves the last writer's set in place; they are keystrokes at a shell, and
 // ordering them properly would cost a transaction spanning two processes to buy
 // nothing.
-func setRepoActive(ctx context.Context, svc *service.Service, ref string, active bool) int {
+func setRepoActive(ctx context.Context, svc *app.Service, ref string, active bool) int {
 	repo, err := svc.ResolveRepo(ctx, ref)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) {
 			return fail("%v; `ragota %s %s` shows what is registered", err, commandRepos, reposList)
 		}
 		return fail("%v", err)

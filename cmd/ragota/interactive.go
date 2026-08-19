@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Nahua-Foundation/ragota/internal/service"
-	"github.com/Nahua-Foundation/ragota/internal/status"
+	"github.com/Nahua-Foundation/ragota/internal/app"
+	"github.com/Nahua-Foundation/ragota/internal/server/progress"
 )
 
 // interactiveLogName is the file the process log goes to while the dashboard
@@ -125,7 +125,7 @@ func openInteractiveLog() (*os.File, string) {
 // One ListRepos call gives both halves. Asking for the active rows and the
 // total separately would let a write between the two calls report a count that
 // contradicts the table.
-func primeStatusBus(ctx context.Context, svc *service.Service, bus *status.Bus) {
+func primeStatusBus(ctx context.Context, svc *app.Service, bus *progress.Bus) {
 	all, err := svc.ListRepos(ctx)
 	if err != nil {
 		slog.Warn("interactive: cannot list repositories", "err", err)

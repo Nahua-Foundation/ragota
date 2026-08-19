@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nahua-Foundation/ragota/internal/storage"
-	"github.com/Nahua-Foundation/ragota/internal/storage/sqlite"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
+	"github.com/Nahua-Foundation/ragota/internal/store/sqlite"
 )
 
 func TestExprMatches(t *testing.T) {
@@ -86,13 +87,13 @@ func TestMatchingArg(t *testing.T) {
 }
 
 func step(unitID, via string) *TraceStep {
-	return &TraceStep{Unit: &storage.ASTUnit{ID: unitID}, Via: via}
+	return &TraceStep{Unit: &domain.ASTUnit{ID: unitID}, Via: via}
 }
 
 func TestBetterChain(t *testing.T) {
-	crossing := []*TraceStep{step("1", ""), step("2", storage.EdgeRPCCall), step("3", storage.EdgeKafkaFlow)}
-	local := []*TraceStep{step("1", ""), step("4", storage.EdgeCall), step("5", storage.EdgeCall), step("6", storage.EdgeCall)}
-	short := []*TraceStep{step("1", ""), step("7", storage.EdgeCall)}
+	crossing := []*TraceStep{step("1", ""), step("2", store.EdgeRPCCall), step("3", store.EdgeKafkaFlow)}
+	local := []*TraceStep{step("1", ""), step("4", store.EdgeCall), step("5", store.EdgeCall), step("6", store.EdgeCall)}
+	short := []*TraceStep{step("1", ""), step("7", store.EdgeCall)}
 
 	if !betterChain(crossing, local) {
 		t.Error("chain with more service crossings should win over a longer local chain")
@@ -159,9 +160,9 @@ func openTestStore(t *testing.T) *sqlite.SQLite {
 	return st
 }
 
-func storeFunc(t *testing.T, st *sqlite.SQLite, repoID, name, signature string) *storage.ASTUnit {
+func storeFunc(t *testing.T, st *sqlite.SQLite, repoID, name, signature string) *domain.ASTUnit {
 	t.Helper()
-	u := &storage.ASTUnit{
+	u := &domain.ASTUnit{
 		RepoID: repoID, FilePath: "src/" + name + ".go", Language: "go",
 		Kind: "function", Name: name, Qualified: "pkg." + name,
 		Signature: signature,
@@ -172,7 +173,7 @@ func storeFunc(t *testing.T, st *sqlite.SQLite, repoID, name, signature string) 
 	return u
 }
 
-func storeUnit(t *testing.T, st *sqlite.SQLite, u *storage.ASTUnit) *storage.ASTUnit {
+func storeUnit(t *testing.T, st *sqlite.SQLite, u *domain.ASTUnit) *domain.ASTUnit {
 	t.Helper()
 	if err := st.StoreASTUnit(context.Background(), u); err != nil {
 		t.Fatal(err)
@@ -180,7 +181,7 @@ func storeUnit(t *testing.T, st *sqlite.SQLite, u *storage.ASTUnit) *storage.AST
 	return u
 }
 
-func storeEdge(t *testing.T, st *sqlite.SQLite, e *storage.Edge) *storage.Edge {
+func storeEdge(t *testing.T, st *sqlite.SQLite, e *domain.Edge) *domain.Edge {
 	t.Helper()
 	if e.Confidence == 0 {
 		e.Confidence = 1.0
@@ -193,7 +194,7 @@ func storeEdge(t *testing.T, st *sqlite.SQLite, e *storage.Edge) *storage.Edge {
 
 func callMeta(t *testing.T, args ...string) string {
 	t.Helper()
-	b, err := json.Marshal(&storage.EdgeMeta{Args: args})
+	b, err := json.Marshal(&store.EdgeMeta{Args: args})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,9 +207,9 @@ func TestTraceFollowsCallEdge(t *testing.T) {
 
 	a := storeFunc(t, st, "r1", "A", "(userID string)")
 	b := storeFunc(t, st, "r1", "B", "(uid string)")
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B", Line: 12,
+		Kind: store.EdgeCall, DstName: "B", Line: 12,
 		Meta: callMeta(t, "userID"),
 	})
 
@@ -230,8 +231,8 @@ func TestTraceFollowsCallEdge(t *testing.T) {
 	if len(last.Tracked) != 1 || last.Tracked[0] != "uid" {
 		t.Errorf("tracked at step 2 = %v, want [uid]", last.Tracked)
 	}
-	if last.Via != storage.EdgeCall {
-		t.Errorf("via = %q, want %q", last.Via, storage.EdgeCall)
+	if last.Via != store.EdgeCall {
+		t.Errorf("via = %q, want %q", last.Via, store.EdgeCall)
 	}
 	if last.Confidence <= 0 {
 		t.Errorf("confidence = %v, want > 0", last.Confidence)
@@ -248,13 +249,13 @@ func TestTraceBranchingProducesAlternatives(t *testing.T) {
 	a := storeFunc(t, st, "r1", "A", "(userID string)")
 	b := storeFunc(t, st, "r1", "B", "(uid string)")
 	c := storeFunc(t, st, "r1", "C", "(uid2 string)")
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B", Meta: callMeta(t, "userID"),
+		Kind: store.EdgeCall, DstName: "B", Meta: callMeta(t, "userID"),
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: a.ID, DstID: c.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "C", Meta: callMeta(t, "userID"),
+		Kind: store.EdgeCall, DstName: "C", Meta: callMeta(t, "userID"),
 	})
 
 	res, err := New(st).Trace(ctx, &TraceRequest{RepoID: "r1", Symbol: "A", Param: "userID"})
@@ -289,14 +290,14 @@ func TestTraceDiamondFindsBothPaths(t *testing.T) {
 	b := storeFunc(t, st, "r1", "B", "(uid string)")
 	c := storeFunc(t, st, "r1", "C", "(uid2 string)")
 	d := storeFunc(t, st, "r1", "D", "(xid string)")
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B", Meta: callMeta(t, "userID")})
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: a.ID, DstID: c.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "C", Meta: callMeta(t, "userID")})
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: b.ID, DstID: d.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "D", Meta: callMeta(t, "uid")})
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: c.ID, DstID: d.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "D", Meta: callMeta(t, "uid2")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "B", Meta: callMeta(t, "userID")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: a.ID, DstID: c.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "C", Meta: callMeta(t, "userID")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: b.ID, DstID: d.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "D", Meta: callMeta(t, "uid")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: c.ID, DstID: d.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "D", Meta: callMeta(t, "uid2")})
 
 	res, err := New(st).Trace(ctx, &TraceRequest{RepoID: "r1", Symbol: "A", Param: "userID"})
 	if err != nil {
@@ -327,10 +328,10 @@ func TestTraceSelfCycleTerminates(t *testing.T) {
 	a := storeFunc(t, st, "r1", "A", "(userID string)")
 	b := storeFunc(t, st, "r1", "B", "(userID string)")
 	// A -> B -> A: cycle with identical tracked identifiers.
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B", Meta: callMeta(t, "userID")})
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: b.ID, DstID: a.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "A", Meta: callMeta(t, "userID")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "B", Meta: callMeta(t, "userID")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: b.ID, DstID: a.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "A", Meta: callMeta(t, "userID")})
 
 	res, err := New(st).Trace(ctx, &TraceRequest{RepoID: "r1", Symbol: "A", Param: "userID"})
 	if err != nil {
@@ -387,16 +388,16 @@ func TestTraceFollowsAliasedCallEdge(t *testing.T) {
 
 	a := storeFunc(t, st, "r1", "A", "(userID string)")
 	b := storeFunc(t, st, "r1", "B", "(uid string)")
-	meta, err := json.Marshal(&storage.EdgeMeta{
+	meta, err := json.Marshal(&store.EdgeMeta{
 		Args:    []string{"x"},
 		Aliases: map[string]string{"x": "userID"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B", Line: 7,
+		Kind: store.EdgeCall, DstName: "B", Line: 7,
 		Meta: string(meta),
 	})
 
@@ -427,9 +428,9 @@ func TestTraceWithoutAliasesDoesNotMatch(t *testing.T) {
 
 	a := storeFunc(t, st, "r1", "A", "(userID string)")
 	b := storeFunc(t, st, "r1", "B", "(uid string)")
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B",
+		Kind: store.EdgeCall, DstName: "B",
 		Meta: callMeta(t, "x"), // arg "x", no aliases
 	})
 
@@ -450,13 +451,13 @@ func TestTraceDedupsOnTrackedIdentifiers(t *testing.T) {
 
 	a := storeFunc(t, st, "r1", "A", "(userID string)")
 	b := storeFunc(t, st, "r1", "B", "(first string, second string)")
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B", Meta: callMeta(t, "userID", "other"),
+		Kind: store.EdgeCall, DstName: "B", Meta: callMeta(t, "userID", "other"),
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B", Meta: callMeta(t, "other", "userID"),
+		Kind: store.EdgeCall, DstName: "B", Meta: callMeta(t, "other", "userID"),
 	})
 
 	res, err := New(st).Trace(ctx, &TraceRequest{RepoID: "r1", Symbol: "A", Param: "userID"})
@@ -486,12 +487,12 @@ func TestTraceTruncatedChainDoesNotWin(t *testing.T) {
 	b := storeFunc(t, st, "r1", "B", "(uid string)")
 	c := storeFunc(t, st, "r1", "C", "(uid string)")
 	sink := storeFunc(t, st, "r1", "Sink", "(uid string)")
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B", Meta: callMeta(t, "userID")})
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: b.ID, DstID: c.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "C", Meta: callMeta(t, "uid")})
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: a.ID, DstID: sink.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "Sink", Meta: callMeta(t, "userID")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "B", Meta: callMeta(t, "userID")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: b.ID, DstID: c.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "C", Meta: callMeta(t, "uid")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: a.ID, DstID: sink.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "Sink", Meta: callMeta(t, "userID")})
 
 	res, err := New(st).Trace(ctx, &TraceRequest{RepoID: "r1", Symbol: "A", Param: "userID", MaxDepth: 2})
 	if err != nil {
@@ -515,13 +516,13 @@ func TestTraceTruncatedChainDoesNotWin(t *testing.T) {
 func TestFinishKeepsBestChainsAtCap(t *testing.T) {
 	tr := &tracer{seen: map[string]bool{}}
 	for i := 0; i < maxCompletedChains; i++ {
-		tr.finish([]*TraceStep{step("start", ""), step("local"+strconv.Itoa(i), storage.EdgeCall)}, "")
+		tr.finish([]*TraceStep{step("start", ""), step("local"+strconv.Itoa(i), store.EdgeCall)}, "")
 	}
 	if len(tr.completed) != maxCompletedChains {
 		t.Fatalf("completed = %d, want %d", len(tr.completed), maxCompletedChains)
 	}
 
-	best := []*TraceStep{step("start", ""), step("remote", storage.EdgeRPCCall)}
+	best := []*TraceStep{step("start", ""), step("remote", store.EdgeRPCCall)}
 	tr.finish(best, "")
 	if tr.discovered != maxCompletedChains+1 {
 		t.Errorf("discovered = %d, want every distinct chain counted", tr.discovered)
@@ -537,7 +538,7 @@ func TestFinishKeepsBestChainsAtCap(t *testing.T) {
 	}
 
 	// A worse chain at the cap is dropped.
-	tr.finish([]*TraceStep{step("start", ""), step("extra", storage.EdgeCall)}, "")
+	tr.finish([]*TraceStep{step("start", ""), step("extra", store.EdgeCall)}, "")
 	for _, c := range tr.completed {
 		if c.steps[1].Unit.ID == "extra" {
 			t.Error("a chain no better than the worst kept one must be dropped")
@@ -548,18 +549,18 @@ func TestFinishKeepsBestChainsAtCap(t *testing.T) {
 // countingStore records how often the tracer reaches storage, so that the
 // per-hop query storm the batching loader removes cannot come back.
 type countingStore struct {
-	storage.Storage
+	store.Storage
 	unitByID int
 	services int
 }
 
-func (c *countingStore) GetASTUnitByID(ctx context.Context, id string) (*storage.ASTUnit, error) {
+func (c *countingStore) GetASTUnitByID(ctx context.Context, id string) (*domain.ASTUnit, error) {
 	c.unitByID++
 	return c.Storage.GetASTUnitByID(ctx, id)
 }
 
-func (c *countingStore) GetASTUnits(ctx context.Context, opts storage.QueryOpts) ([]*storage.ASTUnit, error) {
-	if opts.Kind == storage.KindService {
+func (c *countingStore) GetASTUnits(ctx context.Context, opts domain.QueryOpts) ([]*domain.ASTUnit, error) {
+	if opts.Kind == store.KindService {
 		c.services++
 	}
 	return c.Storage.GetASTUnits(ctx, opts)
@@ -573,14 +574,14 @@ func TestTraceUsesBatchingLoader(t *testing.T) {
 	b := storeFunc(t, st, "r1", "B", "(uid string)")
 	c := storeFunc(t, st, "r1", "C", "(uid string)")
 	d := storeFunc(t, st, "r1", "D", "(uid string)")
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B", Meta: callMeta(t, "userID")})
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: a.ID, DstID: c.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "C", Meta: callMeta(t, "userID")})
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: b.ID, DstID: d.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "D", Meta: callMeta(t, "uid")})
-	storeEdge(t, st, &storage.Edge{RepoID: "r1", SrcID: c.ID, DstID: d.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "D", Meta: callMeta(t, "uid")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "B", Meta: callMeta(t, "userID")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: a.ID, DstID: c.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "C", Meta: callMeta(t, "userID")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: b.ID, DstID: d.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "D", Meta: callMeta(t, "uid")})
+	storeEdge(t, st, &domain.Edge{RepoID: "r1", SrcID: c.ID, DstID: d.ID, DstRepoID: "r1",
+		Kind: store.EdgeCall, DstName: "D", Meta: callMeta(t, "uid")})
 
 	cs := &countingStore{Storage: st}
 	res, err := New(cs).Trace(ctx, &TraceRequest{RepoID: "r1", Symbol: "A", Param: "userID"})
@@ -599,17 +600,17 @@ func TestTraceUsesBatchingLoader(t *testing.T) {
 }
 
 // storeTable stores a db_table unit for the "db:<name>" contract key.
-func storeTable(t *testing.T, st *sqlite.SQLite, repoID, name string) *storage.ASTUnit {
+func storeTable(t *testing.T, st *sqlite.SQLite, repoID, name string) *domain.ASTUnit {
 	t.Helper()
-	return storeUnit(t, st, &storage.ASTUnit{
+	return storeUnit(t, st, &domain.ASTUnit{
 		RepoID: repoID, FilePath: "migrations/001_" + name + ".sql", Language: "sql",
-		Kind: storage.KindDBTable, Name: name, Qualified: "db:" + name,
+		Kind: store.KindDBTable, Name: name, Qualified: "db:" + name,
 	})
 }
 
 func writeMeta(t *testing.T, column, expr string, args ...string) string {
 	t.Helper()
-	b, err := json.Marshal(&storage.EdgeMeta{
+	b, err := json.Marshal(&store.EdgeMeta{
 		Args:   args,
 		Fields: map[string]string{column: expr},
 	})
@@ -631,18 +632,18 @@ func TestTraceContinuesThroughTable(t *testing.T) {
 	reader := storeFunc(t, st, "r2", "LoadOrder", "(id string)")
 	sink := storeFunc(t, st, "r2", "Notify", "(uid string)")
 
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: writer.ID, DstID: table.ID, DstRepoID: "r2",
-		Kind: storage.EdgeWritesTo, DstName: "db:orders", Line: 20,
+		Kind: store.EdgeWritesTo, DstName: "db:orders", Line: 20,
 		Meta: writeMeta(t, "user_id", "userID", "INSERT INTO orders (user_id) VALUES ($1)", "userID"),
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r2", SrcID: reader.ID, DstID: table.ID, DstRepoID: "r2",
-		Kind: storage.EdgeReadsFrom, DstName: "db:orders", Line: 7,
+		Kind: store.EdgeReadsFrom, DstName: "db:orders", Line: 7,
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r2", SrcID: reader.ID, DstID: sink.ID, DstRepoID: "r2",
-		Kind: storage.EdgeCall, DstName: "Notify", Meta: callMeta(t, "row.UserID"),
+		Kind: store.EdgeCall, DstName: "Notify", Meta: callMeta(t, "row.UserID"),
 	})
 
 	res, err := New(st).Trace(ctx, &TraceRequest{RepoID: "r1", Symbol: "CreateOrder", Param: "userID"})
@@ -660,8 +661,8 @@ func TestTraceContinuesThroughTable(t *testing.T) {
 		}
 	}
 	read := res.Steps[2]
-	if read.Via != storage.EdgeReadsFrom {
-		t.Errorf("via at the reader = %q, want %q", read.Via, storage.EdgeReadsFrom)
+	if read.Via != store.EdgeReadsFrom {
+		t.Errorf("via at the reader = %q, want %q", read.Via, store.EdgeReadsFrom)
 	}
 	if len(read.Tracked) != 1 || read.Tracked[0] != "user_id" {
 		t.Errorf("tracked at the reader = %v, want [user_id] (the written column)", read.Tracked)
@@ -685,20 +686,20 @@ func TestTraceThroughLinkedTableAcrossRepos(t *testing.T) {
 	writer := storeFunc(t, st, "repoA", "CreateOrder", "(userID string)")
 	table := storeTable(t, st, "repoB", "orders")
 	reader := storeFunc(t, st, "repoC", "LoadOrder", "(id string)")
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: writer.ID,
-		Kind: storage.EdgeWritesTo, DstName: "db:orders",
+		Kind: store.EdgeWritesTo, DstName: "db:orders",
 		Meta: writeMeta(t, "user_id", "userID"),
 	})
-	readEdge := storeEdge(t, st, &storage.Edge{
+	readEdge := storeEdge(t, st, &domain.Edge{
 		RepoID: "repoC", SrcID: reader.ID,
-		Kind: storage.EdgeReadsFrom, DstName: "db:orders",
+		Kind: store.EdgeReadsFrom, DstName: "db:orders",
 	})
 
 	if err := NewLinker(st).Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
-	got := edgeByID(t, st, storage.EdgeReadsFrom, readEdge.ID)
+	got := edgeByID(t, st, store.EdgeReadsFrom, readEdge.ID)
 	if got.DstID != table.ID || got.DstRepoID != "repoB" {
 		t.Fatalf("reads_from resolved to %s@%s, want the table %s@repoB",
 			got.DstID, got.DstRepoID, table.ID)
@@ -725,18 +726,18 @@ func TestTraceTableHopKeepsWrittenColumn(t *testing.T) {
 	reader := storeFunc(t, st, "r1", "LoadTotals", "(id string)")
 	other := storeFunc(t, st, "r1", "Report", "(amount int)")
 
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: writer.ID, DstID: table.ID, DstRepoID: "r1",
-		Kind: storage.EdgeWritesTo, DstName: "db:orders",
+		Kind: store.EdgeWritesTo, DstName: "db:orders",
 		Meta: writeMeta(t, "user_id", "userID"),
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: reader.ID, DstID: table.ID, DstRepoID: "r1",
-		Kind: storage.EdgeReadsFrom, DstName: "db:orders",
+		Kind: store.EdgeReadsFrom, DstName: "db:orders",
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: reader.ID, DstID: other.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "Report", Meta: callMeta(t, "row.Amount"),
+		Kind: store.EdgeCall, DstName: "Report", Meta: callMeta(t, "row.Amount"),
 	})
 
 	res, err := New(st).Trace(ctx, &TraceRequest{RepoID: "r1", Symbol: "CreateOrder", Param: "userID"})
@@ -759,14 +760,14 @@ func TestTraceTableReaderHopsAreOnePerUnit(t *testing.T) {
 	table := storeTable(t, st, "r1", "orders")
 	reader := storeFunc(t, st, "r1", "LoadOrder", "(id string)")
 	for j := 0; j < 3; j++ {
-		storeEdge(t, st, &storage.Edge{
+		storeEdge(t, st, &domain.Edge{
 			RepoID: "r1", SrcID: reader.ID, DstID: table.ID, DstRepoID: "r1",
-			Kind: storage.EdgeReadsFrom, DstName: "db:orders", Line: j + 1,
+			Kind: store.EdgeReadsFrom, DstName: "db:orders", Line: j + 1,
 		})
 	}
 
 	g := New(st)
-	tr := &tracer{g: g, ctx: ctx, ld: newLoader(g), edges: map[string][]*storage.Edge{}}
+	tr := &tracer{g: g, ctx: ctx, ld: newLoader(g), edges: map[string][]*domain.Edge{}}
 	hops := tr.expand(table, []string{"user_id"})
 	if len(hops) != 1 {
 		t.Fatalf("hops out of the table = %d, want 1 per reading unit", len(hops))
@@ -790,9 +791,9 @@ func TestTraceTableWithManyReadersStaysBounded(t *testing.T) {
 	const readers = 80
 	writer := storeFunc(t, st, "r1", "CreateOrder", "(userID string)")
 	table := storeTable(t, st, "r1", "orders")
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: writer.ID, DstID: table.ID, DstRepoID: "r1",
-		Kind: storage.EdgeWritesTo, DstName: "db:orders",
+		Kind: store.EdgeWritesTo, DstName: "db:orders",
 		Meta: writeMeta(t, "user_id", "userID"),
 	})
 	for i := 0; i < readers; i++ {
@@ -802,16 +803,16 @@ func TestTraceTableWithManyReadersStaysBounded(t *testing.T) {
 			reads = 3 // one unit, several SELECTs on the same table
 		}
 		for j := 0; j < reads; j++ {
-			storeEdge(t, st, &storage.Edge{
+			storeEdge(t, st, &domain.Edge{
 				RepoID: "r1", SrcID: r.ID, DstID: table.ID, DstRepoID: "r1",
-				Kind: storage.EdgeReadsFrom, DstName: "db:orders", Line: j + 1,
+				Kind: store.EdgeReadsFrom, DstName: "db:orders", Line: j + 1,
 			})
 		}
 		// Every reader writes the value back: the cycle must be cut at the
 		// table rather than re-expanded per reader.
-		storeEdge(t, st, &storage.Edge{
+		storeEdge(t, st, &domain.Edge{
 			RepoID: "r1", SrcID: r.ID, DstID: table.ID, DstRepoID: "r1",
-			Kind: storage.EdgeWritesTo, DstName: "db:orders",
+			Kind: store.EdgeWritesTo, DstName: "db:orders",
 			Meta: writeMeta(t, "user_id", "userID"),
 		})
 	}
@@ -897,16 +898,16 @@ func TestTraceFollowsTransitiveAliasChain(t *testing.T) {
 
 	a := storeFunc(t, st, "r1", "A", "(userID string)")
 	b := storeFunc(t, st, "r1", "B", "(uid string)")
-	meta, err := json.Marshal(&storage.EdgeMeta{
+	meta, err := json.Marshal(&store.EdgeMeta{
 		Args:    []string{"x"},
 		Aliases: map[string]string{"x": "y", "y": "userID"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "r1", SrcID: a.ID, DstID: b.ID, DstRepoID: "r1",
-		Kind: storage.EdgeCall, DstName: "B", Line: 5,
+		Kind: store.EdgeCall, DstName: "B", Line: 5,
 		Meta: string(meta),
 	})
 

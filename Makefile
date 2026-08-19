@@ -122,18 +122,19 @@ lint:
 lint-install:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
-# Regenerates the pgdb package from schema.sql/queries.sql (requires sqlc).
+# Regenerates the sqlc-generated query code for both SQL backends (requires sqlc).
 sqlc:
-	cd internal/storage/postgres && sqlc generate
+	cd internal/store/postgres && sqlc generate
+	cd internal/store/sqlite && sqlc generate
 
 test:
 	go test ./...
 
 test-integration:
-	go test -tags integration -run 'TestBM25AndLocalSource' ./internal/integration/
+	go test -tags integration -run 'TestBM25AndLocalSource' ./internal/inttest/
 
 test-integration-all:
-	go test ./internal/integration/ -v
+	go test ./internal/inttest/ -v
 
 # The whole product, from outside: builds bin-for-bin what a release ships,
 # starts the server on a fixture estate, and reads the answers back through
@@ -162,7 +163,7 @@ test-postgres:
 		docker stop $(PG_CONTAINER) >/dev/null 2>&1 || true; \
 		exit 1; \
 	fi
-	@RAGOTA_TEST_POSTGRES_DSN="$(PG_DSN)" go test ./internal/storage/postgres/ -v; \
+	@RAGOTA_TEST_POSTGRES_DSN="$(PG_DSN)" go test ./internal/store/postgres/ -v; \
 	status=$$?; \
 	docker stop $(PG_CONTAINER) >/dev/null 2>&1 || true; \
 	exit $$status
@@ -190,7 +191,7 @@ test-integration-postgres:
 		exit 1; \
 	fi
 	@RAGOTA_TEST_STORAGE=postgres RAGOTA_TEST_POSTGRES_DSN="$(PG_E2E_DSN)" \
-		go test ./internal/integration/ ./internal/storage/postgres/ -count=1; \
+		go test ./internal/inttest/ ./internal/store/postgres/ -count=1; \
 	status=$$?; \
 	docker stop $(PG_E2E_CONTAINER) >/dev/null 2>&1 || true; \
 	exit $$status
@@ -212,7 +213,7 @@ test-qdrant:
 		docker stop $(QDRANT_CONTAINER) >/dev/null 2>&1 || true; \
 		exit 1; \
 	fi
-	@RAGOTA_TEST_QDRANT_URL="$(QDRANT_URL)" go test ./internal/storage/qdrant/ -count=1 -v; \
+	@RAGOTA_TEST_QDRANT_URL="$(QDRANT_URL)" go test ./internal/store/qdrant/ -count=1 -v; \
 	status=$$?; \
 	docker stop $(QDRANT_CONTAINER) >/dev/null 2>&1 || true; \
 	exit $$status
@@ -255,7 +256,7 @@ test-integration-lsp: lsp-up
 		echo "port $$p ready"; \
 	done
 	@RAGOTA_TEST_LSP=1 RAGOTA_LSP_HOST_ROOT=$(PWD) \
-		go test ./internal/integration/ -run TestLSP -v -count=1 -timeout 20m; \
+		go test ./internal/inttest/ -run TestLSP -v -count=1 -timeout 20m; \
 	status=$$?; \
 	$(MAKE) lsp-down; \
 	exit $$status

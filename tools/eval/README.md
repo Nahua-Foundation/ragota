@@ -354,7 +354,7 @@ nothing, and that is now checkable rather than arguable.
 ## Current baseline
 
 Measured on 2026-08-12 on an Apple-silicon laptop, binary
-`ragota dev (b76eb21) darwin/arm64 go1.26.5` built from `cmd/server` on
+`ragota dev (b76eb21) darwin/arm64 go1.26.5` built from `cmd/ragota` on
 `feat/graph-search-and-vector-eval` — the first run with the zapx chunk-table
 fix and the graph-backed callers intent in the binary.
 
@@ -724,7 +724,7 @@ function of the content and nothing else. Four different batchings of the same
 600 documents report term counts that disagree before compaction — 2059, 2318,
 2297 and 2621 on one run, and different numbers on the next, which is the bug
 stated as a measurement — and exactly 2059 with identical per-chunk scores
-after (`internal/indexing/bm25/compact_test.go`). Deleting a repository compacts
+after (`internal/index/bm25/compact_test.go`). Deleting a repository compacts
 too: its documents stop counting the moment they are removed, but the words
 they contributed stay in the term dictionary until the segments holding them
 are rewritten.
@@ -807,9 +807,9 @@ run B   hsqldb 5571   mysql 5576   Visit.java 7018   -> rank 3
 Identical row counts, identical rows, different ids. `ORDER BY ..., id` is
 stable within one database and says nothing across two.
 
-**The fix** is that no ordering ends on a row id. `sqlutil.UnitTieBreak` ends
+**The fix** is that no ordering ends on a row id. `storage.UnitTieBreak` ends
 the unit ranking on where a unit is — repository, path, position in the file,
-then kind, name and qualified name — and `sqlutil.EdgeOrder` does the same for
+then kind, name and qualified name — and `storage.EdgeOrder` does the same for
 edges, which mattered more than it looks: the promoters read the first 50 edges
 of a contract key and the first 2000 client-side edges of a repository, so
 insertion order chose the *set* that reached ranking and not merely its
@@ -850,7 +850,7 @@ language terms in segments merged across repositories. The visible overflow was
 the rare case; most affected terms silently return wrong results. The fix
 shipped upstream in zapx v17.1.9, which go.mod now requires directly (an
 interim local patch under `third_party/zapx-v17` carried the same fix until
-then); the regression tests live in `internal/zapverify`, and `tools/zapcheck`
+then); the regression tests live in `tools/zapcheck/zapverify`, and `tools/zapcheck`
 verifies an index on disk. Indexes written before the fix remain corrupt and need a forced
 reindex; a clean baseline should be re-measured after rebuilding them, since
 "the run above is clean" only means the queries asked did not cross a poisoned
@@ -890,7 +890,7 @@ With one repository per question the second is a relabelling, and it is: the
 80 original questions score identically on every field — rank, span, MRR,
 nDCG, recall at every k, and the returned file list itself — before and after.
 
-Measured on 2026-08-13, binary built from `cmd/server` at `c882882`, the same
+Measured on 2026-08-13, binary built from `cmd/ragota` at `c882882`, the same
 configuration as the baseline above (AST + BM25 over SQLite, no vector index,
 no reranker, no assistant), 12 repositories indexed in 943 s, 0 request
 errors, median `/search` 8 ms:

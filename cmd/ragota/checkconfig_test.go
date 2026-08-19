@@ -64,7 +64,7 @@ func TestDependencyProbes_ReportsReachability(t *testing.T) {
 		byName[p.name] = p
 	}
 
-	if p, ok := byName["storage.qdrant.url"]; !ok || p.err != nil {
+	if p, ok := byName["store.qdrant.url"]; !ok || p.err != nil {
 		t.Errorf("qdrant probe = %+v, want a successful probe", p)
 	}
 	if p, ok := byName["lsp.servers.go"]; !ok || p.err != nil {

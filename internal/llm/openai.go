@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/httpx"
+	"github.com/Nahua-Foundation/ragota/pkg/httpx"
 )
 
 // normalizeOpenAIBase strips a trailing slash and a trailing "/v1" from a

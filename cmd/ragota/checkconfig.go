@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/httpx"
 	"github.com/Nahua-Foundation/ragota/internal/llm"
+	"github.com/Nahua-Foundation/ragota/pkg/httpx"
 )
 
 // probeTimeout bounds one reachability check. It is short on purpose:
@@ -87,7 +87,7 @@ func dependencyProbes(cfg *config.Config) []probe {
 	}
 
 	if cfg.Storage.Qdrant != nil {
-		add("storage.qdrant.url", cfg.Storage.Qdrant.URL)
+		add("store.qdrant.url", cfg.Storage.Qdrant.URL)
 	}
 	if cfg.Search != nil && cfg.Search.Rerank != nil && cfg.Search.Rerank.Enabled {
 		add("search.rerank.base_url", cfg.Search.Rerank.BaseURL)

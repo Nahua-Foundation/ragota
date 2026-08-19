@@ -5,21 +5,22 @@ import (
 	"testing"
 
 	"github.com/Nahua-Foundation/ragota/internal/contract"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
-	"github.com/Nahua-Foundation/ragota/internal/storage/sqlite"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
+	"github.com/Nahua-Foundation/ragota/internal/store/sqlite"
 )
 
-func storeService(t *testing.T, st *sqlite.SQLite, repoID, name, root string) *storage.ASTUnit {
+func storeService(t *testing.T, st *sqlite.SQLite, repoID, name, root string) *domain.ASTUnit {
 	t.Helper()
-	return storeUnit(t, st, &storage.ASTUnit{
-		RepoID: repoID, FilePath: root, Kind: storage.KindService, Name: name,
-		Qualified: name, Meta: storage.EncodeUnitMeta(&storage.UnitMeta{Root: root, DetectedBy: "test"}),
+	return storeUnit(t, st, &domain.ASTUnit{
+		RepoID: repoID, FilePath: root, Kind: store.KindService, Name: name,
+		Qualified: name, Meta: store.EncodeUnitMeta(&store.UnitMeta{Root: root, DetectedBy: "test"}),
 	})
 }
 
-func storeFuncAt(t *testing.T, st *sqlite.SQLite, repoID, name, filePath string) *storage.ASTUnit {
+func storeFuncAt(t *testing.T, st *sqlite.SQLite, repoID, name, filePath string) *domain.ASTUnit {
 	t.Helper()
-	return storeUnit(t, st, &storage.ASTUnit{
+	return storeUnit(t, st, &domain.ASTUnit{
 		RepoID: repoID, FilePath: filePath, Language: "go",
 		Kind: "function", Name: name, Qualified: "pkg." + name,
 	})
@@ -37,28 +38,28 @@ func TestServicesGraphPicksConfidentImplementation(t *testing.T) {
 	storeService(t, st, "repoB", "orders", "orders")
 
 	caller := storeFuncAt(t, st, "repoA", "PlaceOrder", "gateway/main.go")
-	rpcMethod := storeUnit(t, st, &storage.ASTUnit{
+	rpcMethod := storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "repoB", FilePath: "proto/orders.proto", Language: "proto",
-		Kind: storage.KindRPCMethod, Name: "CreateOrder",
+		Kind: store.KindRPCMethod, Name: "CreateOrder",
 		Qualified: "grpc:orders.OrderService/CreateOrder",
 	})
 	guess := storeFuncAt(t, st, "repoB", "CreateOrder", "legacy/server.go")
 	real := storeFuncAt(t, st, "repoB", "CreateOrder", "orders/server.go")
 
 	// The weak guess is stored first, so it also has the lower edge id.
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoB", SrcID: guess.ID, DstID: rpcMethod.ID, DstRepoID: "repoB",
-		Kind: storage.EdgeImplementsRPC, DstName: rpcMethod.Qualified,
+		Kind: store.EdgeImplementsRPC, DstName: rpcMethod.Qualified,
 		Confidence: contract.ConfWeak,
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoB", SrcID: real.ID, DstID: rpcMethod.ID, DstRepoID: "repoB",
-		Kind: storage.EdgeImplementsRPC, DstName: rpcMethod.Qualified,
+		Kind: store.EdgeImplementsRPC, DstName: rpcMethod.Qualified,
 		Confidence: contract.ConfExact,
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: caller.ID, DstID: rpcMethod.ID, DstRepoID: "repoB",
-		Kind: storage.EdgeRPCCall, DstName: rpcMethod.Qualified, Confidence: contract.ConfExact,
+		Kind: store.EdgeRPCCall, DstName: rpcMethod.Qualified, Confidence: contract.ConfExact,
 	})
 
 	_, links, err := New(st).ServicesGraph(ctx)
@@ -83,14 +84,14 @@ func TestServicesGraphMergesRouteKeyCase(t *testing.T) {
 	storeService(t, st, "repoB", "users", "users")
 
 	caller := storeFuncAt(t, st, "repoA", "FetchUsers", "gateway/main.go")
-	route := storeUnit(t, st, &storage.ASTUnit{
+	route := storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "repoB", FilePath: "users/routes.go", Language: "go",
-		Kind: storage.KindHTTPRoute, Name: "GET /api/users", Qualified: "http:GET /api/users",
+		Kind: store.KindHTTPRoute, Name: "GET /api/users", Qualified: "http:GET /api/users",
 	})
 	for _, key := range []string{"http:GET /api/users", "http:GET /API/Users"} {
-		storeEdge(t, st, &storage.Edge{
+		storeEdge(t, st, &domain.Edge{
 			RepoID: "repoA", SrcID: caller.ID, DstID: route.ID, DstRepoID: "repoB",
-			Kind: storage.EdgeHTTPCall, DstName: key, Confidence: contract.ConfExact,
+			Kind: store.EdgeHTTPCall, DstName: key, Confidence: contract.ConfExact,
 		})
 	}
 

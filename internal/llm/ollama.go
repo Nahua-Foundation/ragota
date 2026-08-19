@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
-	"github.com/Nahua-Foundation/ragota/internal/httpx"
+	"github.com/Nahua-Foundation/ragota/pkg/httpx"
 )
 
 // knownDims maps model names to their embedding dimensions.

@@ -6,7 +6,8 @@ import (
 	"testing"
 
 	"github.com/Nahua-Foundation/ragota/internal/contract"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
 func TestLinkerResolvesRPCCallAcrossRepos(t *testing.T) {
@@ -14,21 +15,21 @@ func TestLinkerResolvesRPCCallAcrossRepos(t *testing.T) {
 	ctx := context.Background()
 
 	caller := storeFunc(t, st, "repoA", "PlaceOrder", "(userID string)")
-	rpcMethod := storeUnit(t, st, &storage.ASTUnit{
+	rpcMethod := storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "repoB", FilePath: "proto/orders.proto", Language: "proto",
-		Kind: storage.KindRPCMethod, Name: "CreateOrder",
+		Kind: store.KindRPCMethod, Name: "CreateOrder",
 		Qualified: "grpc:orders.OrderService/CreateOrder",
 	})
-	edge := storeEdge(t, st, &storage.Edge{
+	edge := storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: caller.ID,
-		Kind: storage.EdgeRPCCall, DstName: "grpc:OrderService/CreateOrder",
+		Kind: store.EdgeRPCCall, DstName: "grpc:OrderService/CreateOrder",
 	})
 
 	if err := NewLinker(st).Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
 
-	got := edgeByID(t, st, storage.EdgeRPCCall, edge.ID)
+	got := edgeByID(t, st, store.EdgeRPCCall, edge.ID)
 	if got.DstID != rpcMethod.ID {
 		t.Errorf("DstID = %q, want %q", got.DstID, rpcMethod.ID)
 	}
@@ -46,20 +47,20 @@ func TestLinkerDerivesKafkaFlow(t *testing.T) {
 
 	producer := storeFunc(t, st, "repoA", "PublishOrder", "(order Order)")
 	consumer := storeFunc(t, st, "repoB", "HandleOrder", "(msg Message)")
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: producer.ID,
-		Kind: storage.EdgeProduces, DstName: "topic:orders.created",
+		Kind: store.EdgeProduces, DstName: "topic:orders.created",
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoB", SrcID: consumer.ID,
-		Kind: storage.EdgeConsumes, DstName: "topic:orders.created",
+		Kind: store.EdgeConsumes, DstName: "topic:orders.created",
 	})
 
 	if err := NewLinker(st).Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
 
-	flows, err := st.GetEdges(ctx, storage.QueryOpts{Kind: storage.EdgeKafkaFlow})
+	flows, err := st.GetEdges(ctx, domain.QueryOpts{Kind: store.EdgeKafkaFlow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestLinkerDerivesKafkaFlow(t *testing.T) {
 	if err := NewLinker(st).Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
-	flows, err = st.GetEdges(ctx, storage.QueryOpts{Kind: storage.EdgeKafkaFlow})
+	flows, err = st.GetEdges(ctx, domain.QueryOpts{Kind: store.EdgeKafkaFlow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,25 +97,25 @@ func TestLinkerResolvesConfigTopicRef(t *testing.T) {
 
 	producer := storeFunc(t, st, "repoA", "PublishOrder", "(order Order)")
 	consumer := storeFunc(t, st, "repoB", "HandleOrder", "(msg Message)")
-	storeUnit(t, st, &storage.ASTUnit{
+	storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "repoA", FilePath: ".env", Language: "env",
-		Kind: storage.KindConfigKey, Name: "ORDERS_TOPIC",
+		Kind: store.KindConfigKey, Name: "ORDERS_TOPIC",
 		Qualified: "config:ORDERS_TOPIC", Signature: "orders.created",
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: producer.ID,
-		Kind: storage.EdgeProduces, DstName: "topic:${ORDERS_TOPIC}",
+		Kind: store.EdgeProduces, DstName: "topic:${ORDERS_TOPIC}",
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoB", SrcID: consumer.ID,
-		Kind: storage.EdgeConsumes, DstName: "topic:orders.created",
+		Kind: store.EdgeConsumes, DstName: "topic:orders.created",
 	})
 
 	if err := NewLinker(st).Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
 
-	got := edgeBySrc(t, st, storage.EdgeProduces, producer.ID)
+	got := edgeBySrc(t, st, store.EdgeProduces, producer.ID)
 	if got.DstName != "topic:orders.created" {
 		t.Errorf("produces DstName = %q, want topic:orders.created", got.DstName)
 	}
@@ -122,7 +123,7 @@ func TestLinkerResolvesConfigTopicRef(t *testing.T) {
 		t.Errorf("produces meta %s = %q, want ORDERS_TOPIC", metaKeyTopicRef, ref)
 	}
 
-	flows, err := st.GetEdges(ctx, storage.QueryOpts{Kind: storage.EdgeKafkaFlow})
+	flows, err := st.GetEdges(ctx, domain.QueryOpts{Kind: store.EdgeKafkaFlow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,31 +150,31 @@ func TestLinkerReresolvesChangedConfigValue(t *testing.T) {
 		if err := st.DeleteASTUnitsByFile(ctx, "repoC", "app.yaml"); err != nil {
 			t.Fatal(err)
 		}
-		storeUnit(t, st, &storage.ASTUnit{
+		storeUnit(t, st, &domain.ASTUnit{
 			RepoID: "repoC", FilePath: "app.yaml", Language: "yaml",
-			Kind: storage.KindConfigKey, Name: "orders-topic",
+			Kind: store.KindConfigKey, Name: "orders-topic",
 			Qualified: "config:kafka.orders-topic", Signature: value,
 		})
 	}
 	storeConfigValue("orders.v1")
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: producer.ID,
-		Kind: storage.EdgeProduces, DstName: "topic:${ORDERS_TOPIC}",
+		Kind: store.EdgeProduces, DstName: "topic:${ORDERS_TOPIC}",
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoB", SrcID: oldConsumer.ID,
-		Kind: storage.EdgeConsumes, DstName: "topic:orders.v1",
+		Kind: store.EdgeConsumes, DstName: "topic:orders.v1",
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoB", SrcID: newConsumer.ID,
-		Kind: storage.EdgeConsumes, DstName: "topic:orders.v2",
+		Kind: store.EdgeConsumes, DstName: "topic:orders.v2",
 	})
 
 	l := NewLinker(st)
 	if err := l.Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
-	if got := edgeBySrc(t, st, storage.EdgeProduces, producer.ID); got.DstName != "topic:orders.v1" {
+	if got := edgeBySrc(t, st, store.EdgeProduces, producer.ID); got.DstName != "topic:orders.v1" {
 		t.Fatalf("produces DstName = %q, want topic:orders.v1", got.DstName)
 	}
 
@@ -184,11 +185,11 @@ func TestLinkerReresolvesChangedConfigValue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := edgeBySrc(t, st, storage.EdgeProduces, producer.ID)
+	got := edgeBySrc(t, st, store.EdgeProduces, producer.ID)
 	if got.DstName != "topic:orders.v2" {
 		t.Errorf("produces DstName after config change = %q, want topic:orders.v2", got.DstName)
 	}
-	flows, err := st.GetEdges(ctx, storage.QueryOpts{Kind: storage.EdgeKafkaFlow})
+	flows, err := st.GetEdges(ctx, domain.QueryOpts{Kind: store.EdgeKafkaFlow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,25 +211,25 @@ func TestLinkerRewritesCollidingTopicGroups(t *testing.T) {
 
 	moving := storeFunc(t, st, "repoA", "PublishMoving", "(order Order)")
 	arriving := storeFunc(t, st, "repoA", "PublishArriving", "(order Order)")
-	storeUnit(t, st, &storage.ASTUnit{
+	storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "repoA", FilePath: ".env", Language: "env",
-		Kind: storage.KindConfigKey, Name: "MOVING_TOPIC",
+		Kind: store.KindConfigKey, Name: "MOVING_TOPIC",
 		Qualified: "config:MOVING_TOPIC", Signature: "orders.v2",
 	})
-	storeUnit(t, st, &storage.ASTUnit{
+	storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "repoA", FilePath: ".env", Language: "env",
-		Kind: storage.KindConfigKey, Name: "ARRIVING_TOPIC",
+		Kind: store.KindConfigKey, Name: "ARRIVING_TOPIC",
 		Qualified: "config:ARRIVING_TOPIC", Signature: "orders.v1",
 	})
 	// Already resolved to orders.v1 by an earlier run; its value moved to v2.
-	storeEdge(t, st, &storage.Edge{
-		RepoID: "repoA", SrcID: moving.ID, Kind: storage.EdgeProduces,
+	storeEdge(t, st, &domain.Edge{
+		RepoID: "repoA", SrcID: moving.ID, Kind: store.EdgeProduces,
 		DstName: "topic:orders.v1",
 		Meta:    metaWithField("", metaKeyTopicRef, "MOVING_TOPIC"),
 	})
 	// Resolves for the first time onto the key the edge above is vacating.
-	storeEdge(t, st, &storage.Edge{
-		RepoID: "repoA", SrcID: arriving.ID, Kind: storage.EdgeProduces,
+	storeEdge(t, st, &domain.Edge{
+		RepoID: "repoA", SrcID: arriving.ID, Kind: store.EdgeProduces,
 		DstName: "topic:${ARRIVING_TOPIC}",
 	})
 
@@ -236,10 +237,10 @@ func TestLinkerRewritesCollidingTopicGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := edgeBySrc(t, st, storage.EdgeProduces, moving.ID); got.DstName != "topic:orders.v2" {
+	if got := edgeBySrc(t, st, store.EdgeProduces, moving.ID); got.DstName != "topic:orders.v2" {
 		t.Errorf("moving producer DstName = %q, want topic:orders.v2", got.DstName)
 	}
-	if got := edgeBySrc(t, st, storage.EdgeProduces, arriving.ID); got.DstName != "topic:orders.v1" {
+	if got := edgeBySrc(t, st, store.EdgeProduces, arriving.ID); got.DstName != "topic:orders.v1" {
 		t.Errorf("arriving producer DstName = %q, want topic:orders.v1", got.DstName)
 	}
 }
@@ -252,28 +253,28 @@ func TestLinkerFallsBackToTopicDefault(t *testing.T) {
 
 	producer := storeFunc(t, st, "repoA", "PublishOrder", "(order Order)")
 	consumer := storeFunc(t, st, "repoB", "HandleOrder", "(msg Message)")
-	meta, err := json.Marshal(&storage.EdgeMeta{Topic: "orders.created"})
+	meta, err := json.Marshal(&store.EdgeMeta{Topic: "orders.created"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: producer.ID,
-		Kind: storage.EdgeProduces, DstName: "topic:${orders.topic}", Meta: string(meta),
+		Kind: store.EdgeProduces, DstName: "topic:${orders.topic}", Meta: string(meta),
 	})
-	storeEdge(t, st, &storage.Edge{
+	storeEdge(t, st, &domain.Edge{
 		RepoID: "repoB", SrcID: consumer.ID,
-		Kind: storage.EdgeConsumes, DstName: "topic:orders.created",
+		Kind: store.EdgeConsumes, DstName: "topic:orders.created",
 	})
 
 	if err := NewLinker(st).Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
 
-	got := edgeBySrc(t, st, storage.EdgeProduces, producer.ID)
+	got := edgeBySrc(t, st, store.EdgeProduces, producer.ID)
 	if got.DstName != "topic:orders.created" {
 		t.Errorf("produces DstName = %q, want the meta default topic:orders.created", got.DstName)
 	}
-	flows, err := st.GetEdges(ctx, storage.QueryOpts{Kind: storage.EdgeKafkaFlow})
+	flows, err := st.GetEdges(ctx, domain.QueryOpts{Kind: store.EdgeKafkaFlow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,21 +288,21 @@ func TestLinkerResolvesHTTPCallWithTemplates(t *testing.T) {
 	ctx := context.Background()
 
 	client := storeFunc(t, st, "repoA", "FetchX", "(id string)")
-	route := storeUnit(t, st, &storage.ASTUnit{
+	route := storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "repoB", FilePath: "server/routes.go", Language: "go",
-		Kind: storage.KindHTTPRoute, Name: "POST /api/x/{param}",
+		Kind: store.KindHTTPRoute, Name: "POST /api/x/{param}",
 		Qualified: "http:POST /api/x/{param}",
 	})
-	edge := storeEdge(t, st, &storage.Edge{
+	edge := storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: client.ID,
-		Kind: storage.EdgeHTTPCall, DstName: "http:POST /api/x/{id}",
+		Kind: store.EdgeHTTPCall, DstName: "http:POST /api/x/{id}",
 	})
 
 	if err := NewLinker(st).Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
 
-	got := edgeByID(t, st, storage.EdgeHTTPCall, edge.ID)
+	got := edgeByID(t, st, store.EdgeHTTPCall, edge.ID)
 	if got.DstID != route.ID {
 		t.Errorf("DstID = %q, want route %q", got.DstID, route.ID)
 	}
@@ -318,20 +319,20 @@ func TestLinkerResolvesWritesToTable(t *testing.T) {
 	ctx := context.Background()
 
 	fn := storeFunc(t, st, "repoA", "SaveOrder", "(order Order)")
-	table := storeUnit(t, st, &storage.ASTUnit{
+	table := storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "repoA", FilePath: "migrations/001.sql", Language: "sql",
-		Kind: storage.KindDBTable, Name: "orders", Qualified: "db:orders",
+		Kind: store.KindDBTable, Name: "orders", Qualified: "db:orders",
 	})
-	edge := storeEdge(t, st, &storage.Edge{
+	edge := storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: fn.ID,
-		Kind: storage.EdgeWritesTo, DstName: "db:orders",
+		Kind: store.EdgeWritesTo, DstName: "db:orders",
 	})
 
 	if err := NewLinker(st).Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
 
-	got := edgeByID(t, st, storage.EdgeWritesTo, edge.ID)
+	got := edgeByID(t, st, store.EdgeWritesTo, edge.ID)
 	if got.DstID != table.ID {
 		t.Errorf("DstID = %q, want table %q", got.DstID, table.ID)
 	}
@@ -352,21 +353,21 @@ func TestLinkerJoinsORMWriteToRenamedTable(t *testing.T) {
 	ctx := context.Background()
 
 	fn := storeFunc(t, st, "repoA", "AddItem", "(item CatalogItem)")
-	table := storeUnit(t, st, &storage.ASTUnit{
+	table := storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "repoA", FilePath: "Infrastructure/CatalogItemConfiguration.cs", Language: "csharp",
-		Kind: storage.KindDBTable, Name: "catalog", Qualified: "db:catalog",
+		Kind: store.KindDBTable, Name: "catalog", Qualified: "db:catalog",
 		Signature: "entity:CatalogItem",
 	})
-	edge := storeEdge(t, st, &storage.Edge{
+	edge := storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: fn.ID,
-		Kind: storage.EdgeWritesTo, DstName: "db:catalog_items",
+		Kind: store.EdgeWritesTo, DstName: "db:catalog_items",
 	})
 
 	if err := NewLinker(st).Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
 
-	got := edgeByID(t, st, storage.EdgeWritesTo, edge.ID)
+	got := edgeByID(t, st, store.EdgeWritesTo, edge.ID)
 	if got.DstID != table.ID {
 		t.Errorf("DstID = %q, want table %q", got.DstID, table.ID)
 	}
@@ -385,12 +386,12 @@ func TestLinkerPrefersReceiverForCallEdge(t *testing.T) {
 	ctx := context.Background()
 
 	caller := storeFunc(t, st, "r1", "Handle", "(order Order)")
-	userSave := storeUnit(t, st, &storage.ASTUnit{
+	userSave := storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "r1", FilePath: "src/user_repo.go", Language: "go",
 		Kind: "method", Name: "Save", Qualified: "repo.UserRepo.Save",
 		Signature: "(u User)",
 	})
-	orderSave := storeUnit(t, st, &storage.ASTUnit{
+	orderSave := storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "r1", FilePath: "src/order_repo.go", Language: "go",
 		Kind: "method", Name: "Save", Qualified: "repo.OrderRepo.Save",
 		Signature: "(o Order)",
@@ -399,8 +400,8 @@ func TestLinkerPrefersReceiverForCallEdge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	edge := storeEdge(t, st, &storage.Edge{
-		RepoID: "r1", SrcID: caller.ID, Kind: storage.EdgeCall,
+	edge := storeEdge(t, st, &domain.Edge{
+		RepoID: "r1", SrcID: caller.ID, Kind: store.EdgeCall,
 		DstName: "Save", FilePath: caller.FilePath, Line: 3, Meta: string(meta),
 	})
 
@@ -408,7 +409,7 @@ func TestLinkerPrefersReceiverForCallEdge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := edgeByID(t, st, storage.EdgeCall, edge.ID)
+	got := edgeByID(t, st, store.EdgeCall, edge.ID)
 	if got.DstID != orderSave.ID {
 		t.Errorf("DstID = %q, want OrderRepo.Save (%s), not UserRepo.Save (%s)",
 			got.DstID, orderSave.ID, userSave.ID)
@@ -426,13 +427,13 @@ func TestLinkerNameOnlyCallIsHeuristic(t *testing.T) {
 
 	caller := storeFunc(t, st, "r1", "Handle", "(order Order)")
 	for _, qual := range []string{"repo.UserRepo.Save", "repo.OrderRepo.Save"} {
-		storeUnit(t, st, &storage.ASTUnit{
+		storeUnit(t, st, &domain.ASTUnit{
 			RepoID: "r1", FilePath: "src/" + qual + ".go", Language: "go",
 			Kind: "method", Name: "Save", Qualified: qual,
 		})
 	}
-	edge := storeEdge(t, st, &storage.Edge{
-		RepoID: "r1", SrcID: caller.ID, Kind: storage.EdgeCall,
+	edge := storeEdge(t, st, &domain.Edge{
+		RepoID: "r1", SrcID: caller.ID, Kind: store.EdgeCall,
 		DstName: "Save", FilePath: caller.FilePath, Line: 3,
 	})
 
@@ -440,7 +441,7 @@ func TestLinkerNameOnlyCallIsHeuristic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := edgeByID(t, st, storage.EdgeCall, edge.ID)
+	got := edgeByID(t, st, store.EdgeCall, edge.ID)
 	if got.Confidence != 1.0*contract.ConfHeuristic {
 		t.Errorf("confidence = %v, want ConfHeuristic for a name-only guess", got.Confidence)
 	}
@@ -453,20 +454,20 @@ func TestLinkerClearsStaleResolution(t *testing.T) {
 	ctx := context.Background()
 
 	client := storeFunc(t, st, "repoA", "FetchX", "(id string)")
-	route := storeUnit(t, st, &storage.ASTUnit{
+	route := storeUnit(t, st, &domain.ASTUnit{
 		RepoID: "repoB", FilePath: "server/routes.go", Language: "go",
-		Kind: storage.KindHTTPRoute, Name: "GET /api/x", Qualified: "http:GET /api/x",
+		Kind: store.KindHTTPRoute, Name: "GET /api/x", Qualified: "http:GET /api/x",
 	})
-	edge := storeEdge(t, st, &storage.Edge{
+	edge := storeEdge(t, st, &domain.Edge{
 		RepoID: "repoA", SrcID: client.ID,
-		Kind: storage.EdgeHTTPCall, DstName: "http:GET /api/x",
+		Kind: store.EdgeHTTPCall, DstName: "http:GET /api/x",
 	})
 
 	l := NewLinker(st)
 	if err := l.Run(ctx, "repoA"); err != nil {
 		t.Fatal(err)
 	}
-	if got := edgeByID(t, st, storage.EdgeHTTPCall, edge.ID); got.DstID != route.ID {
+	if got := edgeByID(t, st, store.EdgeHTTPCall, edge.ID); got.DstID != route.ID {
 		t.Fatalf("DstID = %q, want %q", got.DstID, route.ID)
 	}
 
@@ -477,7 +478,7 @@ func TestLinkerClearsStaleResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := edgeByID(t, st, storage.EdgeHTTPCall, edge.ID)
+	got := edgeByID(t, st, store.EdgeHTTPCall, edge.ID)
 	if got.DstID != "" || got.DstRepoID != "" {
 		t.Errorf("edge dst = %q@%q, want it cleared once the route disappeared", got.DstID, got.DstRepoID)
 	}
@@ -485,9 +486,9 @@ func TestLinkerClearsStaleResolution(t *testing.T) {
 
 // edgeBySrc fetches the single edge of the given kind leaving srcID. Edge ids
 // change whenever the linker rewrites an edge group.
-func edgeBySrc(t *testing.T, st storage.Storage, kind, srcID string) *storage.Edge {
+func edgeBySrc(t *testing.T, st store.Storage, kind, srcID string) *domain.Edge {
 	t.Helper()
-	edges, err := st.GetEdges(context.Background(), storage.QueryOpts{Kind: kind, SrcID: srcID})
+	edges, err := st.GetEdges(context.Background(), domain.QueryOpts{Kind: kind, SrcID: srcID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,9 +499,9 @@ func edgeBySrc(t *testing.T, st storage.Storage, kind, srcID string) *storage.Ed
 }
 
 // edgeByID fetches an edge of the given kind by its ID.
-func edgeByID(t *testing.T, st storage.Storage, kind, id string) *storage.Edge {
+func edgeByID(t *testing.T, st store.Storage, kind, id string) *domain.Edge {
 	t.Helper()
-	edges, err := st.GetEdges(context.Background(), storage.QueryOpts{Kind: kind})
+	edges, err := st.GetEdges(context.Background(), domain.QueryOpts{Kind: kind})
 	if err != nil {
 		t.Fatal(err)
 	}

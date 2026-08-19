@@ -3,7 +3,7 @@
 // It exists so that a program outside this module — an MCP server, a CLI, an
 // evaluation harness — does not have to hand-roll requests and re-declare the
 // response structs. The wire types in this package are the ones the server
-// serves: internal/api aliases them rather than keeping its own copies, so
+// serves: internal/server/api aliases them rather than keeping its own copies, so
 // there is one definition of each and no way for the two sides to drift.
 //
 // # Getting started
@@ -38,7 +38,7 @@
 // # Errors
 //
 // Every non-2xx answer becomes an [Error] carrying the server's machine-readable
-// code and the HTTP status. Branch on the code with errors.Is:
+// code and the HTTP progress. Branch on the code with errors.Is:
 //
 //	res, err := c.Search(ctx, req)
 //	switch {

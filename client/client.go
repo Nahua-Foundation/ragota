@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nahua-Foundation/ragota/internal/httpx"
+	"github.com/Nahua-Foundation/ragota/pkg/httpx"
 )
 
 // apiPrefix is where the versioned routes live. /health, /ready and /metrics

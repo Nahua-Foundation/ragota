@@ -274,7 +274,7 @@ func renderChain(b *builder, steps []*client.TraceStep) {
 func Services(res *client.ServicesResponse) string {
 	var b builder
 	if len(res.Services) == 0 {
-		return "No services detected. Nothing is indexed, or no repository declares one — see ragota_status."
+		return "No services detected. Nothing is indexed, or no repository declares one — see ragota_progress."
 	}
 
 	b.line("%d services, %d links.", len(res.Services), len(res.Links))

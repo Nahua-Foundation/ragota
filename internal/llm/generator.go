@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Nahua-Foundation/ragota/internal/httpx"
+	"github.com/Nahua-Foundation/ragota/pkg/httpx"
 )
 
 // Generator produces text completions (used for code summaries).

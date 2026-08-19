@@ -12,9 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Nahua-Foundation/ragota/internal/indexing"
+	"github.com/Nahua-Foundation/ragota/internal/index"
 	"github.com/Nahua-Foundation/ragota/internal/llm"
-	"github.com/Nahua-Foundation/ragota/internal/obs"
 )
 
 // FusionMethod is the method for fusing results from multiple indexers.
@@ -25,12 +24,12 @@ const (
 	FusionRRF FusionMethod = "rrf"
 )
 
-// Config is the configuration for the search service.
+// Config is the configuration for the search app.
 type Config struct {
 	// RRF constant k (default 60).
 	RRFK float64
 	// Weights for each indexer type.
-	Weights map[indexing.IndexType]float32
+	Weights map[index.IndexType]float32
 }
 
 // DefaultConfig returns default search configuration.
@@ -47,15 +46,15 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		RRFK: 60.0,
-		Weights: map[indexing.IndexType]float32{
-			indexing.IndexTypeVector: 1.0,
-			indexing.IndexTypeBM25:   1.0,
+		Weights: map[index.IndexType]float32{
+			index.IndexTypeVector: 1.0,
+			index.IndexTypeBM25:   1.0,
 		},
 	}
 }
 
 // getWeight returns the weight for an indexer type; defaults to 1.0 if unset.
-func (s *Service) getWeight(typ indexing.IndexType) float32 {
+func (s *Service) getWeight(typ index.IndexType) float32 {
 	if w, ok := s.config.Weights[typ]; ok {
 		return w
 	}
@@ -69,11 +68,11 @@ const defaultRerankTopN = 50
 // searchOrder fixes the order in which searchers are queried and fused, so
 // that fusion (which merges overlapping regions on a first-seen basis) is
 // deterministic regardless of goroutine scheduling.
-var searchOrder = []indexing.IndexType{indexing.IndexTypeVector, indexing.IndexTypeBM25}
+var searchOrder = []index.IndexType{index.IndexTypeVector, index.IndexTypeBM25}
 
-// Service is the search service.
+// Service is the search app.
 type Service struct {
-	searchers  map[indexing.IndexType]indexing.Searcher
+	searchers  map[index.IndexType]index.Searcher
 	config     *Config
 	reranker   llm.Reranker // optional rerank stage over top results
 	rerankTopN int
@@ -89,8 +88,8 @@ func (s *Service) SetReranker(r llm.Reranker, topN int) {
 	s.rerankTopN = topN
 }
 
-// New creates a new search service.
-func New(searchers map[indexing.IndexType]indexing.Searcher, cfg *Config) *Service {
+// New creates a new search app.
+func New(searchers map[index.IndexType]index.Searcher, cfg *Config) *Service {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
@@ -115,7 +114,7 @@ func (s *Service) topN() int {
 // candidates to fill the rerank window. Retrieving only the caller's limit
 // would make top_n meaningless: the reranker could then merely reorder the
 // documents that were going to be returned anyway.
-func (s *Service) candidateQuery(query *indexing.SearchQuery) *indexing.SearchQuery {
+func (s *Service) candidateQuery(query *index.SearchQuery) *index.SearchQuery {
 	n := s.topN()
 	if n <= query.Limit {
 		return query
@@ -126,12 +125,12 @@ func (s *Service) candidateQuery(query *indexing.SearchQuery) *indexing.SearchQu
 }
 
 // Search performs a search query with optional fusion.
-func (s *Service) Search(ctx context.Context, query *indexing.SearchQuery, fusion bool) (*indexing.SearchResult, error) {
+func (s *Service) Search(ctx context.Context, query *index.SearchQuery, fusion bool) (*index.SearchResult, error) {
 	start := time.Now()
 
 	// If fusion is disabled, use vector only
 	if !fusion {
-		return s.singleSearch(ctx, indexing.IndexTypeVector, query)
+		return s.singleSearch(ctx, index.IndexTypeVector, query)
 	}
 
 	hits, meta, err := s.Candidates(ctx, query)
@@ -140,7 +139,7 @@ func (s *Service) Search(ctx context.Context, query *indexing.SearchQuery, fusio
 	}
 	hits = s.Rank(ctx, query.Query, hits, meta, query.Limit)
 
-	return &indexing.SearchResult{
+	return &index.SearchResult{
 		Hits:     hits,
 		Total:    len(hits),
 		Query:    query.Query,
@@ -155,14 +154,14 @@ func (s *Service) Search(ctx context.Context, query *indexing.SearchQuery, fusio
 // document describes — merges them into this list and then calls Rank, so
 // that its candidates are judged by the same rank stage as everything else
 // instead of being stapled to the front of a finished result.
-func (s *Service) Candidates(ctx context.Context, query *indexing.SearchQuery) ([]*indexing.Hit, map[string]interface{}, error) {
+func (s *Service) Candidates(ctx context.Context, query *index.SearchQuery) ([]*index.Hit, map[string]interface{}, error) {
 	results, failures := s.collectResults(ctx, query)
 	meta := map[string]interface{}{}
 	if len(results) == 0 {
 		if len(failures) > 0 {
 			return nil, meta, fmt.Errorf("all searchers failed: %w", primaryFailure(failures))
 		}
-		return []*indexing.Hit{}, meta, nil
+		return []*index.Hit{}, meta, nil
 	}
 	hits := s.fuseRRF(results)
 	addFailureMetadata(meta, results, failures)
@@ -172,10 +171,10 @@ func (s *Service) Candidates(ctx context.Context, query *indexing.SearchQuery) (
 // CandidatesFrom is Candidates for a single searcher (the keyword-only and
 // semantic-only modes). An unknown or unconfigured searcher yields no
 // candidates rather than an error, matching singleSearch.
-func (s *Service) CandidatesFrom(ctx context.Context, typ indexing.IndexType, query *indexing.SearchQuery) ([]*indexing.Hit, map[string]interface{}, error) {
+func (s *Service) CandidatesFrom(ctx context.Context, typ index.IndexType, query *index.SearchQuery) ([]*index.Hit, map[string]interface{}, error) {
 	srch, ok := s.searchers[typ]
 	if !ok {
-		return []*indexing.Hit{}, map[string]interface{}{}, nil
+		return []*index.Hit{}, map[string]interface{}{}, nil
 	}
 	result, err := srch.Search(ctx, s.candidateQuery(query))
 	if err != nil {
@@ -194,19 +193,19 @@ func (s *Service) CandidatesFrom(ctx context.Context, typ indexing.IndexType, qu
 
 // Rank is the ranking half of Search: rerank the leading candidates and cut
 // the list down to limit.
-func (s *Service) Rank(ctx context.Context, query string, hits []*indexing.Hit, meta map[string]interface{}, limit int) []*indexing.Hit {
+func (s *Service) Rank(ctx context.Context, query string, hits []*index.Hit, meta map[string]interface{}, limit int) []*index.Hit {
 	return truncate(s.applyRerank(ctx, query, hits, meta), limit)
 }
 
 // singleSearch runs one searcher, reranks the leading candidates and cuts the
 // result down to the caller's limit.
-func (s *Service) singleSearch(ctx context.Context, typ indexing.IndexType, query *indexing.SearchQuery) (*indexing.SearchResult, error) {
+func (s *Service) singleSearch(ctx context.Context, typ index.IndexType, query *index.SearchQuery) (*index.SearchResult, error) {
 	start := time.Now()
 
 	srch, ok := s.searchers[typ]
 	if !ok {
-		return &indexing.SearchResult{
-			Hits:     []*indexing.Hit{},
+		return &index.SearchResult{
+			Hits:     []*index.Hit{},
 			Total:    0,
 			Query:    query.Query,
 			Duration: time.Since(start),
@@ -233,7 +232,7 @@ func (s *Service) singleSearch(ctx context.Context, typ indexing.IndexType, quer
 }
 
 // truncate cuts hits down to limit (limit <= 0 means "no limit").
-func truncate(hits []*indexing.Hit, limit int) []*indexing.Hit {
+func truncate(hits []*index.Hit, limit int) []*index.Hit {
 	if limit > 0 && len(hits) > limit {
 		return hits[:limit]
 	}
@@ -242,7 +241,7 @@ func truncate(hits []*indexing.Hit, limit int) []*indexing.Hit {
 
 // searcherFailure records a searcher that could not answer the query.
 type searcherFailure struct {
-	source indexing.IndexType
+	source index.IndexType
 	err    error
 }
 
@@ -252,7 +251,7 @@ type searcherFailure struct {
 // a searcher that failed for some ordinary reason was collected first.
 func primaryFailure(failures []searcherFailure) error {
 	for _, f := range failures {
-		if errors.Is(f.err, indexing.ErrIndexDamaged) {
+		if errors.Is(f.err, index.ErrIndexDamaged) {
 			return f.err
 		}
 	}
@@ -262,11 +261,11 @@ func primaryFailure(failures []searcherFailure) error {
 // collectResults queries all available searchers concurrently. A searcher that
 // fails is reported separately instead of being silently dropped; the caller
 // decides whether the remaining ones are enough.
-func (s *Service) collectResults(ctx context.Context, query *indexing.SearchQuery) ([]indexedResult, []searcherFailure) {
+func (s *Service) collectResults(ctx context.Context, query *index.SearchQuery) ([]indexedResult, []searcherFailure) {
 	candidates := s.candidateQuery(query)
 
 	type outcome struct {
-		result *indexing.SearchResult
+		result *index.SearchResult
 		err    error
 	}
 	outcomes := make([]outcome, len(searchOrder))
@@ -278,7 +277,7 @@ func (s *Service) collectResults(ctx context.Context, query *indexing.SearchQuer
 			continue
 		}
 		wg.Add(1)
-		go func(i int, srch indexing.Searcher) {
+		go func(i int, srch index.Searcher) {
 			defer wg.Done()
 			res, err := srch.Search(ctx, candidates)
 			outcomes[i] = outcome{result: res, err: err}
@@ -296,12 +295,12 @@ func (s *Service) collectResults(ctx context.Context, query *indexing.SearchQuer
 		switch {
 		case out.err != nil:
 			slog.Warn("searcher failed; hybrid search degraded", "searcher", typ, "error", out.err)
-			obs.Inc("ragota_search_searcher_failures_total", 1)
+			searcherFailures.Inc()
 			failures = append(failures, searcherFailure{source: typ, err: out.err})
 		case out.result == nil:
 			err := fmt.Errorf("searcher returned nil result")
 			slog.Warn("searcher failed; hybrid search degraded", "searcher", typ, "error", err)
-			obs.Inc("ragota_search_searcher_failures_total", 1)
+			searcherFailures.Inc()
 			failures = append(failures, searcherFailure{source: typ, err: err})
 		default:
 			settleSearcherOrder(out.result)
@@ -336,10 +335,10 @@ func addFailureMetadata(meta map[string]interface{}, results []indexedResult, fa
 // cluster is one fused result: a representative hit plus the accumulated RRF
 // score and the reasons of every hit merged into it.
 type cluster struct {
-	hit      *indexing.Hit
+	hit      *index.Hit
 	score    float32
 	bestRank int
-	sources  map[indexing.IndexType]bool
+	sources  map[index.IndexType]bool
 	reasons  []string
 }
 
@@ -349,7 +348,7 @@ type cluster struct {
 // same code competes with itself and never earns cross-retriever agreement.
 // Only hits from *different* searchers are merged: overlapping windows from
 // one searcher are separate candidates by construction.
-func (s *Service) fuseRRF(results []indexedResult) []*indexing.Hit {
+func (s *Service) fuseRRF(results []indexedResult) []*index.Hit {
 	k := s.config.RRFK
 	if k == 0 {
 		k = 60.0
@@ -384,7 +383,7 @@ func (s *Service) fuseRRF(results []indexedResult) []*indexing.Hit {
 				c = &cluster{
 					hit:      hit,
 					bestRank: rank,
-					sources:  map[indexing.IndexType]bool{},
+					sources:  map[index.IndexType]bool{},
 				}
 				byKey[key] = c
 				byFile[fileKey] = append(byFile[fileKey], c)
@@ -401,7 +400,7 @@ func (s *Service) fuseRRF(results []indexedResult) []*indexing.Hit {
 		}
 	}
 
-	hits := make([]*indexing.Hit, 0, len(order))
+	hits := make([]*index.Hit, 0, len(order))
 	for _, c := range order {
 		hitCopy := *c.hit
 		hitCopy.Score = c.score
@@ -415,7 +414,7 @@ func (s *Service) fuseRRF(results []indexedResult) []*indexing.Hit {
 
 // appendReason records a contributing source's reason, keeping the list unique
 // and in first-seen order so a hit found by two indexes reports both.
-func appendReason(reasons []string, reason string, source indexing.IndexType) []string {
+func appendReason(reasons []string, reason string, source index.IndexType) []string {
 	if reason == "" {
 		reason = string(source)
 	}
@@ -449,14 +448,14 @@ func appendReason(reasons []string, reason string, source indexing.IndexType) []
 // of the same sources, moving the question's span rank and the run's nDCG.
 //
 // It is a no-op for a searcher whose hits already carry distinct scores.
-func settleSearcherOrder(result *indexing.SearchResult) {
+func settleSearcherOrder(result *index.SearchResult) {
 	if result != nil {
 		sortHits(result.Hits)
 	}
 }
 
 // sortHits sorts hits by score descending with deterministic tie-breaking.
-func sortHits(hits []*indexing.Hit) {
+func sortHits(hits []*index.Hit) {
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].Score != hits[j].Score {
 			return hits[i].Score > hits[j].Score
@@ -473,18 +472,18 @@ func sortHits(hits []*indexing.Hit) {
 
 // indexedResult holds a search result with its source.
 type indexedResult struct {
-	result *indexing.SearchResult
-	source indexing.IndexType
+	result *index.SearchResult
+	source index.IndexType
 }
 
 // SemanticSearch performs semantic-only search.
-func (s *Service) SemanticSearch(ctx context.Context, query *indexing.SearchQuery) (*indexing.SearchResult, error) {
-	return s.singleSearch(ctx, indexing.IndexTypeVector, query)
+func (s *Service) SemanticSearch(ctx context.Context, query *index.SearchQuery) (*index.SearchResult, error) {
+	return s.singleSearch(ctx, index.IndexTypeVector, query)
 }
 
 // KeywordSearch performs keyword-only search (BM25).
-func (s *Service) KeywordSearch(ctx context.Context, query *indexing.SearchQuery) (*indexing.SearchResult, error) {
-	return s.singleSearch(ctx, indexing.IndexTypeBM25, query)
+func (s *Service) KeywordSearch(ctx context.Context, query *index.SearchQuery) (*index.SearchResult, error) {
+	return s.singleSearch(ctx, index.IndexTypeBM25, query)
 }
 
 // rerankMaxDocBytes caps one document sent to the rerank service, cut on a
@@ -516,7 +515,7 @@ func truncateRerankDoc(doc string) string {
 // fusion range (see blendRerankScores) and get "+rerank" appended to Reason.
 // Any reranker failure is logged and the original order is returned — search
 // must never fail because of the reranker.
-func (s *Service) applyRerank(ctx context.Context, query string, hits []*indexing.Hit, meta map[string]interface{}) []*indexing.Hit {
+func (s *Service) applyRerank(ctx context.Context, query string, hits []*index.Hit, meta map[string]interface{}) []*index.Hit {
 	if s.reranker == nil || len(hits) <= 1 {
 		return hits
 	}
@@ -540,12 +539,12 @@ func (s *Service) applyRerank(ctx context.Context, query string, hits []*indexin
 
 	start := time.Now()
 	scores, err := s.reranker.Rerank(ctx, query, docs)
-	obs.RecordDuration("ragota_rerank_seconds", time.Since(start).Seconds())
+	rerankSeconds.Observe(time.Since(start).Seconds())
 	if err == nil && len(scores) != n {
 		err = fmt.Errorf("got %d scores for %d documents", len(scores), n)
 	}
 	if err != nil {
-		obs.Inc("ragota_rerank_failures_total", 1)
+		rerankFailures.Inc()
 		slog.Warn("rerank failed; keeping original order",
 			"reranker", s.reranker.Name(), "error", err)
 		if meta != nil {
@@ -557,7 +556,7 @@ func (s *Service) applyRerank(ctx context.Context, query string, hits []*indexin
 
 	blended := blendRerankScores(hits[:n], hits[n:], scores)
 
-	head := make([]*indexing.Hit, n)
+	head := make([]*index.Hit, n)
 	for i, h := range hits[:n] {
 		hitCopy := *h
 		hitCopy.Score = blended[i]
@@ -577,7 +576,7 @@ func (s *Service) applyRerank(ctx context.Context, query string, hits []*indexin
 		meta["rerank_candidates"] = n
 	}
 
-	out := make([]*indexing.Hit, 0, len(hits))
+	out := make([]*index.Hit, 0, len(hits))
 	out = append(out, head...)
 	out = append(out, hits[n:]...)
 	return out
@@ -599,7 +598,7 @@ func nonEmpty(values ...string) []string {
 // would make a client that sorts by score produce a different order than the
 // one served. The mapping is monotone in the rerank score and stays inside the
 // head's own fusion range, never dipping below the best tail score.
-func blendRerankScores(head, tail []*indexing.Hit, scores []float64) []float32 {
+func blendRerankScores(head, tail []*index.Hit, scores []float64) []float32 {
 	out := make([]float32, len(head))
 
 	hi, lo := head[0].Score, head[0].Score

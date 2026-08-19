@@ -7,24 +7,25 @@ import (
 	"strings"
 
 	"github.com/Nahua-Foundation/ragota/internal/contract"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
-	"github.com/Nahua-Foundation/ragota/internal/svcdetect"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/repos"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
 // Graph queries the linked code graph.
 type Graph struct {
-	store storage.Storage
+	store store.Storage
 }
 
-// New creates a Graph over the given storage.
-func New(store storage.Storage) *Graph {
+// New creates a Graph over the given store.
+func New(store store.Storage) *Graph {
 	return &Graph{store: store}
 }
 
 // Node is a graph node (an AST unit plus its owning service).
 type Node struct {
-	Unit    *storage.ASTUnit `json:"unit"`
-	Service string           `json:"service,omitempty"`
+	Unit    *domain.ASTUnit `json:"unit"`
+	Service string          `json:"service,omitempty"`
 }
 
 // NeighborsResult holds the neighborhood of a unit.
@@ -36,8 +37,8 @@ type NeighborsResult struct {
 
 // EdgeWithUnit is an edge together with the unit on its far side.
 type EdgeWithUnit struct {
-	Edge *storage.Edge    `json:"edge"`
-	Unit *storage.ASTUnit `json:"unit,omitempty"` // nil if unresolved
+	Edge *domain.Edge    `json:"edge"`
+	Unit *domain.ASTUnit `json:"unit,omitempty"` // nil if unresolved
 }
 
 // Neighbors returns edges in and out of a unit.
@@ -49,11 +50,11 @@ func (g *Graph) Neighbors(ctx context.Context, unitID string) (*NeighborsResult,
 	}
 	res := &NeighborsResult{Center: &Node{Unit: unit, Service: ld.serviceOf(ctx, unit)}}
 
-	out, err := g.store.GetEdges(ctx, storage.QueryOpts{SrcID: unitID})
+	out, err := g.store.GetEdges(ctx, domain.QueryOpts{SrcID: unitID})
 	if err != nil {
 		return nil, err
 	}
-	in, err := g.store.GetEdges(ctx, storage.QueryOpts{DstID: unitID})
+	in, err := g.store.GetEdges(ctx, domain.QueryOpts{DstID: unitID})
 	if err != nil {
 		return nil, err
 	}
@@ -85,9 +86,9 @@ func (g *Graph) Neighbors(ctx context.Context, unitID string) (*NeighborsResult,
 
 // PathStep is one hop of a path through the graph.
 type PathStep struct {
-	Edge *storage.Edge    `json:"edge,omitempty"` // nil for the starting node
-	Unit *storage.ASTUnit `json:"unit"`
-	Via  string           `json:"via,omitempty"` // edge kind that led here
+	Edge *domain.Edge    `json:"edge,omitempty"` // nil for the starting node
+	Unit *domain.ASTUnit `json:"unit"`
+	Via  string          `json:"via,omitempty"` // edge kind that led here
 }
 
 // Path finds a directed path between two units using BFS over resolved edges.
@@ -137,7 +138,7 @@ func (g *Graph) Path(ctx context.Context, fromID, toID string, maxDepth int) ([]
 			queue = append(queue, queueItem{unitID: n.Unit.ID, path: path})
 		}
 	}
-	return nil, storage.ErrNotFound
+	return nil, store.ErrNotFound
 }
 
 // expand returns the traversable successors of a unit: resolved out-edges,
@@ -146,14 +147,14 @@ func (g *Graph) Path(ctx context.Context, fromID, toID string, maxDepth int) ([]
 // Unit lookups go through the loader, so repeated expansions within one
 // operation are batched and cached.
 func (g *Graph) expand(ctx context.Context, ld *loader, unitID string) ([]*EdgeWithUnit, error) {
-	out, err := g.store.GetEdges(ctx, storage.QueryOpts{SrcID: unitID})
+	out, err := g.store.GetEdges(ctx, domain.QueryOpts{SrcID: unitID})
 	if err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0, len(out)+1)
 	ids = append(ids, unitID)
 	for _, e := range out {
-		if e.DstID == "" || e.Kind == storage.EdgeImplementsRPC {
+		if e.DstID == "" || e.Kind == store.EdgeImplementsRPC {
 			continue // implements_rpc is traversed in reverse
 		}
 		ids = append(ids, e.DstID)
@@ -164,7 +165,7 @@ func (g *Graph) expand(ctx context.Context, ld *loader, unitID string) ([]*EdgeW
 
 	var result []*EdgeWithUnit
 	for _, e := range out {
-		if e.DstID == "" || e.Kind == storage.EdgeImplementsRPC {
+		if e.DstID == "" || e.Kind == store.EdgeImplementsRPC {
 			continue
 		}
 		if u := ld.cached(e.DstID); u != nil {
@@ -176,8 +177,8 @@ func (g *Graph) expand(ctx context.Context, ld *loader, unitID string) ([]*EdgeW
 	if unit == nil {
 		return result, nil
 	}
-	if unit.Kind == storage.KindRPCMethod {
-		impls, err := g.store.GetEdges(ctx, storage.QueryOpts{DstID: unitID, Kind: storage.EdgeImplementsRPC})
+	if unit.Kind == store.KindRPCMethod {
+		impls, err := g.store.GetEdges(ctx, domain.QueryOpts{DstID: unitID, Kind: store.EdgeImplementsRPC})
 		if err == nil {
 			srcIDs := make([]string, 0, len(impls))
 			for _, e := range impls {
@@ -195,7 +196,7 @@ func (g *Graph) expand(ctx context.Context, ld *loader, unitID string) ([]*EdgeW
 	return result, nil
 }
 
-// ServiceInfo describes a detected service.
+// ServiceInfo describes a detected app.
 type ServiceInfo struct {
 	RepoID     string `json:"repo_id"`
 	Name       string `json:"name"`
@@ -218,7 +219,7 @@ type ServiceLink struct {
 
 // ServicesGraph lists all services and the aggregated links between them.
 func (g *Graph) ServicesGraph(ctx context.Context) ([]*ServiceInfo, []*ServiceLink, error) {
-	svcUnits, err := g.store.GetASTUnits(ctx, storage.QueryOpts{Kind: storage.KindService})
+	svcUnits, err := g.store.GetASTUnits(ctx, domain.QueryOpts{Kind: store.KindService})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -234,8 +235,8 @@ func (g *Graph) ServicesGraph(ctx context.Context) ([]*ServiceInfo, []*ServiceLi
 		})
 	}
 
-	edges, err := g.store.GetEdges(ctx, storage.QueryOpts{
-		Kinds: []string{storage.EdgeRPCCall, storage.EdgeHTTPCall, storage.EdgeKafkaFlow, storage.EdgeRuntimeCall},
+	edges, err := g.store.GetEdges(ctx, domain.QueryOpts{
+		Kinds: []string{store.EdgeRPCCall, store.EdgeHTTPCall, store.EdgeKafkaFlow, store.EdgeRuntimeCall},
 	})
 	if err != nil {
 		return nil, nil, err
@@ -258,19 +259,19 @@ func (g *Graph) ServicesGraph(ctx context.Context) ([]*ServiceInfo, []*ServiceLi
 	implOf := map[string]string{} // rpc_method unit ID -> implementing unit ID
 	hasRPCDst := false
 	for _, e := range edges {
-		if u := ld.cached(e.DstID); u != nil && u.Kind == storage.KindRPCMethod {
+		if u := ld.cached(e.DstID); u != nil && u.Kind == store.KindRPCMethod {
 			hasRPCDst = true
 			break
 		}
 	}
 	if hasRPCDst {
-		implEdges, err := g.store.GetEdges(ctx, storage.QueryOpts{Kinds: []string{storage.EdgeImplementsRPC}})
+		implEdges, err := g.store.GetEdges(ctx, domain.QueryOpts{Kinds: []string{store.EdgeImplementsRPC}})
 		if err != nil {
 			return nil, nil, err
 		}
 		// A contract may collect several implements_rpc edges — a registered
 		// implementation and weaker guesses. Take the most confident one; ties
-		// go to the first, which sqlutil.EdgeOrder makes the one earliest in the
+		// go to the first, which store.EdgeOrder makes the one earliest in the
 		// corpus. It used to make it the one whose row was written first, and
 		// that is the order concurrent indexing left behind rather than anything
 		// the sources say.
@@ -304,7 +305,7 @@ func (g *Graph) ServicesGraph(ctx context.Context) ([]*ServiceInfo, []*ServiceLi
 		}
 		// For rpc_call the destination contract may live next to the server
 		// implementation; prefer the implementing method's location.
-		if dstUnit.Kind == storage.KindRPCMethod {
+		if dstUnit.Kind == store.KindRPCMethod {
 			if impl := ld.cached(implOf[dstUnit.ID]); impl != nil {
 				dstUnit = impl
 			}
@@ -383,8 +384,8 @@ type TopicInfo struct {
 // Topics aggregates produces/consumes edges into a topic list. When service
 // is non-empty, only topics that service produces or consumes are returned.
 func (g *Graph) Topics(ctx context.Context, service string) ([]*TopicInfo, error) {
-	edges, err := g.store.GetEdges(ctx, storage.QueryOpts{
-		Kinds: []string{storage.EdgeProduces, storage.EdgeConsumes},
+	edges, err := g.store.GetEdges(ctx, domain.QueryOpts{
+		Kinds: []string{store.EdgeProduces, store.EdgeConsumes},
 	})
 	if err != nil {
 		return nil, err
@@ -411,7 +412,7 @@ func (g *Graph) Topics(ctx context.Context, service string) ([]*TopicInfo, error
 			continue
 		}
 		node := &Node{Unit: unit, Service: ld.serviceForUnit(ctx, unit)}
-		if e.Kind == storage.EdgeProduces {
+		if e.Kind == store.EdgeProduces {
 			ti.Producers = append(ti.Producers, node)
 		} else {
 			ti.Consumers = append(ti.Consumers, node)
@@ -420,7 +421,7 @@ func (g *Graph) Topics(ctx context.Context, service string) ([]*TopicInfo, error
 	// Overlay AsyncAPI channel declarations: annotate topics found in code,
 	// and surface declared channels that no code produces or consumes — a
 	// useful signal that the spec and the code have drifted apart.
-	declared, err := g.store.GetASTUnits(ctx, storage.QueryOpts{Kind: storage.KindTopicChannel})
+	declared, err := g.store.GetASTUnits(ctx, domain.QueryOpts{Kind: store.KindTopicChannel})
 	if err != nil {
 		return nil, err
 	}
@@ -461,19 +462,19 @@ func topicInvolves(ti *TopicInfo, service string) bool {
 }
 
 // FindUnit locates a unit by repo and name (optionally qualified name).
-func (g *Graph) FindUnit(ctx context.Context, repoID, name string) (*storage.ASTUnit, error) {
-	units, err := g.store.GetASTUnits(ctx, storage.QueryOpts{RepoID: repoID, Name: name, Limit: 10})
+func (g *Graph) FindUnit(ctx context.Context, repoID, name string) (*domain.ASTUnit, error) {
+	units, err := g.store.GetASTUnits(ctx, domain.QueryOpts{RepoID: repoID, Name: name, Limit: 10})
 	if err != nil {
 		return nil, err
 	}
 	if len(units) == 0 {
-		units, err = g.store.GetASTUnits(ctx, storage.QueryOpts{RepoID: repoID, Qualified: name, Limit: 10})
+		units, err = g.store.GetASTUnits(ctx, domain.QueryOpts{RepoID: repoID, Qualified: name, Limit: 10})
 		if err != nil {
 			return nil, err
 		}
 	}
 	if len(units) == 0 {
-		return nil, storage.ErrNotFound
+		return nil, store.ErrNotFound
 	}
 	// Prefer callable units.
 	for _, u := range units {
@@ -488,15 +489,15 @@ func (g *Graph) FindUnit(ctx context.Context, repoID, name string) (*storage.AST
 // per-repo service lists, avoiding N+1 storage queries inside one operation.
 type loader struct {
 	g        *Graph
-	units    map[string]*storage.ASTUnit    // unit ID -> unit; nil value = known missing
-	services map[string][]svcdetect.Service // repo ID -> detected services
+	units    map[string]*domain.ASTUnit // unit ID -> unit; nil value = known missing
+	services map[string][]repos.Service // repo ID -> detected services
 }
 
 func newLoader(g *Graph) *loader {
 	return &loader{
 		g:        g,
-		units:    map[string]*storage.ASTUnit{},
-		services: map[string][]svcdetect.Service{},
+		units:    map[string]*domain.ASTUnit{},
+		services: map[string][]repos.Service{},
 	}
 }
 
@@ -533,16 +534,16 @@ func (l *loader) unitsByIDs(ctx context.Context, ids []string) error {
 }
 
 // unit returns a single unit, loading it on a cache miss.
-func (l *loader) unit(ctx context.Context, id string) (*storage.ASTUnit, error) {
+func (l *loader) unit(ctx context.Context, id string) (*domain.ASTUnit, error) {
 	if u, ok := l.units[id]; ok {
 		if u == nil {
-			return nil, storage.ErrNotFound
+			return nil, store.ErrNotFound
 		}
 		return u, nil
 	}
 	u, err := l.g.store.GetASTUnitByID(ctx, id)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) {
 			l.units[id] = nil
 		}
 		return nil, err
@@ -552,22 +553,22 @@ func (l *loader) unit(ctx context.Context, id string) (*storage.ASTUnit, error) 
 }
 
 // cached returns the already-loaded unit for id, or nil if unknown/missing.
-func (l *loader) cached(id string) *storage.ASTUnit {
+func (l *loader) cached(id string) *domain.ASTUnit {
 	return l.units[id]
 }
 
 // servicesOf returns the detected services of a repo, cached per repo.
 // Errors are swallowed (mirroring Graph.serviceOf) and cached as empty.
-func (l *loader) servicesOf(ctx context.Context, repoID string) []svcdetect.Service {
+func (l *loader) servicesOf(ctx context.Context, repoID string) []repos.Service {
 	if svcs, ok := l.services[repoID]; ok {
 		return svcs
 	}
-	var svcs []svcdetect.Service
-	svcUnits, err := l.g.store.GetASTUnits(ctx, storage.QueryOpts{RepoID: repoID, Kind: storage.KindService})
+	var svcs []repos.Service
+	svcUnits, err := l.g.store.GetASTUnits(ctx, domain.QueryOpts{RepoID: repoID, Kind: store.KindService})
 	if err == nil {
 		for _, su := range svcUnits {
 			root, _ := serviceUnitInfo(su)
-			svcs = append(svcs, svcdetect.Service{
+			svcs = append(svcs, repos.Service{
 				Name: su.Name,
 				Root: root,
 			})
@@ -579,17 +580,17 @@ func (l *loader) servicesOf(ctx context.Context, repoID string) []svcdetect.Serv
 
 // serviceOf mirrors Graph.serviceOf through the cache: the name of the
 // service owning a unit, or "" if the repo has no detected services.
-func (l *loader) serviceOf(ctx context.Context, unit *storage.ASTUnit) string {
+func (l *loader) serviceOf(ctx context.Context, unit *domain.ASTUnit) string {
 	svcs := l.servicesOf(ctx, unit.RepoID)
 	if len(svcs) == 0 {
 		return ""
 	}
-	return svcdetect.ServiceFor(svcs, unit.FilePath)
+	return repos.ServiceFor(svcs, unit.FilePath)
 }
 
 // serviceForUnit mirrors Graph.serviceForUnit through the cache.
-func (l *loader) serviceForUnit(ctx context.Context, unit *storage.ASTUnit) string {
-	if unit.Kind == storage.KindService {
+func (l *loader) serviceForUnit(ctx context.Context, unit *domain.ASTUnit) string {
+	if unit.Kind == store.KindService {
 		return unit.Name
 	}
 	if name := l.serviceOf(ctx, unit); name != "" {
@@ -601,8 +602,8 @@ func (l *loader) serviceForUnit(ctx context.Context, unit *storage.ASTUnit) stri
 // serviceUnitInfo extracts Root and DetectedBy from a service unit, preferring
 // structured UnitMeta and falling back to the legacy Signature "root:<dir>" /
 // Doc conventions for data indexed before Meta was introduced.
-func serviceUnitInfo(u *storage.ASTUnit) (root, detectedBy string) {
-	meta := storage.DecodeUnitMeta(u.Meta)
+func serviceUnitInfo(u *domain.ASTUnit) (root, detectedBy string) {
+	meta := store.DecodeUnitMeta(u.Meta)
 	root = meta.Root
 	if root == "" {
 		root = strings.TrimPrefix(u.Signature, "root:")
@@ -615,24 +616,24 @@ func serviceUnitInfo(u *storage.ASTUnit) (root, detectedBy string) {
 }
 
 // serviceOf returns the service name owning a unit and the services of its repo.
-func (g *Graph) serviceOf(ctx context.Context, unit *storage.ASTUnit) (string, []svcdetect.Service) {
-	svcUnits, err := g.store.GetASTUnits(ctx, storage.QueryOpts{RepoID: unit.RepoID, Kind: storage.KindService})
+func (g *Graph) serviceOf(ctx context.Context, unit *domain.ASTUnit) (string, []repos.Service) {
+	svcUnits, err := g.store.GetASTUnits(ctx, domain.QueryOpts{RepoID: unit.RepoID, Kind: store.KindService})
 	if err != nil || len(svcUnits) == 0 {
 		return "", nil
 	}
-	services := make([]svcdetect.Service, 0, len(svcUnits))
+	services := make([]repos.Service, 0, len(svcUnits))
 	for _, su := range svcUnits {
 		root, _ := serviceUnitInfo(su)
-		services = append(services, svcdetect.Service{
+		services = append(services, repos.Service{
 			Name: su.Name,
 			Root: root,
 		})
 	}
-	return svcdetect.ServiceFor(services, unit.FilePath), services
+	return repos.ServiceFor(services, unit.FilePath), services
 }
 
-func (g *Graph) serviceForUnit(ctx context.Context, unit *storage.ASTUnit) string {
-	if unit.Kind == storage.KindService {
+func (g *Graph) serviceForUnit(ctx context.Context, unit *domain.ASTUnit) string {
+	if unit.Kind == store.KindService {
 		return unit.Name
 	}
 	name, _ := g.serviceOf(ctx, unit)
@@ -643,6 +644,6 @@ func (g *Graph) serviceForUnit(ctx context.Context, unit *storage.ASTUnit) strin
 }
 
 // ServiceOfUnit returns the service name owning a unit (repo ID if unknown).
-func (g *Graph) ServiceOfUnit(ctx context.Context, unit *storage.ASTUnit) string {
+func (g *Graph) ServiceOfUnit(ctx context.Context, unit *domain.ASTUnit) string {
 	return g.serviceForUnit(ctx, unit)
 }

@@ -7,18 +7,18 @@ import (
 	"math"
 	"testing"
 
-	"github.com/Nahua-Foundation/ragota/internal/indexing"
+	"github.com/Nahua-Foundation/ragota/internal/index"
 )
 
-// mockSearcher implements indexing.Searcher for testing.
+// mockSearcher implements index.Searcher for testing.
 type mockSearcher struct {
-	name  indexing.IndexType
-	hits  []*indexing.Hit
+	name  index.IndexType
+	hits  []*index.Hit
 	total int
 }
 
-func (m *mockSearcher) Search(ctx context.Context, q *indexing.SearchQuery) (*indexing.SearchResult, error) {
-	return &indexing.SearchResult{
+func (m *mockSearcher) Search(ctx context.Context, q *index.SearchQuery) (*index.SearchResult, error) {
+	return &index.SearchResult{
 		Hits:  m.hits,
 		Total: m.total,
 		Query: q.Query,
@@ -26,33 +26,33 @@ func (m *mockSearcher) Search(ctx context.Context, q *indexing.SearchQuery) (*in
 }
 
 func hitKey(repoID, filePath string, line int) string {
-	return (&indexing.Hit{RepoID: repoID, FilePath: filePath, Line: line}).Key()
+	return (&index.Hit{RepoID: repoID, FilePath: filePath, Line: line}).Key()
 }
 
 func TestRRFFormula(t *testing.T) {
 	ctx := context.Background()
 
-	vectorA := &indexing.Hit{RepoID: "r1", FilePath: "/a.go", Line: 1, Score: 0.9}
-	vectorB := &indexing.Hit{RepoID: "r1", FilePath: "/b.go", Line: 5, Score: 0.8}
-	bm25B := &indexing.Hit{RepoID: "r1", FilePath: "/b.go", Line: 5, Score: 0.7}
-	bm25C := &indexing.Hit{RepoID: "r1", FilePath: "/c.go", Line: 10, Score: 0.6}
+	vectorA := &index.Hit{RepoID: "r1", FilePath: "/a.go", Line: 1, Score: 0.9}
+	vectorB := &index.Hit{RepoID: "r1", FilePath: "/b.go", Line: 5, Score: 0.8}
+	bm25B := &index.Hit{RepoID: "r1", FilePath: "/b.go", Line: 5, Score: 0.7}
+	bm25C := &index.Hit{RepoID: "r1", FilePath: "/c.go", Line: 10, Score: 0.6}
 
 	vector := &mockSearcher{
-		name: indexing.IndexTypeVector,
-		hits: []*indexing.Hit{vectorA, vectorB},
+		name: index.IndexTypeVector,
+		hits: []*index.Hit{vectorA, vectorB},
 	}
 
 	bm25 := &mockSearcher{
-		name: indexing.IndexTypeBM25,
-		hits: []*indexing.Hit{bm25B, bm25C},
+		name: index.IndexTypeBM25,
+		hits: []*index.Hit{bm25B, bm25C},
 	}
 
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: vector,
-		indexing.IndexTypeBM25:   bm25,
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: vector,
+		index.IndexTypeBM25:   bm25,
 	}, nil)
 
-	result, err := svc.Search(ctx, &indexing.SearchQuery{Query: "test", Limit: 10}, true)
+	result, err := svc.Search(ctx, &index.SearchQuery{Query: "test", Limit: 10}, true)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -90,24 +90,24 @@ func TestRRFFormula(t *testing.T) {
 func TestRRFDedup(t *testing.T) {
 	ctx := context.Background()
 
-	sameHit := &indexing.Hit{RepoID: "r1", FilePath: "/same.go", Line: 1, Score: 0.5}
+	sameHit := &index.Hit{RepoID: "r1", FilePath: "/same.go", Line: 1, Score: 0.5}
 
 	vector := &mockSearcher{
-		name: indexing.IndexTypeVector,
-		hits: []*indexing.Hit{sameHit},
+		name: index.IndexTypeVector,
+		hits: []*index.Hit{sameHit},
 	}
 
 	bm25 := &mockSearcher{
-		name: indexing.IndexTypeBM25,
-		hits: []*indexing.Hit{sameHit},
+		name: index.IndexTypeBM25,
+		hits: []*index.Hit{sameHit},
 	}
 
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: vector,
-		indexing.IndexTypeBM25:   bm25,
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: vector,
+		index.IndexTypeBM25:   bm25,
 	}, nil)
 
-	result, err := svc.Search(ctx, &indexing.SearchQuery{Query: "test", Limit: 10}, true)
+	result, err := svc.Search(ctx, &index.SearchQuery{Query: "test", Limit: 10}, true)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -129,9 +129,9 @@ func TestRRFDedup(t *testing.T) {
 func TestRRFTieBreak(t *testing.T) {
 	ctx := context.Background()
 
-	hits := make([]*indexing.Hit, 5)
+	hits := make([]*index.Hit, 5)
 	for i := 0; i < 5; i++ {
-		hits[i] = &indexing.Hit{
+		hits[i] = &index.Hit{
 			Score:    0.5,
 			RepoID:   "r1",
 			FilePath: "/f" + string(rune('a'+i)) + ".go",
@@ -139,14 +139,14 @@ func TestRRFTieBreak(t *testing.T) {
 		}
 	}
 
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: &mockSearcher{name: indexing.IndexTypeVector, hits: hits},
-		indexing.IndexTypeBM25:   &mockSearcher{name: indexing.IndexTypeBM25, hits: hits},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: &mockSearcher{name: index.IndexTypeVector, hits: hits},
+		index.IndexTypeBM25:   &mockSearcher{name: index.IndexTypeBM25, hits: hits},
 	}, nil)
 
 	var lastOrder []string
 	for run := 0; run < 20; run++ {
-		result, err := svc.Search(ctx, &indexing.SearchQuery{Query: "test", Limit: 10}, true)
+		result, err := svc.Search(ctx, &index.SearchQuery{Query: "test", Limit: 10}, true)
 		if err != nil {
 			t.Fatalf("Search() error = %v", err)
 		}
@@ -172,18 +172,18 @@ func TestRRFTieBreak(t *testing.T) {
 func TestRRFLimit(t *testing.T) {
 	ctx := context.Background()
 
-	hits := []*indexing.Hit{
+	hits := []*index.Hit{
 		{RepoID: "r1", FilePath: "/a.go", Line: 1, Score: 0.9},
 		{RepoID: "r1", FilePath: "/b.go", Line: 5, Score: 0.8},
 		{RepoID: "r1", FilePath: "/c.go", Line: 10, Score: 0.7},
 	}
 
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: &mockSearcher{name: indexing.IndexTypeVector, hits: hits},
-		indexing.IndexTypeBM25:   &mockSearcher{name: indexing.IndexTypeBM25, hits: hits},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: &mockSearcher{name: index.IndexTypeVector, hits: hits},
+		index.IndexTypeBM25:   &mockSearcher{name: index.IndexTypeBM25, hits: hits},
 	}, nil)
 
-	result, err := svc.Search(ctx, &indexing.SearchQuery{Query: "test", Limit: 2}, true)
+	result, err := svc.Search(ctx, &index.SearchQuery{Query: "test", Limit: 2}, true)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -204,16 +204,16 @@ func TestRRFLimit(t *testing.T) {
 func TestRRFSingleSource(t *testing.T) {
 	ctx := context.Background()
 
-	hits := []*indexing.Hit{
+	hits := []*index.Hit{
 		{RepoID: "r1", FilePath: "/a.go", Line: 1, Score: 0.9},
 		{RepoID: "r1", FilePath: "/b.go", Line: 5, Score: 0.8},
 	}
 
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeBM25: &mockSearcher{name: indexing.IndexTypeBM25, hits: hits},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeBM25: &mockSearcher{name: index.IndexTypeBM25, hits: hits},
 	}, nil)
 
-	result, err := svc.Search(ctx, &indexing.SearchQuery{Query: "test", Limit: 10}, true)
+	result, err := svc.Search(ctx, &index.SearchQuery{Query: "test", Limit: 10}, true)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -230,9 +230,9 @@ func TestRRFSingleSource(t *testing.T) {
 func TestRRFEmpty(t *testing.T) {
 	ctx := context.Background()
 
-	svc := New(map[indexing.IndexType]indexing.Searcher{}, nil)
+	svc := New(map[index.IndexType]index.Searcher{}, nil)
 
-	result, err := svc.Search(ctx, &indexing.SearchQuery{Query: "test", Limit: 10}, true)
+	result, err := svc.Search(ctx, &index.SearchQuery{Query: "test", Limit: 10}, true)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
@@ -249,16 +249,16 @@ func TestRRFEmpty(t *testing.T) {
 func TestSemanticSearch(t *testing.T) {
 	ctx := context.Background()
 
-	expectedHits := []*indexing.Hit{
+	expectedHits := []*index.Hit{
 		{RepoID: "r1", FilePath: "/a.go", Line: 1, Score: 0.9},
 	}
 
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: &mockSearcher{name: indexing.IndexTypeVector, hits: expectedHits},
-		indexing.IndexTypeBM25:   &mockSearcher{name: indexing.IndexTypeBM25, hits: nil},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: &mockSearcher{name: index.IndexTypeVector, hits: expectedHits},
+		index.IndexTypeBM25:   &mockSearcher{name: index.IndexTypeBM25, hits: nil},
 	}, nil)
 
-	result, err := svc.SemanticSearch(ctx, &indexing.SearchQuery{Query: "test"})
+	result, err := svc.SemanticSearch(ctx, &index.SearchQuery{Query: "test"})
 	if err != nil {
 		t.Fatalf("SemanticSearch() error = %v", err)
 	}
@@ -275,16 +275,16 @@ func TestSemanticSearch(t *testing.T) {
 func TestKeywordSearch(t *testing.T) {
 	ctx := context.Background()
 
-	expectedHits := []*indexing.Hit{
+	expectedHits := []*index.Hit{
 		{RepoID: "r1", FilePath: "/b.go", Line: 5, Score: 0.7},
 	}
 
-	svc := New(map[indexing.IndexType]indexing.Searcher{
-		indexing.IndexTypeVector: &mockSearcher{name: indexing.IndexTypeVector, hits: nil},
-		indexing.IndexTypeBM25:   &mockSearcher{name: indexing.IndexTypeBM25, hits: expectedHits},
+	svc := New(map[index.IndexType]index.Searcher{
+		index.IndexTypeVector: &mockSearcher{name: index.IndexTypeVector, hits: nil},
+		index.IndexTypeBM25:   &mockSearcher{name: index.IndexTypeBM25, hits: expectedHits},
 	}, nil)
 
-	result, err := svc.KeywordSearch(ctx, &indexing.SearchQuery{Query: "test"})
+	result, err := svc.KeywordSearch(ctx, &index.SearchQuery{Query: "test"})
 	if err != nil {
 		t.Fatalf("KeywordSearch() error = %v", err)
 	}
@@ -303,7 +303,7 @@ func TestKeywordSearch(t *testing.T) {
 // ordinary reason can be first; reporting that one would drop the damaged
 // index out of the error chain and cost the caller the one status it can act on.
 func TestPrimaryFailure(t *testing.T) {
-	damaged := fmt.Errorf("search: %w", indexing.ErrIndexDamaged)
+	damaged := fmt.Errorf("search: %w", index.ErrIndexDamaged)
 	ordinary := errors.New("context canceled")
 
 	tests := []struct {
@@ -314,21 +314,21 @@ func TestPrimaryFailure(t *testing.T) {
 		{
 			name: "damaged wins over an ordinary failure collected first",
 			failures: []searcherFailure{
-				{source: indexing.IndexTypeVector, err: ordinary},
-				{source: indexing.IndexTypeBM25, err: damaged},
+				{source: index.IndexTypeVector, err: ordinary},
+				{source: index.IndexTypeBM25, err: damaged},
 			},
 			want: damaged,
 		},
 		{
 			name:     "the only failure is reported as is",
-			failures: []searcherFailure{{source: indexing.IndexTypeBM25, err: ordinary}},
+			failures: []searcherFailure{{source: index.IndexTypeBM25, err: ordinary}},
 			want:     ordinary,
 		},
 		{
 			name: "no damage falls back to the first failure",
 			failures: []searcherFailure{
-				{source: indexing.IndexTypeVector, err: ordinary},
-				{source: indexing.IndexTypeBM25, err: errors.New("dial tcp: refused")},
+				{source: index.IndexTypeVector, err: ordinary},
+				{source: index.IndexTypeBM25, err: errors.New("dial tcp: refused")},
 			},
 			want: ordinary,
 		},

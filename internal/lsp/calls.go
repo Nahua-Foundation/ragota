@@ -14,8 +14,8 @@ import (
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
 	"github.com/Nahua-Foundation/ragota/internal/contract"
-	"github.com/Nahua-Foundation/ragota/internal/obs"
-	"github.com/Nahua-Foundation/ragota/internal/storage"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
+	"github.com/Nahua-Foundation/ragota/internal/store"
 )
 
 // The call graph the tree-sitter pass produces records a callee's NAME, and
@@ -67,7 +67,7 @@ const lineTolerance = 2
 // language, because a session costs a full workspace load (60-90 s for a large
 // Go module) and a per-file session would pay that for every batch of files.
 type CallRefiner struct {
-	storage storage.Storage
+	store   store.Storage
 	cfg     *config.LSPConfig
 	calls   *config.LSPCallsConfig
 	mapper  Mapper
@@ -75,7 +75,7 @@ type CallRefiner struct {
 }
 
 // NewCallRefiner creates a CallRefiner, or nil when the pass is not enabled.
-func NewCallRefiner(st storage.Storage, cfg *config.LSPConfig) *CallRefiner {
+func NewCallRefiner(st store.Storage, cfg *config.LSPConfig) *CallRefiner {
 	if cfg == nil || !cfg.Enabled || cfg.Calls == nil || !cfg.Calls.Enabled {
 		return nil
 	}
@@ -84,7 +84,7 @@ func NewCallRefiner(st storage.Storage, cfg *config.LSPConfig) *CallRefiner {
 		timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
 	return &CallRefiner{
-		storage: st,
+		store:   st,
 		cfg:     cfg,
 		calls:   cfg.Calls,
 		mapper:  NewMapper(cfg.HostRoot, cfg.MountRoot),
@@ -120,7 +120,7 @@ func (c *CallRefiner) RefineRepo(ctx context.Context, repoID, repoPath string) (
 	stats := &CallStats{LangSeconds: map[string]float64{}}
 	defer func() {
 		stats.Duration = time.Since(start)
-		obs.RecordDuration(obs.MetricLSPCallPassSeconds, stats.Duration.Seconds())
+		lspCallPassSeconds.Observe(stats.Duration.Seconds())
 	}()
 
 	repo, err := c.loadRepo(ctx, repoID)
@@ -135,12 +135,12 @@ func (c *CallRefiner) RefineRepo(ctx context.Context, repoID, repoPath string) (
 	if max := c.maxSymbols(); len(candidates) > max {
 		candidates = candidates[:max]
 		stats.Truncated = true
-		obs.Inc(obs.MetricLSPCallTruncated, 1)
+		lspCallTruncated.Inc()
 		slog.Warn("lsp: call pass hit its symbol budget; some ambiguous callees keep their name-matched resolution",
 			"repo", repoID, "budget", max, "candidates", stats.Candidates)
 	}
 
-	byLang := map[string][]*storage.ASTUnit{}
+	byLang := map[string][]*domain.ASTUnit{}
 	for _, u := range candidates {
 		byLang[u.Language] = append(byLang[u.Language], u)
 	}
@@ -151,7 +151,7 @@ func (c *CallRefiner) RefineRepo(ctx context.Context, repoID, repoPath string) (
 	for _, lang := range langs {
 		langStart := time.Now()
 		if err := c.refineLang(ctx, repo, root, lang, byLang[lang], plan, stats); err != nil {
-			obs.Inc(obs.MetricLSPServerFailures, 1)
+			lspServerFailures.Inc()
 			slog.Warn("lsp: call pass skipped a language", "repo", repoID, "language", lang, "error", err)
 			stats.Failed = append(stats.Failed, lang)
 			continue
@@ -174,11 +174,11 @@ func (c *CallRefiner) RefineRepo(ctx context.Context, repoID, repoPath string) (
 // repository, so this is a known-affordable read.
 type repoGraph struct {
 	id    string
-	units []*storage.ASTUnit // function/method units
-	byID  map[string]*storage.ASTUnit
+	units []*domain.ASTUnit // function/method units
+	byID  map[string]*domain.ASTUnit
 	// byFile holds each file's function/method units, sorted by start line, so
 	// the unit enclosing a reference site can be found without a query.
-	byFile map[string][]*storage.ASTUnit
+	byFile map[string][]*domain.ASTUnit
 	// nameCount says how many definitions share a name: > 1 is exactly the
 	// case the linker cannot resolve on evidence.
 	nameCount map[string]int
@@ -188,9 +188,9 @@ type repoGraph struct {
 	// boundary is the set of unit ids sitting on a contract boundary.
 	boundary map[string]bool
 	// calls indexes the repository's call edges by callee name.
-	calls map[string][]*storage.Edge
+	calls map[string][]*domain.Edge
 	// byDst indexes them by resolved destination, for the contradiction check.
-	byDst map[string][]*storage.Edge
+	byDst map[string][]*domain.Edge
 	// langByFile is the language of a file, taken from its units.
 	langByFile map[string]string
 }
@@ -201,24 +201,24 @@ type repoGraph struct {
 // symbols a cross-service question is most often about, and the ones whose
 // callers are worth knowing exactly.
 var boundaryKinds = []string{
-	storage.EdgeHandledBy, storage.EdgeImplementsRPC,
-	storage.EdgeHTTPCall, storage.EdgeRPCCall,
-	storage.EdgeProduces, storage.EdgeConsumes,
-	storage.EdgeWritesTo, storage.EdgeReadsFrom,
+	store.EdgeHandledBy, store.EdgeImplementsRPC,
+	store.EdgeHTTPCall, store.EdgeRPCCall,
+	store.EdgeProduces, store.EdgeConsumes,
+	store.EdgeWritesTo, store.EdgeReadsFrom,
 }
 
 func (c *CallRefiner) loadRepo(ctx context.Context, repoID string) (*repoGraph, error) {
-	units, err := c.storage.GetASTUnits(ctx, storage.QueryOpts{
+	units, err := c.store.GetASTUnits(ctx, domain.QueryOpts{
 		RepoID: repoID, Kinds: []string{"function", "method"},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("lsp: load units of %s: %w", repoID, err)
 	}
-	callEdges, err := c.storage.GetEdges(ctx, storage.QueryOpts{RepoID: repoID, Kind: storage.EdgeCall})
+	callEdges, err := c.store.GetEdges(ctx, domain.QueryOpts{RepoID: repoID, Kind: store.EdgeCall})
 	if err != nil {
 		return nil, fmt.Errorf("lsp: load call edges of %s: %w", repoID, err)
 	}
-	boundaryEdges, err := c.storage.GetEdges(ctx, storage.QueryOpts{RepoID: repoID, Kinds: boundaryKinds})
+	boundaryEdges, err := c.store.GetEdges(ctx, domain.QueryOpts{RepoID: repoID, Kinds: boundaryKinds})
 	if err != nil {
 		return nil, fmt.Errorf("lsp: load contract edges of %s: %w", repoID, err)
 	}
@@ -226,13 +226,13 @@ func (c *CallRefiner) loadRepo(ctx context.Context, repoID string) (*repoGraph, 
 	g := &repoGraph{
 		id:         repoID,
 		units:      units,
-		byID:       make(map[string]*storage.ASTUnit, len(units)),
-		byFile:     map[string][]*storage.ASTUnit{},
+		byID:       make(map[string]*domain.ASTUnit, len(units)),
+		byFile:     map[string][]*domain.ASTUnit{},
 		nameCount:  map[string]int{},
 		called:     map[string]bool{},
 		boundary:   map[string]bool{},
-		calls:      map[string][]*storage.Edge{},
-		byDst:      map[string][]*storage.Edge{},
+		calls:      map[string][]*domain.Edge{},
+		byDst:      map[string][]*domain.Edge{},
 		langByFile: map[string]string{},
 	}
 	for _, u := range units {
@@ -262,7 +262,7 @@ func (c *CallRefiner) loadRepo(ctx context.Context, repoID string) (*repoGraph, 
 	// contract, so the boundary symbol is the destination of the first and the
 	// source of the rest.
 	for _, e := range boundaryEdges {
-		if e.Kind == storage.EdgeHandledBy {
+		if e.Kind == store.EdgeHandledBy {
 			if resolved(e.DstID) {
 				g.boundary[e.DstID] = true
 			}
@@ -297,13 +297,13 @@ func resolved(id string) bool { return id != "" && id != "0" }
 // stronger reason first. Test scaffolding and vendored trees are excluded:
 // they are never the answer to "what calls X" and they are a large share of a
 // repository's symbols.
-func (c *CallRefiner) selectCandidates(g *repoGraph) []*storage.ASTUnit {
+func (c *CallRefiner) selectCandidates(g *repoGraph) []*domain.ASTUnit {
 	scope := c.scope()
 	wantBoundary := scope == "boundary" || scope == "both"
 	wantAmbiguous := scope == "ambiguous" || scope == "both"
 
 	type scored struct {
-		unit     *storage.ASTUnit
+		unit     *domain.ASTUnit
 		boundary bool
 	}
 	var out []scored
@@ -340,7 +340,7 @@ func (c *CallRefiner) selectCandidates(g *repoGraph) []*storage.ASTUnit {
 		}
 		return beforeAtLine(a.unit, b.unit)
 	})
-	units := make([]*storage.ASTUnit, len(out))
+	units := make([]*domain.ASTUnit, len(out))
 	for i := range out {
 		units[i] = out[i].unit
 	}
@@ -398,11 +398,11 @@ func (c *CallRefiner) maxRefs() int {
 // second keeps "confirmed by some definition" from being contradicted by
 // another one purely because of the order they were asked in.
 type callPlan struct {
-	claim map[string]*storage.ASTUnit // edge id -> definition the server names
-	add   []*storage.Edge             // call sites with no edge at all
+	claim map[string]*domain.ASTUnit // edge id -> definition the server names
+	add   []*domain.Edge             // call sites with no edge at all
 	// complete is the set of definitions whose reference list came back whole
 	// and non-empty; only those may contradict an existing resolution.
-	complete map[string]*storage.ASTUnit
+	complete map[string]*domain.ASTUnit
 	// analysed is the set of files the server demonstrably resolved something
 	// in. Nothing outside it may be contradicted (see apply).
 	analysed map[string]bool
@@ -411,15 +411,15 @@ type callPlan struct {
 
 func newCallPlan() *callPlan {
 	return &callPlan{
-		claim:    map[string]*storage.ASTUnit{},
-		complete: map[string]*storage.ASTUnit{},
+		claim:    map[string]*domain.ASTUnit{},
+		complete: map[string]*domain.ASTUnit{},
 		analysed: map[string]bool{},
 		seenAdd:  map[string]bool{},
 	}
 }
 
 func (c *CallRefiner) refineLang(ctx context.Context, g *repoGraph, root, lang string,
-	defs []*storage.ASTUnit, plan *callPlan, stats *CallStats) error {
+	defs []*domain.ASTUnit, plan *callPlan, stats *CallStats) error {
 
 	srv := c.cfg.Servers[lang]
 	client, err := Dial(srv.Addr, c.timeout)
@@ -431,7 +431,7 @@ func (c *CallRefiner) refineLang(ctx context.Context, g *repoGraph, root, lang s
 		return err
 	}
 
-	byFile := map[string][]*storage.ASTUnit{}
+	byFile := map[string][]*domain.ASTUnit{}
 	var files []string
 	for _, d := range defs {
 		if _, ok := byFile[d.FilePath]; !ok {
@@ -466,7 +466,7 @@ func (c *CallRefiner) refineLang(ctx context.Context, g *repoGraph, root, lang s
 // askDefinition asks the server who references one definition and records the
 // consequences in the plan.
 func (c *CallRefiner) askDefinition(ctx context.Context, client *Client, g *repoGraph,
-	root, uri string, lines []string, def *storage.ASTUnit, plan *callPlan, stats *CallStats) {
+	root, uri string, lines []string, def *domain.ASTUnit, plan *callPlan, stats *CallStats) {
 
 	line0, col := namePosition(lines, def)
 	if col < 0 {
@@ -474,10 +474,10 @@ func (c *CallRefiner) askDefinition(ctx context.Context, client *Client, g *repo
 	}
 	stats.Asked++
 	stats.Requests++
-	obs.Inc(obs.MetricLSPCallRequests, 1)
+	lspCallRequests.Inc()
 	locs, err := client.References(ctx, uri, line0, col)
 	if err != nil {
-		obs.Inc(obs.MetricLSPReferenceErrors, 1)
+		lspReferenceErrors.Inc()
 		slog.Debug("lsp: references failed", "repo", g.id, "symbol", def.Qualified, "error", err)
 		return
 	}
@@ -529,12 +529,12 @@ func (c *CallRefiner) askDefinition(ctx context.Context, client *Client, g *repo
 			continue
 		}
 		plan.seenAdd[key] = true
-		plan.add = append(plan.add, &storage.Edge{
+		plan.add = append(plan.add, &domain.Edge{
 			RepoID:     g.id,
 			SrcID:      encl.ID,
 			DstID:      def.ID,
 			DstRepoID:  g.id,
-			Kind:       storage.EdgeCall,
+			Kind:       store.EdgeCall,
 			DstName:    def.Name,
 			FilePath:   rel,
 			Line:       site,
@@ -560,8 +560,8 @@ func repoRelative(mapper Mapper, root, uri string) (string, bool) {
 // and the line the parser recorded within lineTolerance of the identifier the
 // server points at. The closest line wins, so two calls of the same name a
 // line apart keep their own edges.
-func matchCallEdge(edges []*storage.Edge, file string, line int) *storage.Edge {
-	var best *storage.Edge
+func matchCallEdge(edges []*domain.Edge, file string, line int) *domain.Edge {
+	var best *domain.Edge
 	bestDelta := lineTolerance + 1
 	for _, e := range edges {
 		if e.FilePath != file {
@@ -593,7 +593,7 @@ func matchCallEdge(edges []*storage.Edge, file string, line int) *storage.Edge {
 // orderings, which puts the difference in the database rather than in one
 // response. Rows they still cannot separate are at the same place under the
 // same name and refine to the same answer.
-func beforeAtLine(a, b *storage.ASTUnit) bool {
+func beforeAtLine(a, b *domain.ASTUnit) bool {
 	switch {
 	case a.StartByte != b.StartByte:
 		return a.StartByte < b.StartByte
@@ -604,7 +604,7 @@ func beforeAtLine(a, b *storage.ASTUnit) bool {
 	}
 }
 
-func beforeAtEdge(a, b *storage.Edge) bool {
+func beforeAtEdge(a, b *domain.Edge) bool {
 	switch {
 	case a.Line != b.Line:
 		return a.Line < b.Line
@@ -616,8 +616,8 @@ func beforeAtEdge(a, b *storage.Edge) bool {
 }
 
 // enclosingIn returns the smallest function/method containing a 1-based line.
-func enclosingIn(units []*storage.ASTUnit, line int) *storage.ASTUnit {
-	var best *storage.ASTUnit
+func enclosingIn(units []*domain.ASTUnit, line int) *domain.ASTUnit {
+	var best *domain.ASTUnit
 	for _, u := range units {
 		if line < u.StartLine || line > u.EndLine {
 			continue
@@ -640,7 +640,7 @@ func enclosingIn(units []*storage.ASTUnit, line int) *storage.ASTUnit {
 // graph.resolutionWriter); this pass rewrites the same order of magnitude of
 // edges and would reintroduce it.
 func (c *CallRefiner) apply(ctx context.Context, g *repoGraph, plan *callPlan, stats *CallStats) {
-	w := newEdgeWriter(c.storage)
+	w := newEdgeWriter(c.store)
 
 	for _, id := range sortedKeys(plan.claim) {
 		def := plan.claim[id]
@@ -656,10 +656,10 @@ func (c *CallRefiner) apply(ctx context.Context, g *repoGraph, plan *callPlan, s
 		w.resolve(ctx, e, def.ID, g.id, contract.ConfExact)
 		if moved {
 			stats.Repointed++
-			obs.Inc(obs.MetricLSPCallRepointed, 1)
+			lspCallRepointed.Inc()
 		} else {
 			stats.Confirmed++
-			obs.Inc(obs.MetricLSPCallConfirmed, 1)
+			lspCallConfirmed.Inc()
 		}
 	}
 
@@ -684,17 +684,17 @@ func (c *CallRefiner) apply(ctx context.Context, g *repoGraph, plan *callPlan, s
 			}
 			w.resolve(ctx, e, "", "", contract.ConfWeak)
 			stats.Contradicted++
-			obs.Inc(obs.MetricLSPCallContradicted, 1)
+			lspCallContradicted.Inc()
 		}
 	}
 	w.flush(ctx)
 
 	if len(plan.add) > 0 {
-		if err := c.storage.BatchStoreEdges(ctx, plan.add); err != nil {
+		if err := c.store.BatchStoreEdges(ctx, plan.add); err != nil {
 			slog.Warn("lsp: store call edges the parser missed", "repo", g.id, "edges", len(plan.add), "error", err)
 		} else {
 			stats.Added = len(plan.add)
-			obs.IncBy(obs.MetricLSPCallAdded, len(plan.add))
+			lspCallAdded.Add(float64(len(plan.add)))
 		}
 	}
 }
@@ -707,20 +707,20 @@ const edgeWriteBuffer = 1000
 // when the backend supports it. The annotation is written per edge — there is
 // no batch API for meta — but only for edges that actually change.
 type edgeWriter struct {
-	store   storage.Storage
-	batcher storage.EdgeResolutionBatcher
-	buf     []storage.EdgeResolution
-	metas   []*storage.Edge
+	store   store.Storage
+	batcher store.EdgeResolutionBatcher
+	buf     []store.EdgeResolution
+	metas   []*domain.Edge
 }
 
-func newEdgeWriter(st storage.Storage) *edgeWriter {
+func newEdgeWriter(st store.Storage) *edgeWriter {
 	w := &edgeWriter{store: st}
-	w.batcher, _ = st.(storage.EdgeResolutionBatcher)
+	w.batcher, _ = st.(store.EdgeResolutionBatcher)
 	return w
 }
 
-func (w *edgeWriter) resolve(ctx context.Context, e *storage.Edge, dstID, dstRepoID string, conf float32) {
-	w.buf = append(w.buf, storage.EdgeResolution{
+func (w *edgeWriter) resolve(ctx context.Context, e *domain.Edge, dstID, dstRepoID string, conf float32) {
+	w.buf = append(w.buf, store.EdgeResolution{
 		EdgeID: e.ID, DstID: dstID, DstRepoID: dstRepoID, Confidence: conf,
 	})
 	w.metas = append(w.metas, e)
@@ -765,7 +765,7 @@ func (w *edgeWriter) flush(ctx context.Context) {
 	w.buf, w.metas = w.buf[:0], w.metas[:0]
 }
 
-func findEdge(edges []*storage.Edge, id string) *storage.Edge {
+func findEdge(edges []*domain.Edge, id string) *domain.Edge {
 	for _, e := range edges {
 		if e.ID == id {
 			return e

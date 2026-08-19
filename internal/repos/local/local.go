@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
 	"github.com/Nahua-Foundation/ragota/internal/repos"
 )
 
@@ -27,8 +28,8 @@ func (s *Source) Name() string {
 }
 
 // Type returns the source type.
-func (s *Source) Type() repos.SourceType {
-	return repos.SourceTypeLocal
+func (s *Source) Type() domain.SourceType {
+	return domain.SourceTypeLocal
 }
 
 // Init initializes the local source.
@@ -42,7 +43,7 @@ func (s *Source) Init(ctx context.Context, config map[string]interface{}) error 
 }
 
 // Add adds a local repository.
-func (s *Source) Add(ctx context.Context, req *repos.AddRequest) (*repos.Repo, error) {
+func (s *Source) Add(ctx context.Context, req *domain.AddRequest) (*domain.Repo, error) {
 	if req.Path == "" {
 		return nil, fmt.Errorf("path is required for local source")
 	}
@@ -72,12 +73,12 @@ func (s *Source) Add(ctx context.Context, req *repos.AddRequest) (*repos.Repo, e
 		name = filepath.Base(path)
 	}
 
-	return &repos.Repo{
+	return &domain.Repo{
 		ID:     repos.GenerateID(name, path),
 		Name:   name,
-		Source: repos.SourceTypeLocal,
+		Source: domain.SourceTypeLocal,
 		Path:   path,
-		Status: repos.StatusIdle,
+		Status: domain.StatusIdle,
 	}, nil
 }
 
@@ -118,21 +119,21 @@ func (s *Source) Remove(ctx context.Context, repoID string) error {
 
 // Update updates a repository.
 // For local source, this is a no-op (files are already there).
-func (s *Source) Update(ctx context.Context, repo *repos.Repo) error {
+func (s *Source) Update(ctx context.Context, repo *domain.Repo) error {
 	// Local source doesn't need updates
 	return nil
 }
 
-// GetFiles returns files in a repository for indexing. The walk itself is
+// GetFiles returns files in a repository for index. The walk itself is
 // shared with the git source, which also means a local checkout's .git
 // directory is skipped rather than descended into.
-func (s *Source) GetFiles(ctx context.Context, repo *repos.Repo, ignorePatterns []string) ([]*repos.RepoFile, error) {
+func (s *Source) GetFiles(ctx context.Context, repo *domain.Repo, ignorePatterns []string) ([]*domain.RepoFile, error) {
 	return repos.WalkFiles(repo.Path, ignorePatterns)
 }
 
 // Clean removes repository files from disk.
 // For local source, this is a no-op (we don't delete user files).
-func (s *Source) Clean(ctx context.Context, repo *repos.Repo) error {
+func (s *Source) Clean(ctx context.Context, repo *domain.Repo) error {
 	return nil
 }
 

@@ -49,12 +49,8 @@ var (
 	modelProviders     = []string{"ollama", "openai"}
 	qdrantModes        = []string{"docker_embedded", "cloud"}
 	logLevels          = []string{"debug", "info", "warn", "error"}
-	astLanguagesAll    = []string{"go", "java", "kotlin", "csharp", "typescript", "javascript", "python", "proto", "sql", "yaml", "json", "properties"}
 	lspLanguagesAll    = []string{"go", "java", "csharp", "typescript"}
 )
-
-// ASTLanguages returns the languages the AST indexer can register parsers for.
-func ASTLanguages() []string { return append([]string(nil), astLanguagesAll...) }
 
 // Load loads configuration from a YAML file.
 // It expands environment references of the form ${VAR_NAME}; "$$" is a literal
@@ -427,7 +423,7 @@ func (c *Config) validateServer() []error {
 	var errs []error
 
 	// An unrecognised auth type used to disable authentication silently:
-	// internal/api compares against "api_key" and anything else means "open".
+	// internal/server/api compares against "api_key" and anything else means "open".
 	if !oneOf(c.Server.Auth.Type, append(authTypes, "")) {
 		errs = append(errs, fmt.Errorf("server.auth.type must be one of %s (got %q)", strings.Join(authTypes, ", "), c.Server.Auth.Type))
 	}
@@ -506,33 +502,33 @@ func (c *Config) validateStorage() []error {
 	var errs []error
 
 	if c.Storage.SQLite == nil && c.Storage.Postgres == nil {
-		errs = append(errs, fmt.Errorf("a relational storage backend (storage.sqlite or storage.postgres) must be configured"))
+		errs = append(errs, fmt.Errorf("a relational storage backend (store.sqlite or store.postgres) must be configured"))
 	}
 
 	if c.Storage.Postgres != nil && c.Storage.Postgres.DSN == "" {
-		errs = append(errs, fmt.Errorf("storage.postgres.dsn is required when postgres storage is configured"))
+		errs = append(errs, fmt.Errorf("store.postgres.dsn is required when postgres storage is configured"))
 	}
 
 	if c.Storage.SQLite != nil {
 		if c.Storage.SQLite.Path == "" {
-			errs = append(errs, fmt.Errorf("storage.sqlite.path is required when sqlite storage is configured"))
+			errs = append(errs, fmt.Errorf("store.sqlite.path is required when sqlite storage is configured"))
 		}
 		if c.Storage.SQLite.PoolSize < 1 {
-			errs = append(errs, fmt.Errorf("storage.sqlite.pool_size must be at least 1"))
+			errs = append(errs, fmt.Errorf("store.sqlite.pool_size must be at least 1"))
 		}
 	}
 
 	if c.Storage.Qdrant != nil {
 		if c.Storage.Qdrant.URL == "" {
-			errs = append(errs, fmt.Errorf("storage.qdrant.url is required when qdrant storage is configured"))
+			errs = append(errs, fmt.Errorf("store.qdrant.url is required when qdrant storage is configured"))
 		}
 		if !oneOf(c.Storage.Qdrant.Mode, append(qdrantModes, "")) {
-			errs = append(errs, fmt.Errorf("storage.qdrant.mode must be %q or %q", "docker_embedded", "cloud"))
+			errs = append(errs, fmt.Errorf("store.qdrant.mode must be %q or %q", "docker_embedded", "cloud"))
 		}
 		// Qdrant Cloud rejects unauthenticated requests, so a missing key there
 		// only shows up as 401s during the first upsert.
 		if c.Storage.Qdrant.Mode == "cloud" && c.Storage.Qdrant.APIKey == "" {
-			errs = append(errs, fmt.Errorf("storage.qdrant.api_key is required when storage.qdrant.mode is cloud"))
+			errs = append(errs, fmt.Errorf("store.qdrant.api_key is required when store.qdrant.mode is cloud"))
 		}
 	}
 
@@ -548,7 +544,7 @@ func (c *Config) Warnings() []string {
 	// SQLite implements the job queue, so a distributed pair over one shared
 	// file works — but only when that file really is shared.
 	if c.Indexes.Distributed && c.Storage.Postgres == nil {
-		out = append(out, "indexes.distributed is enabled without storage.postgres: the job queue is shared through the database, and a SQLite file is only shared between instances that mount the very same file")
+		out = append(out, "indexes.distributed is enabled without store.postgres: the job queue is shared through the database, and a SQLite file is only shared between instances that mount the very same file")
 	}
 	if c.Server.CORS.Enabled && oneOf("*", c.Server.CORS.Origins) && c.Server.Auth.Type == "api_key" {
 		out = append(out, "server.cors.origins is \"*\" while API key auth is on: any web page can drive the API with a key the browser holds")
@@ -585,9 +581,10 @@ func (c *Config) validateIndexes() []error {
 	}
 
 	if c.Indexes.AST != nil && c.Indexes.AST.Enabled {
+		all := ASTLanguages()
 		for _, lang := range c.Indexes.AST.Languages {
-			if !oneOf(lang, astLanguagesAll) {
-				errs = append(errs, fmt.Errorf("indexes.ast.languages entry %q is not supported (supported: %s)", lang, strings.Join(astLanguagesAll, ", ")))
+			if !oneOf(lang, all) {
+				errs = append(errs, fmt.Errorf("indexes.ast.languages entry %q is not supported (supported: %s)", lang, strings.Join(all, ", ")))
 			}
 		}
 	}
@@ -607,7 +604,7 @@ func (c *Config) validateIndexes() []error {
 		// Without a vector store the vector indexer builds and then dies at
 		// startup with "vector store not available".
 		if c.Storage.Qdrant == nil {
-			errs = append(errs, fmt.Errorf("storage.qdrant must be configured when indexes.vector is enabled: the vector index has no other store"))
+			errs = append(errs, fmt.Errorf("store.qdrant must be configured when indexes.vector is enabled: the vector index has no other store"))
 		}
 		if m := c.Indexes.Vector.Chunking.Method; m != "" && !oneOf(m, chunkingMethods) {
 			errs = append(errs, fmt.Errorf("indexes.vector.chunking.method must be one of %s (got %q)", strings.Join(chunkingMethods, ", "), m))

@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Nahua-Foundation/ragota/internal/repos"
+	"github.com/Nahua-Foundation/ragota/internal/domain"
 )
 
 func TestPathAllowed(t *testing.T) {
@@ -55,10 +55,10 @@ func TestAdd_AllowlistEnforced(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := s.Add(context.Background(), &repos.AddRequest{Path: inside}); err != nil {
+	if _, err := s.Add(context.Background(), &domain.AddRequest{Path: inside}); err != nil {
 		t.Errorf("Add of allowed path failed: %v", err)
 	}
-	if _, err := s.Add(context.Background(), &repos.AddRequest{Path: outside}); err == nil {
+	if _, err := s.Add(context.Background(), &domain.AddRequest{Path: outside}); err == nil {
 		t.Error("Add of path outside allowlist should fail, got nil error")
 	}
 }
@@ -66,14 +66,14 @@ func TestAdd_AllowlistEnforced(t *testing.T) {
 func TestAdd_NoAllowlistIsUnrestricted(t *testing.T) {
 	dir := t.TempDir()
 	s := New() // no Init, empty allowlist
-	if _, err := s.Add(context.Background(), &repos.AddRequest{Path: dir}); err != nil {
+	if _, err := s.Add(context.Background(), &domain.AddRequest{Path: dir}); err != nil {
 		t.Errorf("Add without allowlist should succeed, got %v", err)
 	}
 }
 
 func TestAdd_MissingPath(t *testing.T) {
 	s := New()
-	if _, err := s.Add(context.Background(), &repos.AddRequest{Path: filepath.Join(t.TempDir(), "does-not-exist")}); err == nil {
+	if _, err := s.Add(context.Background(), &domain.AddRequest{Path: filepath.Join(t.TempDir(), "does-not-exist")}); err == nil {
 		t.Error("Add of nonexistent path should fail")
 	}
 }
@@ -86,7 +86,7 @@ func TestGetFiles_HonoursPatternsAndSkipsGit(t *testing.T) {
 	for _, name := range []string{
 		"src/main.go",
 		"node_modules/left-pad/index.js",
-		".git/hooks/setup.py",
+		".git/hooks/bootstrap.py",
 		".github/workflows/ci.yml",
 	} {
 		path := filepath.Join(dir, filepath.FromSlash(name))
@@ -98,7 +98,7 @@ func TestGetFiles_HonoursPatternsAndSkipsGit(t *testing.T) {
 		}
 	}
 
-	files, err := New().GetFiles(context.Background(), &repos.Repo{Path: dir}, []string{"**/node_modules/**"})
+	files, err := New().GetFiles(context.Background(), &domain.Repo{Path: dir}, []string{"**/node_modules/**"})
 	if err != nil {
 		t.Fatalf("GetFiles: %v", err)
 	}

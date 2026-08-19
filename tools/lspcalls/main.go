@@ -31,7 +31,7 @@ import (
 
 	"github.com/Nahua-Foundation/ragota/internal/config"
 	"github.com/Nahua-Foundation/ragota/internal/lsp"
-	"github.com/Nahua-Foundation/ragota/internal/storage/sqlite"
+	"github.com/Nahua-Foundation/ragota/internal/store/sqlite"
 )
 
 func main() {
