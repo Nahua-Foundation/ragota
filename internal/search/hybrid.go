@@ -191,10 +191,91 @@ func (s *Service) CandidatesFrom(ctx context.Context, typ index.IndexType, query
 	return result.Hits, meta, nil
 }
 
-// Rank is the ranking half of Search: rerank the leading candidates and cut
-// the list down to limit.
+// Rank is the ranking half of Search: rerank the leading candidates, collapse
+// the ones covering the same lines, and cut the list down to limit.
 func (s *Service) Rank(ctx context.Context, query string, hits []*index.Hit, meta map[string]interface{}, limit int) []*index.Hit {
-	return truncate(s.applyRerank(ctx, query, hits, meta), limit)
+	return truncate(mergeSpans(s.applyRerank(ctx, query, hits, meta), meta), limit)
+}
+
+// mergeSpans collapses hits that cover the same lines of the same file into
+// one, keeping the highest-ranked of them and widening its range over the rest.
+//
+// A file reaches this list several times by construction: line windows are cut
+// with an overlap, so consecutive ones share ten lines and the same evidence
+// arrives two or three times. Every copy costs a slot in a top-ten and a share
+// of the byte budget, and an answer that fills the list with one file tells the
+// caller less than the same list with its neighbours still in it. (Measured
+// elsewhere on code retrieval, deduplicating overlapping fragments was worth
+// several times what reordering them was.)
+//
+// It runs after the rerank stage, and that order is not an implementation
+// detail. A cross-encoder's measured strength here is picking the chunk that
+// contains the answer out of a file's chunks — it lifts span@10 by more than
+// recall@10. Collapsing first would take that choice away and hand it the
+// arbitrary one that fusion happened to rank higher; collapsing afterwards
+// keeps the winner the reranker chose and drops only what it already judged.
+//
+// Only true overlap merges. Two adjacent symbols are two answers, not one span.
+func mergeSpans(hits []*index.Hit, meta map[string]interface{}) []*index.Hit {
+	if len(hits) < 2 {
+		return hits
+	}
+
+	kept := make([]*index.Hit, 0, len(hits))
+	byFile := map[string][]*index.Hit{}
+	merged := 0
+
+	for _, hit := range hits {
+		if hit == nil {
+			continue
+		}
+		fileKey := hit.RepoID + "\x00" + hit.FilePath
+
+		var into *index.Hit
+		for _, candidate := range byFile[fileKey] {
+			if candidate.Overlaps(hit) {
+				into = candidate
+				break
+			}
+		}
+		if into == nil {
+			// Copy: the caller's slice may be shared with a result that was
+			// already handed out, and widening a range in place would edit it.
+			cp := *hit
+			kept = append(kept, &cp)
+			byFile[fileKey] = append(byFile[fileKey], &cp)
+			continue
+		}
+
+		start, end := into.Range()
+		otherStart, otherEnd := hit.Range()
+		if otherStart < start {
+			into.Line = otherStart
+		}
+		if otherEnd > end {
+			into.EndLine = otherEnd
+		}
+		if !strings.Contains(into.Reason, mergeReason) {
+			into.Reason = appendMergeReason(into.Reason)
+		}
+		merged++
+	}
+
+	if merged > 0 && meta != nil {
+		meta["merged_spans"] = merged
+	}
+	return kept
+}
+
+// mergeReason marks a hit that absorbed another covering the same lines, so a
+// caller reading the reason can tell a single chunk from a widened one.
+const mergeReason = "merged"
+
+func appendMergeReason(reason string) string {
+	if reason == "" {
+		return mergeReason
+	}
+	return reason + "+" + mergeReason
 }
 
 // singleSearch runs one searcher, reranks the leading candidates and cuts the
@@ -225,7 +306,9 @@ func (s *Service) singleSearch(ctx context.Context, typ index.IndexType, query *
 	if meta == nil {
 		meta = map[string]interface{}{}
 	}
-	result.Hits = truncate(s.applyRerank(ctx, query.Query, result.Hits, meta), query.Limit)
+	// The same rank stage the fused path uses: a keyword-only or semantic-only
+	// answer is chunked the same way and deserves the same collapsing.
+	result.Hits = s.Rank(ctx, query.Query, result.Hits, meta, query.Limit)
 	result.Total = len(result.Hits)
 	result.Metadata = meta
 	return result, nil

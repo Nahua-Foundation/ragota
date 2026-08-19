@@ -204,9 +204,13 @@ func TestFuseMergesOverlappingRegions(t *testing.T) {
 	}
 }
 
-// TestFuseKeepsOverlappingChunksOfOneSearcher guards against over-merging:
-// window chunks of one file overlap by design, and collapsing them would turn
-// a whole file into a single hit.
+// TestFuseKeepsOverlappingChunksOfOneSearcher guards against over-merging in
+// the retrieval stage: window chunks of one file overlap by design, and
+// collapsing them here would decide, before anything has read the query
+// against them, which chunk of the file is the answer. That decision belongs to
+// the rank stage — the reranker's measured strength is exactly picking the
+// chunk that contains the answer out of a file's chunks — and only what is left
+// after it is collapsed, by mergeSpans, which has its own tests.
 func TestFuseKeepsOverlappingChunksOfOneSearcher(t *testing.T) {
 	hits := []*index.Hit{
 		{RepoID: "r1", FilePath: "/a.go", Line: 1, EndLine: 60, Reason: "keyword"},
@@ -217,12 +221,12 @@ func TestFuseKeepsOverlappingChunksOfOneSearcher(t *testing.T) {
 		index.IndexTypeBM25: &mockSearcher{hits: hits},
 	}, nil)
 
-	result, err := svc.Search(context.Background(), &index.SearchQuery{Query: "test", Limit: 10}, true)
+	candidates, _, err := svc.Candidates(context.Background(), &index.SearchQuery{Query: "test", Limit: 10})
 	if err != nil {
-		t.Fatalf("Search() error = %v", err)
+		t.Fatalf("Candidates() error = %v", err)
 	}
-	if len(result.Hits) != 3 {
-		t.Errorf("got %d hits, want the 3 overlapping windows kept apart", len(result.Hits))
+	if len(candidates) != 3 {
+		t.Errorf("got %d candidates, want the 3 overlapping windows kept apart", len(candidates))
 	}
 }
 
