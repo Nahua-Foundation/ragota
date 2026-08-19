@@ -84,7 +84,7 @@ reachable by name, followed by the graph, but excluded from default
 retrieval. The flag lives in storage, flows through the service layer into
 every retrieval query as a compiled filter, and surfaces in the API
 (`active` on every repository), the TUI, `repos list` and `ragota_status`.
-The [e2e suite](https://github.com/Nahua-Foundation/ragota/blob/v2/e2e/e2e_test.go)
+The [e2e suite](https://github.com/Nahua-Foundation/ragota/blob/master/e2e/e2e_test.go)
 drives the whole lifecycle through both doors — HTTP and MCP.
 
 ## Process shape

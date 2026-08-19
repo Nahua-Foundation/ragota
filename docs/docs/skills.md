@@ -6,7 +6,7 @@ title: Agent skills
 # Agent skills
 
 The MCP tools tell an agent *what* they do; the skills in
-[`skills/`](https://github.com/Nahua-Foundation/ragota/tree/v2/skills) teach
+[`skills/`](https://github.com/Nahua-Foundation/ragota/tree/master/skills) teach
 it *when* — above all, when the index beats the agent's own glob/grep/read
 and when it does not. They are the distilled judgement from measuring this
 system, packaged as [Agent Skills](https://agentskills.io) (a directory with
@@ -49,5 +49,5 @@ three `SKILL.md` bodies into the system prompt; they total a few KB and are
 written to survive that. The frontmatter `description` is the trigger a
 skill router matches on.
 
-See [`skills/README.md`](https://github.com/Nahua-Foundation/ragota/blob/v2/skills/README.md)
+See [`skills/README.md`](https://github.com/Nahua-Foundation/ragota/blob/master/skills/README.md)
 for the full text.

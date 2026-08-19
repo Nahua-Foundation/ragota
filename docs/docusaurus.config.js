@@ -30,7 +30,7 @@ const config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.js',
-          editUrl: 'https://github.com/Nahua-Foundation/ragota/tree/v2/docs/',
+          editUrl: 'https://github.com/Nahua-Foundation/ragota/tree/master/docs/',
         },
         blog: false,
         pages: false,
