@@ -1,8 +1,3 @@
----
-sidebar_position: 9
-title: Quality, measured
----
-
 # Quality, measured
 
 Claims about retrieval quality in this project come from a benchmark in the
@@ -23,7 +18,7 @@ make eval-compare   # A/B: two binaries or two configs on the same set
 
 The default configuration — AST + BM25 over SQLite, nothing external — as
 last recorded in the journal
-([`tools/eval/README.md`](https://github.com/Nahua-Foundation/ragota/blob/master/tools/eval/README.md)):
+([`tools/eval/README.md`](../tools/eval/README.md)):
 the full set measured 2026-08-13, the `eval-fast` subset 2026-08-16.
 
 | Metric | Full set (103 questions) | eval-fast (40 questions, six repos) |

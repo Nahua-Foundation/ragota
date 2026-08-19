@@ -44,4 +44,4 @@ the system prompt. They total a few KB and are written to be pasted whole;
 frontmatter `description` fields tell a router when each applies.
 
 The skills assume the `ragota_*` tools are already connected — wiring the MCP
-server itself is described in [docs](../docs/) (`docs/docs/mcp.md`).
+server itself is described in [docs/mcp.md](../docs/mcp.md).

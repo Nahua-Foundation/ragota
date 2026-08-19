@@ -1,8 +1,3 @@
----
-sidebar_position: 2
-title: Getting started
----
-
 # Getting started
 
 Installing a release instead of building — and the optional services

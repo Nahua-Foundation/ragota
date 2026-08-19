@@ -1,8 +1,3 @@
----
-sidebar_position: 3
-title: Install & run
----
-
 # Install & run
 
 The path from a release archive to an agent asking questions: install,
@@ -51,7 +46,7 @@ $EDITOR config.yaml
 ragota --check-config
 ```
 
-`init` writes [`config.example.yaml`](https://github.com/Nahua-Foundation/ragota/blob/master/config.example.yaml)
+`init` writes [`config.example.yaml`](../config.example.yaml)
 verbatim — every key documented with its reasoning, everything optional
 commented out — and refuses to overwrite an existing file. `--check-config`
 validates the result and probes every dependency it names: exit 0 all good,

@@ -1,9 +1,3 @@
----
-sidebar_position: 1
-slug: /
-title: What ragota is
----
-
 # ragota
 
 ragota indexes every repository you point it at and answers questions about
@@ -51,13 +45,19 @@ Around them, in this repository:
 - `e2e/` — an end-to-end suite that drives the shipped binary through both
   doors (HTTP and MCP).
 
-## Where to go next
+## The pages, in reading order
 
-- [Install & run](./install.md) — from a release archive to a connected
-  agent, optional services (PostgreSQL, vector search, a reranker) included.
-- [Getting started](./getting-started.md) — build, index a directory, ask
-  the first question.
-- [Connecting an agent](./mcp.md) — wire `ragota mcp` into Claude Code or
-  any MCP client.
-- [Quality](./quality.md) — what is measured, what the numbers are, and
-  what they mean for trusting answers.
+1. [Install & run](./install.md) — from a release archive to a connected
+   agent, optional services (PostgreSQL, vector search, a reranker) included.
+2. [Getting started](./getting-started.md) — build from source, index a
+   directory, ask the first question.
+3. [Configuration](./configuration.md) — the decisions that matter, not
+   every knob.
+4. [HTTP API](./http-api.md) — the map of the contract.
+5. [Connecting an agent](./mcp.md) — wire `ragota mcp` into Claude Code or
+   any MCP client.
+6. [Agent skills](./skills.md) — what the skills teach and why.
+7. [Architecture](./architecture.md) — the pipeline, the contract keys, the
+   working set.
+8. [Quality, measured](./quality.md) — what is measured, what the numbers
+   are, and what they mean for trusting answers.

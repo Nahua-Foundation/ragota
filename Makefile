@@ -57,7 +57,7 @@ CONFIG ?= config.yaml
 	test test-integration test-integration-all e2e test-postgres test-qdrant test-integration-postgres ci \
 	lsp-build lsp-up lsp-down test-integration-lsp compose-check compose-up compose-down compose-logs help \
 	corpus-clone corpus-bench corpus-measure eval eval-fast eval-validate \
-	eval-compare eval-related eval-answers docs docs-serve
+	eval-compare eval-related eval-answers
 
 build:
 	go build ./...
@@ -345,14 +345,6 @@ eval-related:
 eval-answers:
 	tools/eval/answer.py --corpus $(CORPUS_DIR) --work $(EVAL_WORK) $(EVAL_ARGS)
 
-# The documentation site (docs/, Docusaurus). `docs` builds the static site
-# into docs/build; `docs-serve` runs the live-reloading dev server.
-docs:
-	cd docs && npm install --no-audit --no-fund && npm run build
-
-docs-serve:
-	cd docs && npm install --no-audit --no-fund && npm run start
-
 # Everything CI runs, including lint and the integration suite.
 # test-postgres is in ci deliberately: postgres is the primary relational
 # backend, and without it the conformance suite only ever runs against sqlite.
@@ -367,7 +359,6 @@ help:
 	@echo "test           unit tests            test-integration  tagged integration tests"
 	@echo "test-integration-all  full in-process integration suite    test-integration-lsp  with LSP containers"
 	@echo "e2e            the shipped binary driven from outside (HTTP + MCP over stdio)"
-	@echo "docs           build the documentation site (docs/build)   docs-serve  live dev server"
 	@echo "test-postgres  storage tests on a throwaway postgres"
 	@echo "lint           golangci-lint (lint-install to get it)"
 	@echo "compose-up     start the deploy/docker-compose.yml stack"

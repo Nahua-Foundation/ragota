@@ -1,8 +1,3 @@
----
-sidebar_position: 6
-title: Connecting an agent (MCP)
----
-
 # Connecting an agent
 
 `ragota mcp` speaks MCP on stdio — the shape every MCP client launches — and
