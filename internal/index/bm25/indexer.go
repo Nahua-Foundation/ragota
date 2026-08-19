@@ -44,11 +44,16 @@ type Indexer struct {
 	// compactMu serialises compactions: bleve refuses a second force merge
 	// while one is running, and two repositories can finish a pass at once.
 	compactMu sync.Mutex
-	// splitIdentifiers says whether this index carries the code-aware view of
-	// its text. It is read from the index on disk rather than from the config,
-	// because indexing and querying have to agree about a field that only a
-	// reindex can add; see New.
+	// splitIdentifiers and indexPaths say whether this index carries the
+	// code-aware view of its text and the searchable view of its paths. Both
+	// are read from the index on disk rather than from the config, because
+	// indexing and querying have to agree about a field that only a reindex
+	// can add; see New.
 	splitIdentifiers bool
+	indexPaths       bool
+	// pathBoost weights the path clause; it is query-time, so unlike the two
+	// above it is the config's to decide on every start.
+	pathBoost float64
 
 	closeOnce sync.Once
 	closeErr  error
@@ -67,6 +72,12 @@ type Config struct {
 	// codeAnalyzer. It shapes the index, so it applies when one is created and
 	// a running index keeps whatever it was built with.
 	SplitIdentifiers bool
+	// IndexPaths makes a document's own path searchable text; see
+	// pathTextField. It shapes the index the same way.
+	IndexPaths bool
+	// PathBoost weights the path clause against the text (0 or less means
+	// defaultPathBoost). It is query-time: changing it needs no reindex.
+	PathBoost float64
 }
 
 // applyBM25Params points bleve at the BM25 scoring model and installs k1/b.
@@ -96,7 +107,7 @@ func New(cfg *Config) (*Indexer, error) {
 	switch {
 	case err == nil:
 	case errors.Is(err, bleve.ErrorIndexPathDoesNotExist):
-		mapping, mErr := buildMapping(cfg.SplitIdentifiers)
+		mapping, mErr := buildMapping(cfg.SplitIdentifiers, cfg.IndexPaths)
 		if mErr != nil {
 			return nil, mErr
 		}
@@ -106,7 +117,7 @@ func New(cfg *Config) (*Indexer, error) {
 	case (errors.Is(err, bleve.ErrorIndexMetaMissing) || errors.Is(err, bleve.ErrorIndexMetaCorrupt)) && dirIsEmpty(cfg.Path):
 		// An existing but empty directory is the normal case for a freshly
 		// mounted volume, and bleve.New accepts it.
-		mapping, mErr := buildMapping(cfg.SplitIdentifiers)
+		mapping, mErr := buildMapping(cfg.SplitIdentifiers, cfg.IndexPaths)
 		if mErr != nil {
 			return nil, mErr
 		}
@@ -132,10 +143,14 @@ func New(cfg *Config) (*Indexer, error) {
 	// answer both indexing and querying can be built on. Reading the config
 	// here instead would mean asking a query for a field no document has, and
 	// calling the result a measurement.
-	split := indexSplitsIdentifiers(idx)
-	if split != cfg.SplitIdentifiers {
-		slog.Warn("indexes.bm25.split_identifiers does not match the index on disk; it shapes the index, so it takes effect on the next forced reindex",
-			"configured", cfg.SplitIdentifiers, "index", split, "path", cfg.Path)
+	split := indexHasField(idx, codeSplitField)
+	paths := indexHasField(idx, pathTextField)
+	warnIndexShape("split_identifiers", cfg.SplitIdentifiers, split, cfg.Path)
+	warnIndexShape("index_paths", cfg.IndexPaths, paths, cfg.Path)
+
+	pathBoost := cfg.PathBoost
+	if pathBoost <= 0 {
+		pathBoost = defaultPathBoost
 	}
 
 	return &Indexer{
@@ -144,18 +159,32 @@ func New(cfg *Config) (*Indexer, error) {
 		chunker:          index.NewWindowChunker(index.ChunkConfig{}),
 		compact:          !cfg.NoCompact,
 		splitIdentifiers: split,
+		indexPaths:       paths,
+		pathBoost:        pathBoost,
 	}, nil
 }
 
-// indexSplitsIdentifiers reports whether an index was built with the
-// code-aware field, by asking the mapping it carries.
-func indexSplitsIdentifiers(idx bleve.Index) bool {
+// indexHasField reports whether an index was built with a field, by asking the
+// mapping it carries.
+func indexHasField(idx bleve.Index, field string) bool {
 	im, ok := idx.Mapping().(*mapping.IndexMappingImpl)
 	if !ok || im.DefaultMapping == nil {
 		return false
 	}
-	_, ok = im.DefaultMapping.Properties[codeSplitField]
+	_, ok = im.DefaultMapping.Properties[field]
 	return ok
+}
+
+// warnIndexShape reports a setting that shapes the index disagreeing with the
+// index on disk. It is a warning rather than an error because the disagreement
+// is legitimate for one run — the setting takes effect on the next forced
+// reindex — and silence is what would make it expensive.
+func warnIndexShape(setting string, configured, onDisk bool, path string) {
+	if configured == onDisk {
+		return
+	}
+	slog.Warn("indexes.bm25."+setting+" does not match the index on disk; it shapes the index, so it takes effect on the next forced reindex",
+		"configured", configured, "index", onDisk, "path", path)
 }
 
 // Name returns the indexer name.
@@ -284,6 +313,9 @@ func (i *Indexer) indexChunks(batch *bleve.Batch, repoID string, cf chunkedFile,
 		if i.splitIdentifiers {
 			// The same text a second time, for the analyser to take apart.
 			doc[codeSplitField] = chunk.Text
+		}
+		if i.indexPaths {
+			doc[pathTextField] = cf.file.Path
 		}
 
 		docID := chunkDocID(repoID, cf.file.Path, chunkIdx)
@@ -567,11 +599,23 @@ func (i *Indexer) Search(ctx context.Context, q *index.SearchQuery) (res *index.
 	// spelled in words reaches an identifier that spells them without spaces.
 	// The two clauses both score, so a candidate that matches an identifier
 	// literally still outranks one that matches only its parts.
-	text := query.Query(qry)
+	views := []query.Query{qry}
 	if i.splitIdentifiers {
 		split := bleve.NewMatchQuery(q.Query)
 		split.SetField(codeSplitField)
-		text = bleve.NewDisjunctionQuery(qry, split)
+		views = append(views, split)
+	}
+	if i.indexPaths {
+		// Where a document lives, at a fraction of the weight of what it says.
+		path := bleve.NewMatchQuery(q.Query)
+		path.SetField(pathTextField)
+		path.SetBoost(i.pathBoost)
+		views = append(views, path)
+	}
+
+	text := query.Query(qry)
+	if len(views) > 1 {
+		text = bleve.NewDisjunctionQuery(views...)
 	}
 
 	clauses := []query.Query{text}
@@ -710,6 +754,29 @@ func (i *Indexer) Stats(ctx context.Context) (*index.IndexerStats, error) {
 // addition to every other field's.
 const codeSplitField = "content_split"
 
+// pathTextField makes a document's own path findable as words. "file_path" is
+// analysed as a keyword — one indivisible term, which is what a per-file
+// delete needs — and "content" holds no path at all, so "checkout service"
+// could never reach src/checkoutservice/main.go through the keyword leg.
+//
+// The vector side already learned this: one line of path at the head of a
+// symbol card bought recall@1 0.339 → 0.424 and span@10 0.695 → 0.763 with no
+// reranker at all — more span@10 than the reranker itself buys. This is the
+// same fact offered to the other channel.
+//
+// The weight is why it is a separate clause rather than more text. The path was
+// measured on the vector side as one line among a card's forty; as a field of
+// its own it is four tokens, and BM25's length normalisation lets a directory
+// name outscore a body that answers the question. Observed at weight 1.0 on
+// this repository: "rerank max doc bytes" lost the chunk that defines
+// rerankMaxDocBytes to two files merely named *rerank_test.go. Hence
+// defaultPathBoost below, and indexes.bm25.path_boost to move it — unlike the
+// fields, a weight is query-time, so sweeping it needs no reindex.
+const (
+	pathTextField    = "path_text"
+	defaultPathBoost = 0.3
+)
+
 // codeAnalyzer and codeDelimiters name the analysis chain that splits
 // identifiers into the words they are made of.
 //
@@ -735,10 +802,10 @@ const (
 	codeDelimiters = "code_delimiters"
 )
 
-// buildMapping creates the Bleve index mapping. splitIdentifiers adds the
-// code-aware field; it is a property of the index rather than of a query, so
-// it is fixed when the index is created.
-func buildMapping(splitIdentifiers bool) (*mapping.IndexMappingImpl, error) {
+// buildMapping creates the Bleve index mapping. splitIdentifiers and
+// indexPaths add the two code-aware fields; they are properties of the index
+// rather than of a query, so they are fixed when the index is created.
+func buildMapping(splitIdentifiers, indexPaths bool) (*mapping.IndexMappingImpl, error) {
 	// Create document mapping
 	docMapping := bleve.NewDocumentMapping()
 
@@ -778,7 +845,7 @@ func buildMapping(splitIdentifiers bool) (*mapping.IndexMappingImpl, error) {
 	// Create index mapping
 	indexMapping := bleve.NewIndexMapping()
 
-	if splitIdentifiers {
+	if splitIdentifiers || indexPaths {
 		if err := indexMapping.AddCustomCharFilter(codeDelimiters, map[string]interface{}{
 			"type":    regexpchar.Name,
 			"regexp":  `[_./\-]`,
@@ -794,7 +861,22 @@ func buildMapping(splitIdentifiers bool) (*mapping.IndexMappingImpl, error) {
 		}); err != nil {
 			return nil, fmt.Errorf("define %s analyzer: %w", codeAnalyzer, err)
 		}
+	}
 
+	if indexPaths {
+		// The same analyser: a path is written the way identifiers are, and
+		// src/checkoutservice/main.go has to reach a question that says
+		// "checkout service".
+		pathFieldMapping := bleve.NewTextFieldMapping()
+		pathFieldMapping.Analyzer = codeAnalyzer
+		pathFieldMapping.Index = true
+		pathFieldMapping.Store = false
+		pathFieldMapping.IncludeTermVectors = false
+		pathFieldMapping.IncludeInAll = false
+		docMapping.AddFieldMappingsAt(pathTextField, pathFieldMapping)
+	}
+
+	if splitIdentifiers {
 		splitFieldMapping := bleve.NewTextFieldMapping()
 		splitFieldMapping.Analyzer = codeAnalyzer
 		splitFieldMapping.Index = true

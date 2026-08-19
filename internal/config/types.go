@@ -342,6 +342,15 @@ type BM25IndexConfig struct {
 	// a forced reindex, and the server says so at startup when the two
 	// disagree.
 	SplitIdentifiers bool `yaml:"split_identifiers,omitempty"`
+	// IndexPaths makes a document's path searchable as words, so that
+	// "checkout service" can reach src/checkoutservice/main.go. Without it the
+	// path is one indivisible term and the indexed text holds no path at all.
+	// It shapes the index the same way SplitIdentifiers does.
+	IndexPaths bool `yaml:"index_paths,omitempty"`
+	// PathBoost weights the path against the text (default 0.3). Unlike the
+	// two settings above it is a query-time weight, so it takes effect on
+	// restart and can be swept without reindexing.
+	PathBoost float64 `yaml:"path_boost,omitempty"`
 }
 
 // ModelsConfig represents AI models configuration.

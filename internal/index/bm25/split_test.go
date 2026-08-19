@@ -106,6 +106,104 @@ func TestSplitIdentifiersRespectsFilters(t *testing.T) {
 	}
 }
 
+// pathSource says nothing about where it lives: every file below is the same
+// entry point, so the only thing that can tell them apart is the path.
+var pathSource = []byte("package main\n\nfunc main() {\n\tserve()\n}\n")
+
+// The three ways a service names its directory. The first two are the ones a
+// tokenizer can take apart; the third is the documented limit.
+var pathFiles = []*index.FileToIndex{
+	{Path: "src/checkout_service/main.go", Language: "go", Content: pathSource},
+	{Path: "src/PaymentService/Program.cs", Language: "csharp", Content: pathSource},
+	{Path: "src/shippingservice/main.go", Language: "go", Content: pathSource},
+}
+
+func indexPathSource(t *testing.T, paths bool) *Indexer {
+	t.Helper()
+	idx, err := New(&Config{Path: t.TempDir(), K1: 1.2, B: 0.75, IndexPaths: paths})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { idx.Close() })
+
+	if _, err := idx.Index(context.Background(), &index.IndexRequest{
+		RepoID: "r1", Files: pathFiles,
+	}); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	return idx
+}
+
+func topHit(t *testing.T, idx *Indexer, q string) string {
+	t.Helper()
+	res, err := idx.Search(context.Background(), &index.SearchQuery{Query: q, Limit: 5})
+	if err != nil {
+		t.Fatalf("Search(%q): %v", q, err)
+	}
+	if len(res.Hits) == 0 {
+		return ""
+	}
+	return res.Hits[0].FilePath
+}
+
+// TestIndexPathsReachesTheDirectoryName is the keyword half of a result the
+// vector side already has: a Go service's entry point is `func main`, and the
+// only place the word "checkout" appears is the path the index never searched.
+func TestIndexPathsReachesTheDirectoryName(t *testing.T) {
+	off := indexPathSource(t, false)
+	for _, q := range []string{"checkout service", "payment service"} {
+		if n := hitCount(t, off, q); n != 0 {
+			t.Errorf("without index_paths %q found %d hits; the baseline is zero", q, n)
+		}
+	}
+
+	on := indexPathSource(t, true)
+	for q, want := range map[string]string{
+		"checkout service": "src/checkout_service/main.go",
+		"payment service":  "src/PaymentService/Program.cs",
+	} {
+		if got := topHit(t, on, q); got != want {
+			t.Errorf("%q ranked %q first, want %q", q, got, want)
+		}
+	}
+}
+
+// TestIndexPathsCannotSplitARunOfWords records what this field does not do. A
+// tokenizer needs a boundary — a case change or a delimiter — and
+// "shippingservice" offers neither, so BM25 cannot reach it from the word
+// "shipping" the way an embedding model's subwords can. The path is a fact
+// worth indexing, not a decompounder; the vector channel keeps that case.
+func TestIndexPathsCannotSplitARunOfWords(t *testing.T) {
+	idx := indexPathSource(t, true)
+	res, err := idx.Search(context.Background(), &index.SearchQuery{Query: "shipping service", Limit: 5})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	for _, h := range res.Hits {
+		if h.FilePath == "src/shippingservice/main.go" {
+			t.Fatal("shippingservice split after all — this test is the boundary of the method and should be revisited, not deleted")
+		}
+	}
+}
+
+// TestIndexPathsIsIndependentOfSplitIdentifiers keeps the two settings
+// separately measurable: each brings the shared analyser with it, so either
+// can be turned on alone.
+func TestIndexPathsIsIndependentOfSplitIdentifiers(t *testing.T) {
+	paths := indexPathSource(t, true)
+	if paths.splitIdentifiers {
+		t.Error("index_paths alone should not add the code-aware content field")
+	}
+	if n := hitCount(t, paths, "checkout service"); n == 0 {
+		t.Error("index_paths alone did not answer a path question")
+	}
+
+	split := indexSplitSource(t, true)
+	if split.indexPaths {
+		t.Error("split_identifiers alone should not add the path field")
+	}
+}
+
 // TestSplitIdentifiersFollowsTheIndexNotTheConfig covers the trap this setting
 // invites: a mapping is written once, when the index is created, so turning
 // the flag on over an index built without it changes nothing until a forced

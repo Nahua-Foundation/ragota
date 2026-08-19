@@ -220,7 +220,7 @@ func TestBM25ConfigParamsApplied(t *testing.T) {
 	if bleveSearch.BM25_b != 0.4 {
 		t.Errorf("bleve b = %v, want the configured 0.4", bleveSearch.BM25_b)
 	}
-	m, err := buildMapping(false)
+	m, err := buildMapping(false, false)
 	if err != nil {
 		t.Fatalf("buildMapping: %v", err)
 	}

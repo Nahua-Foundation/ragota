@@ -833,6 +833,19 @@ def variant_split(cfg, opt):
     return cfg
 
 
+def variant_paths(cfg, opt):
+    """A document's path as searchable words, so that "checkout service" can
+    reach src/checkout_service/main.go. The vector side already measured the same
+    fact as one line of a symbol card; this is the keyword side of it. The field
+    is index-time like `split`; its weight is not, so --path-boost sweeps without
+    a reindex — and it is the half that decides whether a file merely *named*
+    after the subject outranks the one that answers about it."""
+    cfg["indexes"]["bm25"]["index_paths"] = True
+    if opt.get("path_boost"):
+        cfg["indexes"]["bm25"]["path_boost"] = opt["path_boost"]
+    return cfg
+
+
 def variant_norewrite(cfg, opt):
     models = cfg.get("models", {})
     if "assistant" in models:
@@ -851,6 +864,7 @@ VARIANTS = {
     "rewrite": variant_rewrite,
     "norewrite": variant_norewrite,
     "split": variant_split,
+    "paths": variant_paths,
 }
 
 # What each variant needs from the outside world. Checked before the server is

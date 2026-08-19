@@ -110,6 +110,27 @@ indexes:
     # index on disk disagree. Measure it before trusting it:
     #   make eval-compare EVAL_ARGS="--b-variant split"
     # split_identifiers: false
+    #
+    # Make a document's path searchable text, so that "checkout service" can
+    # reach src/checkoutservice/main.go. Without it the path is one indivisible
+    # term (that is what a per-file delete needs) and the indexed text carries
+    # no path at all. The vector side already measured this fact: one line of
+    # path at the head of a symbol card moved recall@1 0.339 -> 0.424 and
+    # span@10 0.695 -> 0.763 with no reranker; this is the same fact offered to
+    # the keyword channel, at half weight so a directory name cannot outscore a
+    # body that answers the question. Index-time, like the setting above:
+    #   make eval-compare EVAL_ARGS="--b-variant paths"
+    # index_paths: false
+    #
+    # How much the path weighs against the text (default 0.3). This is the half
+    # that decides whether a file merely *named* after the subject outranks the
+    # one that answers about it — and test files are named after what they
+    # test. Smoked on this repository's own sources: at 1.0, "rerank max doc
+    # bytes" ranks two *rerank_test.go files above the code that defines
+    # rerankMaxDocBytes; at 0.3 it does not, and the directory questions it was
+    # added for still land. It is query-time, so a sweep needs no reindex:
+    #   tools/eval/run.py --variant paths --path-boost 0.5 ...
+    # path_boost: 0.3
    # vector:
    #   enabled: true
    #   embedder:
