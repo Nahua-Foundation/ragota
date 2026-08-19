@@ -68,9 +68,11 @@ const (
 // ignored, because silently starting the server for `ragota --source .
 // rnu` is how a typo becomes a bug report about a flag that "did nothing".
 const (
-	commandRun   = "run"
-	commandRepos = "repos"
-	commandMCP   = "mcp"
+	commandRun    = "run"
+	commandRepos  = "repos"
+	commandMCP    = "mcp"
+	commandInit   = "init"
+	commandSkills = "skills"
 )
 
 // fatalf reports a fatal error directly on stderr and exits. Directly, not
@@ -122,6 +124,25 @@ func main() {
 			fatalf("mcp: %v", err)
 		}
 		return
+	}
+
+	// The scaffolding subcommands write embedded files and exit — no config
+	// load, no database, no log setup. `init` honours --config (and
+	// RAGOTA_CONFIG) as its default target, because the file it writes is the
+	// file those would read.
+	if cmd.name == commandInit {
+		path := cmd.initPath
+		if path == "" {
+			path = resolveConfigPath(*cfgPath)
+		}
+		os.Exit(runInit(path))
+	}
+	if cmd.name == commandSkills {
+		dir := cmd.skillsDir
+		if dir == "" {
+			dir = defaultSkillsDir
+		}
+		os.Exit(runSkillsInstall(dir))
 	}
 
 	// The built-in profile stands in for a missing config file in the two
@@ -377,9 +398,11 @@ func main() {
 // command is the subcommand an invocation asked for, with whatever it parsed
 // out of that subcommand's own words.
 type command struct {
-	name  string
-	repos reposArgs // meaningful only when name is commandRepos
-	mcp   []string  // meaningful only when name is commandMCP
+	name      string
+	repos     reposArgs // meaningful only when name is commandRepos
+	mcp       []string  // meaningful only when name is commandMCP
+	initPath  string    // meaningful only when name is commandInit; "" means the --config path
+	skillsDir string    // meaningful only when name is commandSkills; "" means defaultSkillsDir
 }
 
 // parseCommand validates the positional arguments flag parsing left behind.
@@ -405,6 +428,18 @@ func parseCommand(args []string) (command, error) {
 		// Everything after the word belongs to the subcommand's own flag set
 		// — `ragota mcp -check` — and is parsed and rejected there.
 		return command{name: commandMCP, mcp: args[1:]}, nil
+	case commandInit:
+		path, err := parseInitArgs(args[1:])
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: commandInit, initPath: path}, nil
+	case commandSkills:
+		dir, err := parseSkillsArgs(args[1:])
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: commandSkills, skillsDir: dir}, nil
 	default:
 		return command{}, fmt.Errorf("unknown command %q", args[0])
 	}
@@ -421,6 +456,10 @@ func usage() {
   %[3]s [flags]          serve the index to a coding agent: MCP over stdio
                          (configured by the launch block's environment; see
                          ragota %[3]s -h)
+  %[4]s [path]           write the annotated example config and exit; the
+                         default path is what --config or RAGOTA_CONFIG names
+  %[5]s install [dir]   write this binary's agent skills into a skills
+                         directory (default %[6]s)
 
 examples:
   ragota --config config.yaml
@@ -429,9 +468,11 @@ examples:
   ragota --source ./projects --watch --interactive %[1]s
   ragota %[2]s list
   ragota %[3]s -check
+  ragota %[4]s
+  ragota %[5]s install
 
 flags:
-`, commandRun, commandRepos, commandMCP)
+`, commandRun, commandRepos, commandMCP, commandInit, commandSkills, defaultSkillsDir)
 	flag.PrintDefaults()
 }
 
