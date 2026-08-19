@@ -1,25 +1,37 @@
 #!/usr/bin/env bash
-# Build the release matrix, tag, and publish a GitHub release — from this
-# machine, with no CI in the loop. `--snapshot` stops after the builds so the
-# matrix can be proven without touching git or GitHub.
+# The release machinery, in one place, three doors into it:
 #
-#   make release-snapshot VERSION=v0.2.0     # builds into dist/, publishes nothing
-#   make release VERSION=v0.2.0              # tag + gh release create with assets
+#   make release VERSION=v0.2.0            # tag + push; CI builds and publishes
+#   make release-snapshot VERSION=v0.2.0   # build the matrix into dist/, publish nothing
+#   release.sh --from-tag v0.2.0           # what CI runs on the pushed tag
+#
+# A release is a pushed tag: the default mode checks the tree, tags, pushes,
+# and stops — .github/workflows/release.yml picks the tag up, runs the
+# --from-tag mode on a macOS runner and publishes the GitHub release. The
+# same script builds in every mode, so `release-snapshot` proves locally the
+# exact artifacts CI will publish.
 #
 # cgo is why this script exists instead of a cross-compile one-liner: the
 # tree-sitter grammars are C. Both darwin targets build natively on a Mac
 # (Apple clang is a multi-arch compiler, and cgo passes the right -arch for
-# GOARCH). Linux needs a cross C toolchain — zig serves as one — and is built
-# only when zig is installed, skipped loudly when it is not: a release with
-# fewer platforms is honest, a release that silently pretends is not.
+# GOARCH). Linux needs a cross C toolchain — zig serves as one. A snapshot
+# without zig skips the linux targets loudly; a --from-tag build refuses to
+# run without them, because a published release with silently missing
+# platforms is worse than a failed one.
 set -euo pipefail
 
-MODE=publish
-if [ "${1:-}" = "--snapshot" ]; then
+MODE=tag
+case "${1:-}" in
+--snapshot)
     MODE=snapshot
     shift
-fi
-VERSION="${1:?usage: release.sh [--snapshot] vX.Y.Z}"
+    ;;
+--from-tag)
+    MODE=from-tag
+    shift
+    ;;
+esac
+VERSION="${1:?usage: release.sh [--snapshot|--from-tag] vX.Y.Z}"
 case "$VERSION" in
 v[0-9]*) ;;
 *)
@@ -33,14 +45,29 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 DIST="dist/$VERSION"
 
-if [ "$MODE" = publish ]; then
-    command -v gh >/dev/null || { echo "release.sh: gh is required to publish (brew install gh && gh auth login)" >&2; exit 1; }
-    gh auth token >/dev/null 2>&1 || { echo "release.sh: gh is not authenticated; run: gh auth login" >&2; exit 1; }
+if [ "$MODE" = tag ]; then
     [ -z "$(git status --porcelain)" ] || { echo "release.sh: the tree is dirty; a release builds exactly what a tag names" >&2; exit 1; }
     if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
         echo "release.sh: tag $VERSION already exists" >&2
         exit 1
     fi
+    # Annotated and pushed; the release workflow does the rest.
+    git tag -a "$VERSION" -m "ragota $VERSION"
+    git push -q origin "$VERSION"
+    echo "tagged $VERSION and pushed; the release workflow builds and publishes it:"
+    echo "  https://github.com/Nahua-Foundation/ragota/actions/workflows/release.yml"
+    exit 0
+fi
+
+if [ "$MODE" = from-tag ]; then
+    # The workflow checked the tag out; hold it to its word — the artifacts
+    # must be built from exactly the commit the tag names.
+    if [ "$(git rev-parse "refs/tags/$VERSION^{commit}" 2>/dev/null)" != "$(git rev-parse HEAD)" ]; then
+        echo "release.sh: HEAD is not what tag $VERSION names; refusing to build a release from it" >&2
+        exit 1
+    fi
+    command -v zig >/dev/null || { echo "release.sh: --from-tag builds the whole matrix and zig is missing (the linux cross C compiler)" >&2; exit 1; }
+    command -v gh >/dev/null || { echo "release.sh: gh is required to publish" >&2; exit 1; }
 fi
 
 rm -rf "$DIST"
@@ -77,12 +104,6 @@ if [ "$MODE" = snapshot ]; then
     echo "snapshot only: nothing tagged, nothing published"
     exit 0
 fi
-
-# The tag is annotated and pushed first: the release must point at history
-# that exists on the remote, and `--verify-tag` below makes gh check exactly
-# that instead of quietly creating one of its own.
-git tag -a "$VERSION" -m "ragota $VERSION"
-git push -q origin "$VERSION"
 
 PREV="$(git describe --tags --abbrev=0 "$VERSION^" 2>/dev/null || true)"
 NOTES="$(git log --oneline ${PREV:+$PREV..}"$VERSION" | sed 's/^/- /')"

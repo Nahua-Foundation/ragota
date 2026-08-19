@@ -1,0 +1,36 @@
+# The deliberate minimum: build, vet, fmt-check, lint. The full suite —
+# unit, integration, postgres conformance, e2e — is `make ci` and runs on
+# developer machines; CI here is the gate that keeps a public branch
+# compiling, formatted and lint-clean, not the test harness.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: build, vet, fmt-check, lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # cgo (tree-sitter) needs a C compiler; the ubuntu runner has gcc.
+      - name: Build, vet, fmt-check
+        run: make build vet fmt-check
+
+      - name: Lint
+        run: make lint-install lint

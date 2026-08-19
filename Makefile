@@ -86,8 +86,8 @@ up: binary
 release-snapshot:
 	scripts/release.sh --snapshot $(VERSION)
 
-# Build the matrix, tag $(VERSION), push the tag and publish a GitHub release
-# with its assets. Needs a clean tree and a one-time `gh auth login`.
+# Tag $(VERSION) and push the tag; the release workflow builds the matrix
+# from it and publishes the GitHub release. Needs a clean tree.
 release:
 	scripts/release.sh $(VERSION)
 
