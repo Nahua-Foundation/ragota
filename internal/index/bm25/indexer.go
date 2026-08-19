@@ -823,29 +823,27 @@ const (
 // and "all" are load-bearing parts of identifiers (isValid, byID, toString,
 // getAll), while idf already discounts what is common.
 // The weight of the split view against the literal one is a setting, and the
-// measurement so far says the field has not earned its place. eval-fast, 40
-// questions, keyword mode, against a baseline of recall@1 0.500 / MRR 0.574 /
-// span@10 0.550 / 8 never found:
+// measurement is a straight trade rather than a peak. Full 103-question set,
+// keyword mode, against a baseline of recall@1 0.447 / recall@5 0.592 /
+// recall@10 0.650 / MRR 0.508 / 29 never found:
 //
-//	split_boost   recall@1    mrr   span@10  never found
-//	0.1              0.500  0.573     0.550            8
-//	0.35             0.500  0.573     0.550            8
-//	0.5              0.475  0.554     0.575            8
-//	1.0              0.450  0.537        —             8
+//	split_boost   recall@1  recall@5  recall@10    mrr   never found
+//	0.35             0.427     0.573      0.670  0.498            27
+//	0.5              0.427     0.573      0.670  0.502            26
+//	1.0              0.388     0.583      0.699  0.485            23
 //
-// At equal weight it is a clear regression: nine questions move, seven of them
-// worse. An identifier taken apart contributes ordinary English — get, service,
-// order, event — to a field that matches many documents weakly, and that noise
-// outvotes the literal match it was meant to supplement. Turned down far enough
-// not to hurt, it also stops doing anything: at 0.35 every metric is the
-// baseline's to three decimals.
+// More weight buys reach and costs precision, at every setting: an identifier
+// taken apart contributes ordinary English — get, service, order, event — to a
+// field that matches many documents weakly, and that noise outvotes the literal
+// match it supplements.
 //
-// This is not the same as "it does not work". The two questions it rescued at
-// 1.0 are exactly the vocabulary-gap kind it was built for, and that kind lives
-// in the three big repositories eval-fast leaves out — the journal records
-// elasticsearch's misses as vocabulary-free questions no channel reaches. The
-// full corpus is where this setting is decided; until then it stays off, and
-// the weight is here to be swept, query-time, with no reindex.
+// What it does buy is real, and it is what this was built for: six questions
+// nothing had ever found are found at full weight, none lost entirely, and they
+// are the vocabulary-gap kind that lives in the three big repositories the fast
+// set leaves out. The path field beats every row of that table on everything
+// but one question of never-found, so this stays off; composed with the path
+// field it is the best measured configuration on recall@10 and gives back
+// recall@5. tools/eval/README.md carries both tables.
 const (
 	codeAnalyzer      = "code"
 	codeDelimiters    = "code_delimiters"

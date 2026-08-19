@@ -1724,12 +1724,9 @@ which database the two sides shared.
 
 ## What the keyword channel was missing (2026-08-19)
 
-Three things were built for the lexical leg and measured on `eval-fast` — 40
-questions, six repositories, keyword mode, one index per configuration. The
-caveat above applies in full: this set is a regression check against itself,
-not a corpus a default can be decided on. Baseline, binary `dev (8e6a331)`:
-recall@1 0.500, recall@5 0.675, recall@10 0.750, MRR 0.574, span@10 0.550,
-8 never found.
+Three things were built for the lexical leg and measured, first on `eval-fast`
+as a sighting shot and then on the full 103 questions, keyword mode, one index
+per configuration, binary `dev (5ed34ff)`.
 
 The reason all three exist is one measurement of the analyser itself. Bleve's
 default tokenizer follows UAX#29, where `_` joins words rather than separating
@@ -1743,67 +1740,96 @@ func getUserByID(loginAttempt *LoginAttempt) error
 The keyword leg has been an exact-identifier matcher wearing a full-text
 interface: "get user by id" and "login attempt" reach none of that, and a path
 is worse still — `file_path` is a keyword field, one indivisible term, and the
-indexed text carries no path at all.
+indexed text carries no path at all. Every question phrased in words has been
+reaching the vector leg alone.
 
-### The path is worth its own field, at full weight
+**A caveat on the corpus.** `clone.sh` takes `--depth 1` of each repository's
+current HEAD, so a fresh clone is whatever upstream is that day, not what the
+ground truth was written against. On this clone `--validate` reports one error
+(`eshop-orders-table-reader` points past the end of a file that has since
+shrunk) and two moved anchors. The comparisons below are unaffected — both
+sides index the same trees — but their absolute numbers are **not** comparable
+with the 2026-08-13 tables above.
 
-| /search, 40 q | recall@1 | recall@5 | MRR | span@10 | never found |
-| --- | --- | --- | --- | --- | --- |
-| baseline | 0.500 | 0.675 | 0.574 | 0.550 | 8 |
-| `path_boost` 0.15 | 0.475 | 0.650 | 0.552 | 0.575 | 9 |
-| `path_boost` 0.3 | 0.475 | 0.650 | 0.554 | 0.575 | 8 |
-| `path_boost` 0.5 | 0.475 | 0.675 | 0.554 | 0.600 | 8 |
-| **`path_boost` 1.0** | **0.500** | 0.675 | **0.576** | **0.625** | **6** |
-| `path_boost` 1.5 | 0.500 | **0.700** | **0.583** | **0.625** | **6** |
-| `path_boost` 2.0 | 0.500 | 0.700 | 0.580 | 0.625 | 7 |
+### The four configurations, full set
+
+| /search, 103 q | recall@1 | recall@5 | recall@10 | MRR | nDCG@10 | span@10 | never found |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline (`nopaths`) | **0.447** | 0.592 | 0.650 | 0.508 | 0.528 | 0.466 | 29 |
+| `split` 1.0 | 0.388 | 0.583 | 0.699 | 0.485 | 0.520 | 0.515 | 23 |
+| **`paths` 1.0** | 0.408 | **0.680** | 0.709 | 0.513 | 0.547 | 0.553 | 24 |
+| `split` + `paths` | 0.427 | 0.631 | **0.718** | **0.517** | **0.549** | **0.573** | **23** |
+
+Index cost, twelve repositories: 2.3 GB baseline, 2.3 GB with paths (a path is
+four tokens), 2.5 GB with split, 2.6 GB with both.
+
+**The path field is the default now.** It buys recall@10 +0.058, recall@5
++0.088 and five fewer questions never found, for recall@1 −0.039 — the answer
+lands in the list far more often and at the very top slightly less. That is the
+right side of this project's own rule that recall@10 is the headline, and of
+the skills that tell an agent to scan the list rather than trust rank one.
+
+The weight was swept, and the shape of the curve is the finding:
+
+| `path_boost` | recall@1 | recall@5 | recall@10 | MRR | span@10 | never found |
+| --- | --- | --- | --- | --- | --- | --- |
+| off | 0.447 | 0.592 | 0.650 | 0.508 | 0.466 | 29 |
+| 0.5 | 0.417 | 0.650 | 0.699 | 0.508 | 0.534 | 28 |
+| 0.75 | 0.417 | 0.670 | 0.689 | 0.515 | 0.534 | 25 |
+| **1.0** | 0.408 | **0.680** | 0.709 | 0.513 | 0.553 | **24** |
+| 1.5 | 0.408 | 0.612 | **0.718** | 0.504 | 0.553 | 25 |
 
 **A timid clause is the worst of both**: it perturbs the ranking without buying
-the answers. At full weight nothing regresses and span@10 gains 0.075 — the
-same shape the vector side saw when the path went into the symbol card, and for
-the same reason. 1.5 scores marginally higher again, but by one question out of
-forty, which this document's own rule says is not evidence; the default is 1.0.
+the answers. The same sweep on `eval-fast` picked the same value from the other
+end — there 0.15 and 0.3 measured *below* the baseline they were meant to
+improve, and only full weight moved span@10 (0.550 → 0.625).
 
-Per query at 1.0, 14 moved, 7 each way, and the direction is legible: questions
-whose subject is a **place** gain — `boutique-checkout-route` 12 → 3,
-`conductor-decide-after-system-task` never found → 3, `petclinic-owner-resource`
-and `boutique-choose-ad` and `eshop-order-paid-consumer` all from never found
-into the list — while questions whose subject is a **thing inside a file** pay:
-`jellyfin-activitylog-table` 3 → 14, `eshop-rabbitmq-publish` 4 → 12. Four
-rescued against two lost.
+Per shape, the path field's winners and payers are legible: `route` gains
+everywhere (MRR +0.077), `callers` gains at five and ten (+0.154, +0.115),
+while `implement` (recall@1 −0.111) and `table` (−0.083) pay. Questions whose
+subject is a **place** win; questions whose subject is a **thing inside a file**
+lose a little. Fifteen questions entered the answer list from nowhere —
+`argocd-validaterepo-callers` at rank 1, `medusa-buy-get-compute-callers` 16 → 1,
+`boutique-checkout-route` 14 → 2 — against four that fell out.
 
 A smoke run on this repository's own sources predicted the opposite, and is
-worth recording as a warning about smoke runs: a heavy path clause put two
-files merely *named* `*rerank_test.go` above the code defining
-`rerankMaxDocBytes`, because test files are named after what they test. That
-effect is real and the eval says it is outweighed. Ground truth decides.
+worth recording as a warning about smoke runs: a heavy path clause does promote
+files merely *named* after the subject, and test files are named after what
+they test. The eval has ground truth and says that effect is outweighed.
 
-### Splitting identifiers has not earned its place yet
+### Splitting identifiers: real, and not the default
 
-| /search, 40 q | recall@1 | MRR | span@10 | never found |
-| --- | --- | --- | --- | --- |
-| baseline | 0.500 | 0.574 | 0.550 | 8 |
-| `split_boost` 0.1 | 0.500 | 0.573 | 0.550 | 8 |
-| `split_boost` 0.35 | 0.500 | 0.573 | 0.550 | 8 |
-| `split_boost` 0.5 | 0.475 | 0.554 | 0.575 | 8 |
-| `split_boost` 1.0 | 0.450 | 0.537 | — | 8 |
+On `eval-fast` it looked like a plain regression, and the guess in the code was
+that its questions live in the three big repositories that set leaves out. The
+full corpus says the guess was right: **six questions that nothing had ever
+found are found**, and none is lost entirely — `boutique-currency-convert`,
+`medusa-restore-shipping-callers`, `eshop-stock-confirmed-publisher`,
+`petclinic-genai-add-pet-call` and two the path field also rescues.
 
-At equal weight, nine questions move and seven are worse. An identifier taken
-apart contributes ordinary English — get, service, order, event — to a field
-that matches many documents weakly, and that noise outvotes the literal match
-it was meant to supplement. Turned down far enough not to hurt, it stops doing
-anything at all.
+It is still not the default, because the trade is monotone rather than peaked:
 
-Two things keep it from being a closed question. It rescued
-`eshop-order-paid-consumer` (never found → 12) and lifted
-`petclinic-gateway-owner-call` 18 → 9 at weight 1.0 — exactly the vocabulary-gap
-shape it was built for. And that shape lives in the three big repositories
-`eval-fast` leaves out: elasticsearch's misses are recorded above as
-vocabulary-free questions no channel reaches. **The full corpus decides this
-one.** It stays off until then.
+| `split_boost` | recall@1 | recall@5 | recall@10 | MRR | span@10 | never found |
+| --- | --- | --- | --- | --- | --- | --- |
+| off | 0.447 | 0.592 | 0.650 | 0.508 | 0.466 | 29 |
+| 0.35 | 0.427 | 0.573 | 0.670 | 0.498 | 0.495 | 27 |
+| 0.5 | 0.427 | 0.573 | 0.670 | 0.502 | 0.495 | 26 |
+| 1.0 | 0.388 | 0.583 | 0.699 | 0.485 | 0.515 | 23 |
 
-Composed with the path field it is worse than the path field alone: recall@5
-0.700, MRR 0.578, span@10 0.625 — but 8 never found rather than 6, so two of
-the four rescues come back out.
+More weight buys reach and costs precision, with no setting that does not. At
+every weight `recall@5` sits below the baseline, and the path field beats every
+row of this table on everything except one question of never-found.
+
+Composed with the path field it is the best configuration measured on
+`recall@10` (0.718), MRR, nDCG and span@10, and it recovers half of the path
+field's `recall@1` cost — the two views' errors partly cancel. What it gives up
+is `recall@5`: 0.631 against 0.680 for the path field alone, five questions.
+Since the top five is what a caller with a budget actually reads, the default
+ships as the path field alone, and the pair is one flag away for anyone whose
+workload is "find it anywhere in ten" rather than "find it in five":
+
+```sh
+make eval-compare EVAL_ARGS="--a-variant nopaths --b-variant split"
+```
 
 ### Collapsing a file's overlapping chunks changes nothing here, and why
 

@@ -119,27 +119,34 @@ indexes:
     # split_identifiers: false
     # split_boost: 0.35      # weight of the split view against the literal one
     #
-    # Make a document's path searchable text, so that "checkout service" can
-    # reach src/checkoutservice/main.go. Without it the path is one indivisible
-    # term (that is what a per-file delete needs) and the indexed text carries
-    # no path at all. The vector side already measured this fact: one line of
-    # path at the head of a symbol card moved recall@1 0.339 -> 0.424 and
-    # span@10 0.695 -> 0.763 with no reranker; this is the same fact offered to
-    # the keyword channel, and it measures the same way — see path_boost below.
-    # Index-time, like the setting above:
-    #   make eval-compare EVAL_ARGS="--b-variant paths"
-    # index_paths: false
+    # A document's path is searchable text (default ON), so that "checkout
+    # service" reaches src/checkout_service/main.go. Without it the path is one
+    # indivisible term — that is what a per-file delete needs — and the indexed
+    # text carries no path at all, which is why a question naming a place used
+    # to reach the vector leg alone.
     #
-    # How much the path weighs against the text (default 1.0). Swept on
-    # eval-fast, and the answer was the opposite of the intuition: a timid
-    # clause is the worst of both, perturbing the ranking without buying the
-    # answers, while at full weight nothing regresses and span@10 goes 0.550 ->
-    # 0.625 with two fewer questions never found. 0.3 measured at recall@1
-    # 0.475 and MRR 0.554, below the baseline it was meant to improve. Numbers
-    # and the per-query trade: tools/eval/README.md. Query-time, so a sweep
-    # needs no reindex:
-    #   tools/eval/run.py --variant paths --path-boost 1.5 ...
-    # path_boost: 1.0
+    # Measured on the full 103-question set, keyword mode:
+    #
+    #   path_boost  recall@1  recall@5  recall@10   mrr   span@10  never found
+    #   off            0.447     0.592      0.650  0.508    0.466           29
+    #   0.5            0.417     0.650      0.699  0.508    0.534           28
+    #   0.75           0.417     0.670      0.689  0.515    0.534           25
+    #   1.0            0.408     0.680      0.709  0.513    0.553           24
+    #   1.5            0.408     0.612      0.718  0.504    0.553           25
+    #
+    # The trade is explicit: the answer lands in the list far more often
+    # (recall@10 +0.058, five fewer questions never found) and at the very top
+    # slightly less (recall@1 -0.039). recall@10 is this project's headline
+    # metric — an answer outside the top ten is not one a user will find — and
+    # the skills tell an agent to scan the list rather than trust rank 1. Per
+    # shape the winners are route and callers, the payers implement and table;
+    # tools/eval/README.md has the table and the per-query moves.
+    #
+    # It shapes the index: an index built before this gains the field on its
+    # next forced reindex, and the server says so at startup until then.
+    #   make eval-compare EVAL_ARGS="--a-variant nopaths"
+    # index_paths: true
+    # path_boost: 1.0        # query-time; sweeps without a reindex
    # vector:
    #   enabled: true
    #   embedder:

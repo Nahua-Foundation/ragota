@@ -66,6 +66,10 @@ def add_common_args(ap):
     ap.add_argument("--reuse", action="store_true", help="reuse repositories already indexed in --work")
     ap.add_argument("--no-index", action="store_true", help="do not index; assume --server already has the repos")
     ap.add_argument("--index-timeout", type=int, default=7200, help="seconds to wait for one repository")
+    ap.add_argument("--index-workers", type=int, default=4,
+                    help="parallel indexing workers (default 4). Lower it on a machine that would "
+                         "otherwise swap: the parse stage holds a file's AST per worker, and the "
+                         "three big repositories are where that adds up")
 
     ap.add_argument("--variant", action="append", default=[],
                     help="config overlay: %s (repeatable)" % ", ".join(sorted(ev.VARIANTS)))

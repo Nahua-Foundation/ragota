@@ -458,6 +458,14 @@ func initVectorIndexer(cfg *config.Config, stor store.Storage, embedders map[str
 	return vecIndexer, nil
 }
 
+// bm25IndexPaths resolves indexes.bm25.index_paths. Unset means on: a
+// searchable path measured as the larger half of what the keyword channel was
+// missing, and a config written before the setting existed should get it. Only
+// an explicit false turns it off.
+func bm25IndexPaths(cfg *config.BM25IndexConfig) bool {
+	return cfg == nil || cfg.IndexPaths == nil || *cfg.IndexPaths
+}
+
 // initBM25Indexer initializes BM25 indexer. The path comes from
 // indexes.bm25.path (default ~/.ragota/data/bm25); RAGOTA_BM25_PATH
 // overrides it for one process.
@@ -487,7 +495,7 @@ func initBM25Indexer(cfg *config.Config) (index.Indexer, error) {
 		NoCompact:        cfg.Indexes.BM25.NoCompact,
 		SplitIdentifiers: cfg.Indexes.BM25.SplitIdentifiers,
 		SplitBoost:       cfg.Indexes.BM25.SplitBoost,
-		IndexPaths:       cfg.Indexes.BM25.IndexPaths,
+		IndexPaths:       bm25IndexPaths(cfg.Indexes.BM25),
 		PathBoost:        cfg.Indexes.BM25.PathBoost,
 	})
 	if err != nil {

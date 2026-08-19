@@ -670,7 +670,7 @@ TEST_IGNORE = [
 ]
 
 
-def base_config(workdir, port, corpus_dir):
+def base_config(workdir, port, corpus_dir, index_workers=4):
     """The configuration every variant starts from: AST + BM25 over SQLite, no
     vector index, no reranker, no assistant. It is the setup a developer gets
     from a plain `make run`, which is what a baseline should measure."""
@@ -685,7 +685,7 @@ def base_config(workdir, port, corpus_dir):
         "log": {"level": "warn", "format": "text"},
         "storage": {"sqlite": {"path": os.path.join(workdir, "ragota.db"), "pool_size": 10}},
         "indexes": {
-            "workers": 4,
+            "workers": index_workers,
             "ast": {"enabled": True},
             # Compaction is asked for once, after every repository is in (see
             # index_repos): the layout it produces is the same, the rewrites are
@@ -835,6 +835,14 @@ def variant_split(cfg, opt):
     return cfg
 
 
+def variant_nopaths(cfg, opt):
+    """The keyword channel without a searchable path — what it was before the
+    field became the default. This is the baseline every `paths` number is
+    measured against; index-time, so it cannot share an index with its opposite."""
+    cfg["indexes"]["bm25"]["index_paths"] = False
+    return cfg
+
+
 def variant_paths(cfg, opt):
     """A document's path as searchable words, so that "checkout service" can
     reach src/checkout_service/main.go. The vector side already measured the same
@@ -889,6 +897,7 @@ VARIANTS = {
     "paths": variant_paths,
     "convex": variant_convex,
     "nomerge": variant_nomerge,
+    "nopaths": variant_nopaths,
 }
 
 # What each variant needs from the outside world. Checked before the server is
@@ -1154,7 +1163,8 @@ def open_session(repo_root, args, needed, opts, label):
         # points as well as its own. Sides that share an index (compare.py
         # --no-reindex pins both to "shared") still share the collection.
         opts = dict(opts, collection_prefix=prefix)
-        cfg = apply_variants(base_config(workdir, port, corpus), args.variant, opts)
+        cfg = apply_variants(base_config(workdir, port, corpus, getattr(args, "index_workers", 4)),
+                             args.variant, opts)
         if opts.get("exclude_tests"):
             cfg["repos"]["ignore"] = list(TEST_IGNORE)
         server = Server(binary, workdir, cfg, port).start()

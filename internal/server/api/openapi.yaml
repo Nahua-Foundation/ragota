@@ -1971,6 +1971,19 @@ components:
         rerank_error:
           type: string
           description: Why the rerank stage did not apply
+        fusion:
+          type: string
+          enum: [rrf, convex]
+          description: >
+            The function that combined the indexes: `rrf` adds reciprocal ranks,
+            `convex` adds the legs' normalised scores. Only `hybrid` fuses, so a
+            single-index mode reports none.
+        merged_spans:
+          type: integer
+          description: >
+            How many hits were absorbed into another covering the same lines of
+            the same file. Absent means none were: either the answer held no two
+            chunks of one file, or merging is off.
 
     SearchHit:
       type: object
